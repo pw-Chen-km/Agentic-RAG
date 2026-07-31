@@ -1,0 +1,17 @@
+.venv/
+.pytest_cache/
+.coverage
+__pycache__/
+*.py[cod]
+
+.env
+.env.*
+!.env.example
+
+artifacts/
+data/
+results/
+runs/
+dist/
+
+.DS_Store

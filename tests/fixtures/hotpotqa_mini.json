@@ -1,0 +1,54 @@
+[
+  {
+    "_id": "q1",
+    "question": "In which country was Marie Curie born?",
+    "answer": "Poland",
+    "supporting_facts": [
+      ["Marie Curie", 0],
+      ["Marie Curie", 1]
+    ],
+    "context": [
+      [
+        "Marie Curie",
+        [
+          "Marie Curie was born in Warsaw.",
+          "Warsaw is the capital of Poland."
+        ]
+      ],
+      [
+        "Poland",
+        [
+          "Poland is a country in Europe."
+        ]
+      ],
+      [
+        "RAG",
+        [
+          "Retrieval-Augmented Generation (RAG) combines retrieval with generation."
+        ]
+      ]
+    ]
+  },
+  {
+    "_id": "q2",
+    "question": "What country contains Paris?",
+    "answer": "France",
+    "supporting_facts": [
+      ["Paris", 0]
+    ],
+    "context": [
+      [
+        "Paris",
+        [
+          "Paris is the capital of France."
+        ]
+      ],
+      [
+        "France",
+        [
+          "France is a country in Europe."
+        ]
+      ]
+    ]
+  }
+]

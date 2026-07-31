@@ -1,0 +1,19 @@
+agent:
+  max_steps: 10
+  max_retrieved_tokens: 12000
+  context_mode: compact_evidence
+  enabled_expansions:
+    - ENTITY_MENTIONED_IN_SENTENCE
+    - SENTENCE_MENTIONS_ENTITY
+    - ENTITY_CO_OCCURS_ENTITY_SENTENCE
+    - CHUNK_ADJACENT_CHUNK
+
+policy:
+  provider: openai
+  model: gpt-5.6-terra
+  max_retries: 2
+
+answer:
+  provider: openai
+  model: gpt-5.6-terra
+  max_retries: 2
