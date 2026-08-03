@@ -35,6 +35,8 @@ class BenchmarkQuestion:
     question: str
     answer: str
     question_type: str | None
+    source_question_id: str | None = None
+    source_row_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,9 +172,11 @@ class BuildManifest(ManifestModel):
     dataset: str
     split: str
     source_path: str
-    source_format: Literal["hotpotqa_scoped", "hotpotqa_benchmark_exact"] = (
-        "hotpotqa_scoped"
-    )
+    source_format: Literal[
+        "hotpotqa_scoped",
+        "hotpotqa_benchmark_exact",
+        "arag_benchmark_exact",
+    ] = "hotpotqa_scoped"
     source_artifacts: list[SourceArtifact] = Field(default_factory=list)
     scope_mode: Literal["question", "global"] = "question"
     preserved_source_chunks: bool = False

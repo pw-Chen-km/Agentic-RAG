@@ -9,7 +9,10 @@ from agentic_rag.agent.answer import (
     AnswerGenerationError,
     AnswerGenerator,
 )
-from agentic_rag.agent.context import PolicyContextBuilder
+from agentic_rag.agent.context import (
+    PolicyContextBuilder,
+    project_observation_for_policy,
+)
 from agentic_rag.agent.evidence import EvidenceResolver
 from agentic_rag.agent.models import (
     ControllerState,
@@ -119,6 +122,11 @@ class AgentController:
                         validation_status=ValidationStatus.INVALID,
                         validation_error=str(exc),
                         observation=observation,
+                        agent_visible_observation=(
+                            project_observation_for_policy(
+                                observation, state
+                            )
+                        ),
                         state_before=state_before,
                         state_after=state.model_copy(deep=True),
                         usage=policy_usage,
@@ -156,6 +164,7 @@ class AgentController:
             policy_usage = self._policy_usage()
             total_usage = total_usage + policy_usage
             validation = self.validator.validate(decision, state, scope_id)
+            resolved_decision = validation.resolved_decision
             if not validation.ok:
                 status = (
                     ObservationStatus.DUPLICATE_ACTION
@@ -165,7 +174,11 @@ class AgentController:
                 observation = Observation(
                     action_id=f"step-{state.step + 1}",
                     status=status,
-                    action=decision.action,
+                    action=(
+                        resolved_decision.action
+                        if resolved_decision is not None
+                        else decision.action
+                    ),
                     error_code=validation.code,
                     message=validation.message,
                 )
@@ -184,9 +197,15 @@ class AgentController:
                     StepRecord(
                         step=state.step,
                         decision=decision,
+                        resolved_decision=resolved_decision,
                         validation_status=ValidationStatus.INVALID,
                         validation_error=validation.message,
                         observation=observation,
+                        agent_visible_observation=(
+                            project_observation_for_policy(
+                                observation, state
+                            )
+                        ),
                         state_before=state_before,
                         state_after=state.model_copy(deep=True),
                         usage=policy_usage,
@@ -195,14 +214,19 @@ class AgentController:
                 )
                 continue
 
-            if isinstance(decision.action, FinishAction):
+            if resolved_decision is None:
+                raise RuntimeError(
+                    "valid decisions must include a resolved decision"
+                )
+
+            if isinstance(resolved_decision.action, FinishAction):
                 resolved = self.evidence_resolver.resolve(
-                    decision.action.evidence_refs, state, scope_id
+                    resolved_decision.action.evidence_refs, state, scope_id
                 )
                 observation = Observation(
                     action_id=f"step-{state.step + 1}",
                     status=ObservationStatus.OK,
-                    action=decision.action,
+                    action=resolved_decision.action,
                     results=[
                         item.model_dump(mode="json") for item in resolved
                     ],
@@ -210,7 +234,7 @@ class AgentController:
                 )
                 state = self.state_updater.apply(
                     state,
-                    assessment=decision.assessment,
+                    assessment=resolved_decision.assessment,
                     observation=observation,
                     action_signature=validation.signature,
                 )
@@ -218,8 +242,14 @@ class AgentController:
                     StepRecord(
                         step=state.step,
                         decision=decision,
+                        resolved_decision=resolved_decision,
                         validation_status=ValidationStatus.VALID,
                         observation=observation,
+                        agent_visible_observation=(
+                            project_observation_for_policy(
+                                observation, state
+                            )
+                        ),
                         state_before=state_before,
                         state_after=state.model_copy(deep=True),
                         usage=policy_usage,
@@ -245,7 +275,7 @@ class AgentController:
                         trajectory=trajectory,
                         usage=total_usage,
                         selected_refs=list(
-                            decision.action.evidence_refs
+                            resolved_decision.action.evidence_refs
                         ),
                         resolved_evidence=resolved,
                         error_code="answer_generation_error",
@@ -266,7 +296,7 @@ class AgentController:
                         trajectory=trajectory,
                         usage=total_usage,
                         selected_refs=list(
-                            decision.action.evidence_refs
+                            resolved_decision.action.evidence_refs
                         ),
                         resolved_evidence=resolved,
                         error_code="answer_generation_error",
@@ -284,13 +314,15 @@ class AgentController:
                     trajectory=trajectory,
                     usage=total_usage,
                     answer=answer,
-                    selected_refs=list(decision.action.evidence_refs),
+                    selected_refs=list(
+                        resolved_decision.action.evidence_refs
+                    ),
                     resolved_evidence=resolved,
                 )
 
             try:
                 observation = self.router.execute(
-                    decision.action,
+                    resolved_decision.action,
                     state,
                     question=question,
                     scope_id=scope_id,
@@ -302,6 +334,7 @@ class AgentController:
                     state_before=state_before,
                     trajectory=trajectory,
                     decision=decision,
+                    resolved_decision=resolved_decision,
                     validation_signature=validation.signature,
                     policy_usage=policy_usage,
                     policy_view=policy_view,
@@ -325,6 +358,7 @@ class AgentController:
                     state_before=state_before,
                     trajectory=trajectory,
                     decision=decision,
+                    resolved_decision=resolved_decision,
                     validation_signature=validation.signature,
                     policy_usage=policy_usage,
                     policy_view=policy_view,
@@ -351,7 +385,7 @@ class AgentController:
             )
             state = self.state_updater.apply(
                 state,
-                assessment=decision.assessment,
+                assessment=resolved_decision.assessment,
                 observation=observation,
                 action_signature=validation.signature,
             )
@@ -359,8 +393,12 @@ class AgentController:
                 StepRecord(
                     step=state.step,
                     decision=decision,
+                    resolved_decision=resolved_decision,
                     validation_status=ValidationStatus.VALID,
                     observation=observation,
+                    agent_visible_observation=(
+                        project_observation_for_policy(observation, state)
+                    ),
                     state_before=state_before,
                     state_after=state.model_copy(deep=True),
                     usage=step_usage,
@@ -410,6 +448,7 @@ class AgentController:
         state_before: ControllerState,
         trajectory: list[StepRecord],
         decision,
+        resolved_decision,
         validation_signature: str | None,
         policy_usage: Usage,
         policy_view: PolicyView,
@@ -419,13 +458,13 @@ class AgentController:
         observation = Observation(
             action_id=f"step-{state.step + 1}",
             status=ObservationStatus.ERROR,
-            action=decision.action,
+            action=resolved_decision.action,
             error_code=error_code,
             message=error_message,
         )
         updated = self.state_updater.apply(
             state,
-            assessment=decision.assessment,
+            assessment=resolved_decision.assessment,
             observation=observation,
             action_signature=validation_signature,
         )
@@ -433,8 +472,12 @@ class AgentController:
             StepRecord(
                 step=updated.step,
                 decision=decision,
+                resolved_decision=resolved_decision,
                 validation_status=ValidationStatus.VALID,
                 observation=observation,
+                agent_visible_observation=project_observation_for_policy(
+                    observation, updated
+                ),
                 state_before=state_before,
                 state_after=updated.model_copy(deep=True),
                 usage=policy_usage,

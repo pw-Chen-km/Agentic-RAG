@@ -16,9 +16,12 @@ class BuildConfig(BaseModel):
     split: str = Field(default="dev", min_length=1)
     dataset: str = "hotpotqa"
     source_format: Literal[
-        "hotpotqa_scoped", "hotpotqa_benchmark_exact"
+        "hotpotqa_scoped",
+        "hotpotqa_benchmark_exact",
+        "arag_benchmark_exact",
     ] = "hotpotqa_scoped"
     benchmark_scope_id: str | None = None
+    validate_benchmark_profile: bool = False
     max_chunk_tokens: int = Field(default=256, ge=1)
     spacy_model: str = "en_core_web_sm"
     enable_abbreviations: bool = True
@@ -44,6 +47,9 @@ class BuildConfig(BaseModel):
                     "source_format", "hotpotqa_scoped"
                 ),
                 "benchmark_scope_id": substrate.get("benchmark_scope_id"),
+                "validate_benchmark_profile": substrate.get(
+                    "validate_benchmark_profile", False
+                ),
                 "max_chunk_tokens": substrate.get("max_chunk_tokens", 256),
                 "spacy_model": substrate.get("sentence_model", "en_core_web_sm"),
                 "enable_abbreviations": entity.get("abbreviation_detector") is not None,

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from agentic_rag.agent.config import AgentConfig
 from agentic_rag.agent.context import (
     AppendOnlyContextBuilder,
@@ -20,6 +22,7 @@ from agentic_rag.agent.models import (
     EvidenceAssessment,
     Observation,
     ObservationStatus,
+    NodeHandleRegistry,
     PolicyDecision,
     ReadAction,
     SearchAction,
@@ -262,15 +265,21 @@ def test_selected_sentence_is_resolved_with_full_text_and_removed_from_handles(
 
     assert len(view.policy_state.selected_evidence) == 1
     selected = view.policy_state.selected_evidence[0]
-    assert selected.ref == SentenceRef(id=sentence.sentence_id)
+    sentence_handle_id = state.handle_registry.handle_for(
+        sentence.sentence_id, "SENTENCE"
+    )
+    chunk_handle_id = state.handle_registry.handle_for(
+        chunk.chunk_id, "CHUNK"
+    )
+    assert selected.ref == SentenceRef(id=sentence_handle_id)
     assert selected.text == sentence.text
     assert selected.text != "intentionally compact handle text"
-    assert selected.parent_chunk_id == chunk.chunk_id
+    assert selected.parent_chunk_id == chunk_handle_id
     handle_ids = {
         handle.id for handle in view.policy_state.actionable_handles
     }
-    assert sentence.sentence_id not in handle_ids
-    assert chunk.chunk_id not in handle_ids
+    assert sentence_handle_id not in handle_ids
+    assert chunk_handle_id not in handle_ids
 
 
 def test_sentence_projection_exposes_system_derived_evidence_usability(
@@ -294,11 +303,12 @@ def test_sentence_projection_exposes_system_derived_evidence_usability(
     ]["results"][0]
 
     assert "can_use_as_evidence" not in raw_observation.results[0]
-    assert projected_result["sentence_id"] == sentence.sentence_id
+    assert projected_result["sentence_id"] == "S1"
     assert projected_result["can_use_as_evidence"] is True
     assert "eligible_sentence_ids" not in json.dumps(
         _payload(built), sort_keys=True
     )
+    assert built.policy_view.policy_state.actionable_handles == []
 
 
 def test_read_projection_omits_duplicate_chunk_text_but_keeps_sentences(
@@ -337,8 +347,8 @@ def test_read_projection_omits_duplicate_chunk_text_but_keeps_sentences(
 
     assert raw_observation.results[0]["text"] == chunk.text
     assert "text" not in projected_result
-    assert projected_result["chunk_id"] == chunk.chunk_id
-    assert projected_result["read"] is True
+    assert projected_result["chunk_id"] == "C1"
+    assert projected_result["has_been_read"] is True
     assert projected_result["can_use_as_evidence"] is True
     assert projected_result["sentences"]
     assert all(
@@ -348,7 +358,9 @@ def test_read_projection_omits_duplicate_chunk_text_but_keeps_sentences(
         item["can_use_as_evidence"] is True
         for item in projected_result["sentences"]
     )
-    assert sentence.sentence_id in {
+    assert state.handle_registry.handle_for(
+        sentence.sentence_id, "SENTENCE"
+    ) in {
         item["sentence_id"] for item in projected_result["sentences"]
     }
 
@@ -436,7 +448,12 @@ def test_handle_registry_keeps_semantic_entity_sentence_and_chunk_handles(
     entity_handle = state.node_handles[entity.entity_id]
     assert isinstance(sentence_handle, SentenceHandle)
     assert sentence_handle.text == sentence.text
-    assert sentence_handle.parent_chunk_id == chunk.chunk_id
+    assert sentence_handle.id == state.handle_registry.handle_for(
+        sentence.sentence_id, "SENTENCE"
+    )
+    assert sentence_handle.parent_chunk_id == (
+        state.handle_registry.handle_for(chunk.chunk_id, "CHUNK")
+    )
     assert sentence_handle.document_id == document.doc_id
     assert sentence_handle.eligible is True
     assert sentence_handle.can_use_as_evidence is True
@@ -467,9 +484,9 @@ def test_handle_registry_keeps_semantic_entity_sentence_and_chunk_handles(
         handle.id: handle
         for handle in view.policy_state.actionable_handles
     }
-    assert sentence.sentence_id in handles
-    assert chunk.chunk_id in handles
-    assert entity.entity_id in handles
+    assert sentence_handle.id in handles
+    assert chunk_handle.id in handles
+    assert entity_handle.id in handles
 
 
 def test_chunk_preview_handles_remain_ineligible_and_read_upgrades_chunk(
@@ -508,7 +525,11 @@ def test_chunk_preview_handles_remain_ineligible_and_read_upgrades_chunk(
     assert chunk_handle.can_use_as_evidence is False
     assert 1 <= len(chunk_handle.previews) <= 2
     preview_id = chunk_handle.previews[0].sentence_id
-    preview_handle = state.node_handles[preview_id]
+    preview_stable_id = state.handle_registry.stable_id_for(
+        preview_id, "SENTENCE"
+    )
+    assert preview_stable_id is not None
+    preview_handle = state.node_handles[preview_stable_id]
     assert isinstance(preview_handle, SentenceHandle)
     assert preview_handle.eligible is False
     assert preview_handle.can_use_as_evidence is False
@@ -523,9 +544,9 @@ def test_chunk_preview_handles_remain_ineligible_and_read_upgrades_chunk(
         for item in search_payload["policy_state"][
             "latest_observation"
         ]["results"]
-        if item["chunk_id"] == chunk.chunk_id
+        if item["chunk_id"] == chunk_handle.id
     )
-    assert projected_chunk["read"] is False
+    assert projected_chunk["has_been_read"] is False
     assert projected_chunk["can_use_as_evidence"] is False
     assert all(
         preview["can_use_as_evidence"] is False
@@ -604,3 +625,119 @@ def test_append_only_mode_preserves_full_history_baseline(
     assert sum(len(item.content) for item in compact.messages) < sum(
         len(item.content) for item in built.messages
     )
+
+
+def test_node_handle_registry_is_typed_bijective_and_reloadable() -> None:
+    registry = NodeHandleRegistry()
+
+    assert registry.register("stable:entity:1", "ENTITY") == "E1"
+    assert registry.register("stable:sentence:1", "SENTENCE") == "S1"
+    assert registry.register("stable:chunk:1", "CHUNK") == "C1"
+    assert registry.register("stable:sentence:1", "SENTENCE") == "S1"
+    assert registry.stable_id_for("S1", "SENTENCE") == (
+        "stable:sentence:1"
+    )
+    assert registry.stable_id_for("S1", "CHUNK") is None
+    assert registry.handle_for("stable:chunk:1", "CHUNK") == "C1"
+    assert registry.handle_for("stable:chunk:1", "ENTITY") is None
+    assert registry.node_type_for_handle("E1") == "ENTITY"
+    assert registry.node_type_for_handle("S0") is None
+    assert registry.node_type_for_handle("sentence:1") is None
+
+    restored = NodeHandleRegistry.model_validate_json(
+        registry.model_dump_json()
+    )
+    assert restored == registry
+    assert restored.register("stable:sentence:2", "SENTENCE") == "S2"
+    with pytest.raises(ValueError, match="another node type"):
+        restored.register("stable:sentence:1", "CHUNK")
+
+
+def test_policy_messages_hide_stable_node_and_document_ids_in_both_modes(
+    built_substrate: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    sentence, chunk, document, _ = _substrate_nodes(substrate)
+    initial = ControllerState.initial()
+    observation = _sentence_observation(substrate)
+    state = StateUpdater(substrate).apply(
+        initial,
+        assessment=None,
+        observation=observation,
+        action_signature=None,
+    )
+    decision = PolicyDecision(
+        assessment=EvidenceAssessment(
+            status=AssessmentStatus.INSUFFICIENT,
+            missing_information=["Need the birthplace."],
+        ),
+        action=observation.action,
+    )
+    record = StepRecord(
+        step=state.step,
+        decision=decision,
+        validation_status=ValidationStatus.VALID,
+        observation=observation,
+        state_before=initial,
+        state_after=state,
+    )
+
+    for builder in (
+        PolicyContextBuilder(
+            evidence_resolver=EvidenceResolver(substrate)
+        ),
+        AppendOnlyContextBuilder(
+            evidence_resolver=EvidenceResolver(substrate)
+        ),
+    ):
+        built = builder.build(
+            QUESTION,
+            _skill(),
+            state,
+            [record],
+            scope_id=SCOPE_ID,
+        )
+        policy_input = "\n".join(message.content for message in built.messages)
+        assert sentence.sentence_id not in policy_input
+        assert chunk.chunk_id not in policy_input
+        assert document.doc_id not in policy_input
+        assert '"sentence_id":"S1"' in policy_input
+        assert '"parent_chunk_id":"C1"' in policy_input
+
+    # Raw state remains auditable and round-trippable with stable provenance.
+    raw_state = state.model_dump_json()
+    assert sentence.sentence_id in raw_state
+    assert chunk.chunk_id in raw_state
+    assert document.doc_id in raw_state
+    assert ControllerState.model_validate_json(raw_state) == state
+
+
+def test_policy_handle_capabilities_respect_enabled_expansions(
+    built_substrate: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    state = StateUpdater(substrate).apply(
+        ControllerState.initial(),
+        assessment=None,
+        observation=_sentence_observation(substrate),
+        action_signature=None,
+    )
+    state.newest_observation = None
+
+    view = PolicyContextBuilder(
+        enabled_expansions=(),
+        evidence_resolver=EvidenceResolver(substrate),
+    ).build_policy_view(state, [], scope_id=SCOPE_ID)
+    handles = {
+        handle.node_type: handle
+        for handle in view.policy_state.actionable_handles
+    }
+
+    sentence_handle = handles["SENTENCE"]
+    chunk_handle = handles["CHUNK"]
+    assert sentence_handle.can_use_as_evidence is True
+    assert sentence_handle.can_expand is False
+    assert chunk_handle.can_read is True
+    assert chunk_handle.has_been_read is False
+    assert chunk_handle.can_expand is False
+    assert chunk_handle.can_use_as_evidence is False

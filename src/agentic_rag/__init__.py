@@ -3,9 +3,15 @@
 __version__ = "0.1.0"
 
 from agentic_rag.adapters import (
+    ARAGBenchmarkAdapter,
     HotpotQAAdapter,
     HotpotQABenchmarkExactAdapter,
     SourceAdapter,
+)
+from agentic_rag.benchmark_profiles import (
+    ARAG_DATASET_PROFILES,
+    AragDatasetProfile,
+    get_arag_dataset_profile,
 )
 from agentic_rag.agent import AgentConfig, AgentController, AgentHarness
 from agentic_rag.bridge import SubstrateBridge
@@ -19,6 +25,9 @@ __all__ = [
     "AgentConfig",
     "AgentController",
     "AgentHarness",
+    "ARAGBenchmarkAdapter",
+    "ARAG_DATASET_PROFILES",
+    "AragDatasetProfile",
     "HotpotQAAdapter",
     "HotpotQABenchmarkExactAdapter",
     "Retriever",
@@ -26,4 +35,5 @@ __all__ = [
     "Substrate",
     "SubstrateBridge",
     "SubstrateBuilder",
+    "get_arag_dataset_profile",
 ]

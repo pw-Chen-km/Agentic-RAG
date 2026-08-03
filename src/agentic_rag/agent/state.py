@@ -82,13 +82,37 @@ class StateUpdater:
         if self.substrate is None:
             return
 
-        previews = _preview_text_by_chunk(observation.results)
+        registry = state.handle_registry
+        # Allocate handles by type and stable-ID order. Counters are independent
+        # per type, so the same episode and observations always produce the same
+        # S#/C#/E# mapping without changing the substrate IDs used by control
+        # state.
+        for entity_id in sorted(state.visible_entity_ids):
+            registry.register(entity_id, "ENTITY")
+        for chunk_id in sorted(state.visible_chunk_ids):
+            registry.register(chunk_id, "CHUNK")
+        for sentence_id in sorted(state.visible_sentence_ids):
+            registry.register(sentence_id, "SENTENCE")
+
+        raw_previews = _preview_text_by_chunk(observation.results)
+        previews = {
+            chunk_id: [
+                HandleSentencePreview(
+                    sentence_id=registry.register(
+                        sentence_id, "SENTENCE"
+                    ),
+                    text=text,
+                )
+                for sentence_id, text in items
+            ]
+            for chunk_id, items in raw_previews.items()
+        }
         for entity_id in sorted(state.visible_entity_ids):
             entity = self.substrate.entity_by_id.get(entity_id)
             if entity is None:
                 continue
             state.node_handles[entity_id] = EntityHandle(
-                id=entity_id,
+                id=registry.register(entity_id, "ENTITY"),
                 label=entity.canonical_name,
                 entity_type=entity.entity_type,
             )
@@ -100,9 +124,11 @@ class StateUpdater:
             chunk = self.substrate.chunk_by_id[sentence.chunk_id]
             document = self.substrate.document_by_id[chunk.doc_id]
             state.node_handles[sentence_id] = SentenceHandle(
-                id=sentence_id,
+                id=registry.register(sentence_id, "SENTENCE"),
                 text=_summary(sentence.text),
-                parent_chunk_id=chunk.chunk_id,
+                parent_chunk_id=registry.register(
+                    chunk.chunk_id, "CHUNK"
+                ),
                 document_id=document.doc_id,
                 title=document.title,
                 can_use_as_evidence=(
@@ -123,10 +149,10 @@ class StateUpdater:
             )
             current_previews = previews.get(chunk_id, [])
             state.node_handles[chunk_id] = ChunkHandle(
-                id=chunk_id,
+                id=registry.register(chunk_id, "CHUNK"),
                 document_id=document.doc_id,
                 title=document.title,
-                read=chunk_id in state.read_chunk_ids,
+                has_been_read=chunk_id in state.read_chunk_ids,
                 can_use_as_evidence=chunk_id in state.read_chunk_ids,
                 previews=(
                     current_previews
@@ -144,8 +170,8 @@ def _summary(text: str) -> str:
 
 def _preview_text_by_chunk(
     results: list[dict[str, Any]],
-) -> dict[str, list[HandleSentencePreview]]:
-    previews: dict[str, list[HandleSentencePreview]] = {}
+) -> dict[str, list[tuple[str, str]]]:
+    previews: dict[str, list[tuple[str, str]]] = {}
 
     def visit(
         value: Any,
@@ -185,13 +211,8 @@ def _preview_text_by_chunk(
             and isinstance(chunk_id, str)
         ):
             bucket = previews.setdefault(chunk_id, [])
-            if sentence_id not in {item.sentence_id for item in bucket}:
-                bucket.append(
-                    HandleSentencePreview(
-                        sentence_id=sentence_id,
-                        text=_summary(text),
-                    )
-                )
+            if sentence_id not in {item[0] for item in bucket}:
+                bucket.append((sentence_id, _summary(text)))
 
         for key, child in value.items():
             visit(

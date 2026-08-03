@@ -100,6 +100,8 @@ SCHEMAS: dict[str, pa.Schema] = {
             pa.field("question", pa.string(), False),
             pa.field("answer", pa.string(), False),
             pa.field("question_type", pa.string(), True),
+            pa.field("source_question_id", pa.string(), True),
+            pa.field("source_row_index", pa.int64(), True),
         ]
     ),
 }

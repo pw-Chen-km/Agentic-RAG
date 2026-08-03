@@ -314,17 +314,180 @@ class ChunkHandle(AgentModel):
     id: str = Field(min_length=1)
     document_id: str = Field(min_length=1)
     title: str | None = None
-    read: bool = False
+    has_been_read: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("has_been_read", "read"),
+    )
     can_use_as_evidence: bool = False
     previews: list[HandleSentencePreview] = Field(
         default_factory=list, max_length=2
     )
+
+    @property
+    def read(self) -> bool:
+        """Backward-compatible accessor for the previous field name."""
+
+        return self.has_been_read
 
 
 NodeHandle = Annotated[
     EntityHandle | SentenceHandle | ChunkHandle,
     Field(discriminator="node_type"),
 ]
+
+
+class PolicyEntityHandle(AgentModel):
+    node_type: Literal["ENTITY"] = "ENTITY"
+    id: str = Field(min_length=1)
+    label: str
+    entity_type: str | None = None
+    can_expand: bool
+
+
+class PolicySentenceHandle(AgentModel):
+    node_type: Literal["SENTENCE"] = "SENTENCE"
+    id: str = Field(min_length=1)
+    text: str
+    parent_chunk_id: str = Field(min_length=1)
+    title: str | None = None
+    can_use_as_evidence: bool
+    can_expand: bool
+
+
+class PolicyChunkHandle(AgentModel):
+    node_type: Literal["CHUNK"] = "CHUNK"
+    id: str = Field(min_length=1)
+    title: str | None = None
+    has_been_read: bool
+    can_read: bool
+    can_expand: bool
+    can_use_as_evidence: bool
+    previews: list[HandleSentencePreview] = Field(
+        default_factory=list, max_length=2
+    )
+
+
+PolicyNodeHandle = Annotated[
+    PolicyEntityHandle | PolicySentenceHandle | PolicyChunkHandle,
+    Field(discriminator="node_type"),
+]
+
+
+_HANDLE_PREFIX_BY_NODE_TYPE: dict[str, str] = {
+    "ENTITY": "E",
+    "SENTENCE": "S",
+    "CHUNK": "C",
+}
+_NODE_TYPE_BY_HANDLE_PREFIX: dict[str, str] = {
+    prefix: node_type
+    for node_type, prefix in _HANDLE_PREFIX_BY_NODE_TYPE.items()
+}
+
+
+class NodeHandleRegistry(AgentModel):
+    """Episode-local, persisted bijection between handles and substrate IDs.
+
+    Stable substrate IDs remain the source of truth for runtime control state.
+    Policy-facing records use only the compact handles allocated here.
+    """
+
+    handle_to_stable_id: dict[str, str] = Field(default_factory=dict)
+    stable_id_to_handle: dict[str, str] = Field(default_factory=dict)
+    next_entity_index: int = Field(default=1, ge=1)
+    next_sentence_index: int = Field(default=1, ge=1)
+    next_chunk_index: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def mappings_must_be_a_bijection(self) -> Self:
+        inverse = {
+            stable_id: handle
+            for handle, stable_id in self.handle_to_stable_id.items()
+        }
+        if inverse != self.stable_id_to_handle:
+            raise ValueError(
+                "handle_to_stable_id and stable_id_to_handle must be inverse "
+                "mappings"
+            )
+        for handle in self.handle_to_stable_id:
+            if self.node_type_for_handle(handle) is None:
+                raise ValueError(f"invalid node handle: {handle}")
+        return self
+
+    def register(self, stable_id: str, node_type: str) -> str:
+        """Return the existing handle or allocate the next typed handle."""
+
+        normalized_type = _normalize_node_type(node_type)
+        existing = self.stable_id_to_handle.get(stable_id)
+        if existing is not None:
+            if self.node_type_for_handle(existing) != normalized_type:
+                raise ValueError(
+                    f"stable ID is already registered as another node type: "
+                    f"{stable_id}"
+                )
+            return existing
+
+        prefix = _HANDLE_PREFIX_BY_NODE_TYPE[normalized_type]
+        counter_field = {
+            "ENTITY": "next_entity_index",
+            "SENTENCE": "next_sentence_index",
+            "CHUNK": "next_chunk_index",
+        }[normalized_type]
+        index = getattr(self, counter_field)
+        handle = f"{prefix}{index}"
+        while handle in self.handle_to_stable_id:
+            index += 1
+            handle = f"{prefix}{index}"
+        setattr(self, counter_field, index + 1)
+        self.handle_to_stable_id[handle] = stable_id
+        self.stable_id_to_handle[stable_id] = handle
+        return handle
+
+    def stable_id_for(
+        self,
+        handle: str,
+        expected_type: str | None = None,
+    ) -> str | None:
+        """Resolve a handle, returning ``None`` for unknown/type mismatch."""
+
+        if expected_type is not None:
+            normalized_type = _normalize_node_type(expected_type)
+            if self.node_type_for_handle(handle) != normalized_type:
+                return None
+        return self.handle_to_stable_id.get(handle)
+
+    def handle_for(
+        self,
+        stable_id: str,
+        expected_type: str | None = None,
+    ) -> str | None:
+        """Resolve a stable ID, returning ``None`` for unknown/type mismatch."""
+
+        handle = self.stable_id_to_handle.get(stable_id)
+        if handle is None:
+            return None
+        if expected_type is not None:
+            normalized_type = _normalize_node_type(expected_type)
+            if self.node_type_for_handle(handle) != normalized_type:
+                return None
+        return handle
+
+    @staticmethod
+    def node_type_for_handle(handle: str) -> str | None:
+        if (
+            len(handle) < 2
+            or not handle[1:].isdigit()
+            or int(handle[1:]) < 1
+        ):
+            return None
+        return _NODE_TYPE_BY_HANDLE_PREFIX.get(handle[0])
+
+
+def _normalize_node_type(node_type: object) -> str:
+    raw = getattr(node_type, "value", node_type)
+    normalized = str(raw).upper()
+    if normalized not in _HANDLE_PREFIX_BY_NODE_TYPE:
+        raise ValueError(f"unsupported node type: {node_type}")
+    return normalized
 
 
 class ControllerState(AgentModel):
@@ -341,6 +504,9 @@ class ControllerState(AgentModel):
     newest_observation: Observation | None = None
     selected_evidence_refs: list[EvidenceRef] = Field(default_factory=list)
     node_handles: dict[str, NodeHandle] = Field(default_factory=dict)
+    handle_registry: NodeHandleRegistry = Field(
+        default_factory=NodeHandleRegistry
+    )
 
     @classmethod
     def initial(
@@ -378,6 +544,16 @@ class ResolvedEvidence(AgentModel):
     contained_sentence_ids: list[str] = Field(default_factory=list)
 
 
+class PolicyEvidenceView(AgentModel):
+    """Handle-safe evidence projection for the Policy LLM only."""
+
+    ref: EvidenceRef
+    text: str
+    title: str | None = None
+    parent_chunk_id: str | None = None
+    contained_sentence_ids: list[str] = Field(default_factory=list)
+
+
 class LastValidAssessmentView(AgentModel):
     status: AssessmentStatus
     missing_information: list[str] = Field(default_factory=list, max_length=3)
@@ -402,9 +578,9 @@ class PolicyBudgetView(AgentModel):
 class PolicyStateView(AgentModel):
     step: int = Field(ge=0)
     last_valid_assessment: LastValidAssessmentView | None = None
-    selected_evidence: list[ResolvedEvidence] = Field(default_factory=list)
+    selected_evidence: list[PolicyEvidenceView] = Field(default_factory=list)
     latest_observation: dict[str, Any] | None = None
-    actionable_handles: list[NodeHandle] = Field(default_factory=list)
+    actionable_handles: list[PolicyNodeHandle] = Field(default_factory=list)
     attempted_actions: list[AttemptedActionView] = Field(default_factory=list)
     budget: PolicyBudgetView
 
@@ -419,10 +595,18 @@ class PolicyView(AgentModel):
 
 class StepRecord(AgentModel):
     step: int = Field(ge=1)
+    # The raw Policy LLM decision uses episode-local S#/C#/E# handles.
     decision: PolicyDecision | None = None
+    # The Controller-owned audit form resolves those handles back to stable
+    # substrate IDs before validation and execution.
+    resolved_decision: PolicyDecision | None = None
     validation_status: ValidationStatus
     validation_error: str | None = None
+    # The raw environment Observation remains available for replay/audit.
     observation: Observation | None = None
+    # This is the handle-safe semantic feedback that the Policy LLM can see on
+    # the following turn and that SkillOpt should learn from.
+    agent_visible_observation: dict[str, Any] | None = None
     state_before: ControllerState
     state_after: ControllerState
     usage: Usage = Field(default_factory=Usage)

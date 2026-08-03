@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "Typed multi-granularity substrate for agentic retrieval-augmented generation"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
     "bm25s>=0.3,<0.4",
     "numpy>=1.26,<2",
@@ -24,6 +29,9 @@ dev = [
     "pytest>=8.3,<10",
     "pytest-cov>=6,<8",
 ]
+skillopt = [
+    "skillopt==0.2.0",
+]
 
 [project.scripts]
 agentic-rag = "agentic_rag.cli:app"
@@ -42,6 +50,7 @@ markers = [
     "real_models: downloads and exercises real spaCy/scispaCy/MiniLM models",
     "openai_smoke: opt-in live gpt-5.6-luna policy and answer API smoke test",
     "ollama_smoke: opt-in live local Ollama policy and answer API smoke test",
+    "skillopt_smoke: opt-in live 18-question SkillOpt workflow smoke test",
 ]
 
 [tool.coverage.run]

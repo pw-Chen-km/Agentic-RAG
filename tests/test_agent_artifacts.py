@@ -11,6 +11,7 @@ from pydantic import BaseModel, SecretStr
 
 from agentic_rag.agent import artifacts
 from agentic_rag.agent.artifacts import ArtifactWriter, REDACTED_SECRET
+from agentic_rag.paths import portable_path_component
 
 
 class ExpansionKind(str, Enum):
@@ -63,6 +64,15 @@ def _sample_inputs() -> dict[str, Any]:
                     }
                 ]
             },
+            "agent_visible_observation": {
+                "status": "ok",
+                "results": [
+                    {
+                        "sentence_id": "S1",
+                        "text": "Marie Curie was born in Warsaw.",
+                    }
+                ],
+            },
         },
         {
             "step_index": 2,
@@ -74,8 +84,29 @@ def _sample_inputs() -> dict[str, Any]:
                 "action": {
                     "type": "EXPAND",
                     "kind": "SENTENCE_PART_OF_CHUNK",
+                    "source_id": "S1",
+                },
+            },
+            "resolved_decision": {
+                "assessment": {
+                    "status": "UNCERTAIN",
+                    "missing_information": ["country"],
+                },
+                "action": {
+                    "type": "EXPAND",
+                    "kind": "SENTENCE_PART_OF_CHUNK",
                     "source_id": "sentence:S12",
                 },
+            },
+            "agent_visible_observation": {
+                "status": "invalid_action",
+                "action": {
+                    "type": "EXPAND",
+                    "kind": "SENTENCE_PART_OF_CHUNK",
+                    "source_id": "S1",
+                },
+                "error_code": "unknown_expansion",
+                "message": "This expansion does not exist.",
             },
             "outcome": {
                 "validation_error": {
@@ -133,6 +164,12 @@ def test_writes_complete_skillopt_compatible_run_directory(
     episode = json.loads((run_dir / "episode.json").read_text("utf-8"))
     assert episode["question"] == "居禮夫人在哪裡出生？"
     assert episode["provider_metadata"]["authorization"] == REDACTED_SECRET
+    assert episode["trajectory"][1]["decision"]["action"]["source_id"] == (
+        "S1"
+    )
+    assert episode["trajectory"][1]["resolved_decision"]["action"][
+        "source_id"
+    ] == "sentence:S12"
 
     conversation = json.loads(
         (run_dir / "conversation.json").read_text("utf-8")
@@ -145,7 +182,9 @@ def test_writes_complete_skillopt_compatible_run_directory(
                 "status": "INSUFFICIENT",
                 "missing_information": ["birthplace"],
             },
-            "env_feedback": inputs["episode"].trajectory[0]["observation"],
+            "env_feedback": inputs["episode"].trajectory[0][
+                "agent_visible_observation"
+            ],
         },
         {
             "step": 2,
@@ -153,11 +192,12 @@ def test_writes_complete_skillopt_compatible_run_directory(
             "reasoning": inputs["episode"].trajectory[1]["decision"][
                 "assessment"
             ],
-            "env_feedback": inputs["episode"].trajectory[1]["outcome"][
-                "validation_error"
+            "env_feedback": inputs["episode"].trajectory[1][
+                "agent_visible_observation"
             ],
         },
     ]
+    assert "sentence:S12" not in json.dumps(conversation)
     assert all(
         set(record) == {"step", "action", "reasoning", "env_feedback"}
         for record in conversation
@@ -218,6 +258,52 @@ def test_write_is_deterministic_idempotent_and_immutable(
         path.name: path.read_bytes()
         for path in sorted(first.iterdir())
     } == before
+
+
+def test_windows_unsafe_episode_id_uses_portable_directory(
+    tmp_path: Path,
+) -> None:
+    logical_id = "hotpotqa:benchmark_exact:q:000001"
+    inputs = {
+        **_sample_inputs(),
+        "episode_id": logical_id,
+        "episode": Episode(
+            episode_id=logical_id,
+            question="Where was Marie Curie born?",
+            trajectory=(),
+            provider_metadata={},
+        ),
+    }
+
+    run_dir = ArtifactWriter(tmp_path / "runs").write_episode(**inputs)
+
+    assert run_dir.name == portable_path_component(logical_id)
+    assert ":" not in run_dir.name
+    assert len(run_dir.name) <= 120
+    episode = json.loads((run_dir / "episode.json").read_text("utf-8"))
+    assert episode["episode_id"] == logical_id
+
+
+def test_directory_fsync_is_skipped_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(artifacts.sys, "platform", "win32")
+
+    def unexpected_open(*_args, **_kwargs):
+        raise AssertionError("Windows must not call os.open on a directory")
+
+    monkeypatch.setattr(artifacts.os, "open", unexpected_open)
+    artifacts._fsync_directory(tmp_path)
+
+
+@pytest.mark.parametrize("logical_id", ["CON", "report.", "A:B", "資料:一"])
+def test_portable_path_component_handles_windows_names(logical_id: str) -> None:
+    component = portable_path_component(logical_id)
+
+    assert component not in {"CON", "report."}
+    assert all(character not in component for character in '<>:"/\\|?*')
+    assert component == portable_path_component(logical_id)
 
 
 def test_failed_write_never_publishes_partial_episode(

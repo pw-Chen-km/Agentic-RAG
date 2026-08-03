@@ -897,7 +897,9 @@ def test_harness_writes_six_skillopt_compatible_artifacts(
     assert effective["agent"]["context_mode"] == "compact_evidence"
     assert effective["policy_context"] == {
         "handle_summary_max_chars": 160,
+        "node_reference_scheme": "episode_local_typed_handles_v1",
         "selection_semantics": "full_set_replacement",
+        "stable_node_ids_visible_to_policy": False,
     }
     assert effective["runtime_components"] == {
         "policy_client": "ScriptedPolicy",
