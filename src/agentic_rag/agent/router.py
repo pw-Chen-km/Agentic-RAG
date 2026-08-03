@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from agentic_rag.agent.expansion import ExpansionEngine
+from agentic_rag.agent.handle_resolution import resolve_action
 from agentic_rag.agent.models import (
     AgentAction,
     ControllerState,
@@ -53,6 +54,10 @@ class ActionRouter:
         scope_id: str,
         action_id: str,
     ) -> Observation:
+        # Controller validation normally supplies an already-resolved action.
+        # Resolve defensively here as well so direct Router callers cannot pass
+        # policy handles into the stable-ID substrate APIs.
+        action = resolve_action(action, state, self.substrate)
         if isinstance(action, SearchAction):
             hits = self.retriever.search(
                 query=action.query,

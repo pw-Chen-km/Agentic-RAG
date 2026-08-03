@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from agentic_rag.agent.handle_resolution import resolve_evidence_ref
 from agentic_rag.agent.models import (
     ChunkRef,
     ControllerState,
@@ -28,7 +29,10 @@ class EvidenceResolver:
         self.substrate.require_scope(scope_id)
         unique: list[EvidenceRef] = []
         seen: set[tuple[str, str]] = set()
-        for ref in refs:
+        for policy_ref in refs:
+            ref = resolve_evidence_ref(
+                policy_ref, state, self.substrate
+            )
             key = (ref.unit, ref.id)
             if key not in seen:
                 seen.add(key)

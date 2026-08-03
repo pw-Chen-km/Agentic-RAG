@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentic_rag.agent.models import ResolvedEvidence, Usage
 from agentic_rag.agent.policy import _extract_usage, _is_transient
+from agentic_rag.benchmark_profiles import AnswerMode
 
 
 class AnswerGenerationError(RuntimeError):
@@ -33,6 +34,46 @@ class _AnswerResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     answer: str = Field(min_length=1)
+
+
+def answer_provider_input(
+    question: str,
+    evidence: Sequence[ResolvedEvidence],
+    *,
+    answer_mode: AnswerMode = AnswerMode.SHORT,
+) -> list[dict[str, str]]:
+    """Build the exact evidence-only provider messages.
+
+    Keeping message construction pure makes live calls and persisted workflow
+    traces use the same representation without recording HTTP headers or
+    provider credentials.
+    """
+
+    evidence_payload = [item.model_dump(mode="json") for item in evidence]
+    response_instruction = (
+        "Provide a complete, well-supported answer. Include the explanation "
+        "needed to satisfy a long-form question, but do not add unsupported "
+        "claims."
+        if answer_mode is AnswerMode.LONG
+        else "Return a concise answer."
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Answer the question using only the supplied evidence. "
+                f"Do not use outside knowledge. {response_instruction}"
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {"question": question, "evidence": evidence_payload},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        },
+    ]
 
 
 class ScriptedAnswerGenerator:
@@ -89,6 +130,7 @@ class OpenAIResponsesAnswerGenerator:
         client: Any | None = None,
         max_retries: int = 2,
         retry_backoff_seconds: float = 0.5,
+        answer_mode: AnswerMode = AnswerMode.SHORT,
     ) -> None:
         if not model.strip():
             raise AnswerGenerationError("model must not be blank")
@@ -101,6 +143,7 @@ class OpenAIResponsesAnswerGenerator:
         self.model = model
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        self.answer_mode = answer_mode
         self._client = client if client is not None else self._create_client()
         self.last_usage = Usage()
 
@@ -129,26 +172,11 @@ class OpenAIResponsesAnswerGenerator:
             raise AnswerGenerationError(
                 "answer generation requires at least one resolved evidence item"
             )
-        evidence_payload = [
-            item.model_dump(mode="json") for item in evidence
-        ]
-        provider_input = [
-            {
-                "role": "system",
-                "content": (
-                    "Answer the question using only the supplied evidence. "
-                    "Do not use outside knowledge. Return a concise answer."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {"question": question, "evidence": evidence_payload},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-            },
-        ]
+        provider_input = answer_provider_input(
+            question,
+            evidence,
+            answer_mode=self.answer_mode,
+        )
         response = self._call_with_retries(
             lambda: self._client.responses.parse(
                 model=self.model,

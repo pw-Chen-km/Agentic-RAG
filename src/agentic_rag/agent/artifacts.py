@@ -13,6 +13,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import fields, is_dataclass
@@ -21,6 +22,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from uuid import UUID
+
+from agentic_rag.paths import portable_path_component
 
 REDACTED_SECRET = "[REDACTED]"
 
@@ -56,9 +59,10 @@ class ArtifactWriter:
     """Write an immutable run directory below ``runs_root``.
 
     A complete sibling temporary directory is built and fsynced before it is
-    atomically renamed to ``runs_root / episode_id``. Repeating an identical
-    write is idempotent. Reusing an episode ID for different content raises
-    ``FileExistsError`` and leaves the first run untouched.
+    atomically renamed below ``runs_root``. Logical IDs that are not valid
+    Windows filenames use a deterministic portable directory name. Repeating
+    an identical write is idempotent. Reusing an episode ID for different
+    content raises ``FileExistsError`` and leaves the first run untouched.
     """
 
     def __init__(self, runs_root: str | Path) -> None:
@@ -101,6 +105,12 @@ class ArtifactWriter:
         }
         return self._publish(episode_id, payloads)
 
+    def path_for_episode(self, episode_id: str) -> Path:
+        """Return the cross-platform artifact path for a logical Episode ID."""
+
+        _validate_episode_id(episode_id)
+        return self.runs_root / portable_path_component(episode_id)
+
     def write(
         self,
         *,
@@ -129,13 +139,14 @@ class ArtifactWriter:
             raise ValueError("artifact payload set does not match the public contract")
 
         self.runs_root.mkdir(parents=True, exist_ok=True)
-        destination = self.runs_root / episode_id
+        portable_id = portable_path_component(episode_id)
+        destination = self.runs_root / portable_id
         if destination.exists():
             return _accept_identical_or_raise(destination, payloads)
 
         temporary = Path(
             tempfile.mkdtemp(
-                prefix=f".{episode_id}.",
+                prefix=f".{portable_id}.",
                 suffix=".tmp",
                 dir=self.runs_root,
             )
@@ -191,6 +202,10 @@ def _skillopt_conversation(trajectory: Any) -> list[dict[str, Any]]:
             decision.get("assessment"),
             step.get("reasoning"),
         )
+        agent_visible_observation = _first_not_none(
+            step.get("agent_visible_observation"),
+            step.get("policy_observation"),
+        )
         observation = _first_not_none(
             step.get("observation"),
             outcome.get("observation"),
@@ -202,7 +217,13 @@ def _skillopt_conversation(trajectory: Any) -> list[dict[str, Any]]:
             outcome.get("validation_error"),
         )
 
-        if observation is not None and validation is not None:
+        # SkillOpt must learn from the same handle-safe semantic feedback that
+        # the target Policy saw.  The raw stable-ID Observation remains in
+        # episode.json/io_trace.json for replay and audit, but is only a legacy
+        # fallback for older trajectory records without this projection.
+        if agent_visible_observation is not None:
+            feedback = agent_visible_observation
+        elif observation is not None and validation is not None:
             feedback: Any = {
                 "observation": observation,
                 "validation": validation,
@@ -241,7 +262,7 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, Enum):
         return _to_jsonable(value.value)
     if isinstance(value, Path):
-        return str(value)
+        return value.as_posix()
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, UUID):
@@ -344,6 +365,11 @@ def _write_file(path: Path, content: bytes) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
+    # Windows cannot open directories through os.open(), and directory fsync
+    # is not part of its durability contract.  File fsync + same-directory
+    # rename remains the strongest portable sequence available here.
+    if sys.platform == "win32":
+        return
     descriptor = os.open(path, os.O_RDONLY)
     try:
         os.fsync(descriptor)

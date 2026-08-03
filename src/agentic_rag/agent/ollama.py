@@ -17,6 +17,7 @@ from agentic_rag.agent.answer import (
     AnswerGenerationError,
     AnswerGenerator,
     _AnswerResponse,
+    answer_provider_input,
 )
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
@@ -34,6 +35,7 @@ from agentic_rag.agent.policy import (
     _is_transient,
     policy_decision_model,
 )
+from agentic_rag.benchmark_profiles import AnswerMode
 
 OllamaThink = bool | Literal["low", "medium", "high"] | None
 
@@ -182,6 +184,7 @@ class OllamaChatAnswerGenerator(AnswerGenerator):
         timeout_seconds: float | None = 120.0,
         max_retries: int = 2,
         retry_backoff_seconds: float = 0.5,
+        answer_mode: AnswerMode = AnswerMode.SHORT,
     ) -> None:
         normalized_model = _normalize_model(
             model, error_type=AnswerGenerationError
@@ -210,6 +213,7 @@ class OllamaChatAnswerGenerator(AnswerGenerator):
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        self.answer_mode = answer_mode
         self._client = client if client is not None else _create_client(
             host=resolved_host,
             timeout_seconds=timeout_seconds,
@@ -225,26 +229,11 @@ class OllamaChatAnswerGenerator(AnswerGenerator):
             raise AnswerGenerationError(
                 "answer generation requires at least one resolved evidence item"
             )
-        evidence_payload = [
-            item.model_dump(mode="json") for item in evidence
-        ]
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Answer the question using only the supplied evidence. "
-                    "Do not use outside knowledge. Return a concise answer."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {"question": question, "evidence": evidence_payload},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-            },
-        ]
+        messages = answer_provider_input(
+            question,
+            evidence,
+            answer_mode=self.answer_mode,
+        )
         request = _chat_request(
             model=self.model,
             messages=messages,

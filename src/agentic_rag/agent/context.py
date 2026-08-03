@@ -7,19 +7,32 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import TypeAdapter
+
 from agentic_rag.agent.evidence import EvidenceResolver
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
+    AgentAction,
     AttemptedActionView,
+    ChunkRef,
     ContextMode,
     ControllerState,
     ExpansionKind,
+    EntityHandle,
+    ChunkHandle,
     LastValidAssessmentView,
     Message,
+    PolicyDecision,
     PolicyBudgetView,
+    PolicyEvidenceView,
+    PolicyChunkHandle,
+    PolicyEntityHandle,
+    PolicyNodeHandle,
+    PolicySentenceHandle,
     PolicyStateView,
     PolicyView,
-    ResolvedEvidence,
+    SentenceRef,
+    SentenceHandle,
     StepRecord,
 )
 from agentic_rag.agent.skill import SkillDocument
@@ -32,6 +45,10 @@ Return exactly one PolicyDecision containing:
 2. exactly one SEARCH, EXPAND, READ, or FINISH action.
 
 Hard rules:
+- Node IDs shown to you are short episode-local handles: E# for Entity, S# for
+  Sentence, and C# for Chunk. Treat every handle as opaque: copy it exactly,
+  never derive, extend, or reconstruct one. Stable database IDs are intentionally
+  hidden from you.
 - SEARCH top_k is always 5.
 - SEARCH supports only LEXICAL→ENTITY, BM25→SENTENCE|CHUNK, and
   DENSE→ENTITY|SENTENCE|CHUNK.
@@ -44,7 +61,7 @@ Hard rules:
   question or subquestion used only to rank local graph neighbours. When null,
   the original question is used.
 - Every non-adjacent EXPAND must set direction=null.
-- READ accepts one visible parent Chunk ID.
+- READ accepts one visible parent Chunk handle.
 - A complete Sentence result is eligible Sentence evidence and exposes its
   parent Chunk ID for READ.
 - A visible Chunk ID or Chunk preview is navigation only. A Chunk becomes
@@ -123,6 +140,26 @@ _NODE_ID_KEYS = frozenset(
         "bridge_chunk_id",
     }
 )
+_DOCUMENT_ID_KEYS = frozenset({"document_id", "doc_id"})
+_ACTION_ADAPTER = TypeAdapter(AgentAction)
+_ENTITY_EXPANSION_KINDS = frozenset(
+    {
+        ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
+        ExpansionKind.ENTITY_CO_OCCURS_ENTITY_SENTENCE,
+        ExpansionKind.ENTITY_MENTIONED_IN_CHUNK,
+        ExpansionKind.ENTITY_CO_OCCURS_ENTITY_CHUNK,
+    }
+)
+_SENTENCE_EXPANSION_KINDS = frozenset(
+    {ExpansionKind.SENTENCE_MENTIONS_ENTITY}
+)
+_CHUNK_EXPANSION_KINDS = frozenset(
+    {
+        ExpansionKind.CHUNK_ADJACENT_CHUNK,
+        ExpansionKind.CHUNK_CONTAINS_SENTENCE,
+        ExpansionKind.CHUNK_MENTIONS_ENTITY,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,14 +208,16 @@ class PolicyContextBuilder:
         )
         messages = self._base_messages(query, skill_text)
         if self.context_mode is ContextMode.APPEND_ONLY:
-            messages.extend(self._append_only_history(trajectory))
+            messages.extend(self._append_only_history(trajectory, state))
             messages.append(
                 Message(
                     role="user",
                     content=self._json(
                         {
                             "instruction": policy_view.instruction,
-                            "current_state": self._append_only_state(state),
+                            "current_state": self._append_only_state(
+                                state, policy_view
+                            ),
                         }
                     ),
                 )
@@ -200,7 +239,9 @@ class PolicyContextBuilder:
         scope_id: str | None,
     ) -> PolicyView:
         selected = self._selected_evidence(state, scope_id)
-        latest = _project_observation(state.newest_observation, state)
+        latest = self.project_observation(
+            state.newest_observation, state
+        )
         represented_ids = {
             item.ref.id for item in selected
         }
@@ -209,12 +250,12 @@ class PolicyContextBuilder:
                 represented_ids.add(item.parent_chunk_id)
         represented_ids.update(_node_ids(latest))
         handles = [
-            handle
-            for node_id, handle in sorted(
+            self._policy_handle(handle)
+            for _, handle in sorted(
                 state.node_handles.items(),
                 key=lambda item: (item[1].node_type, item[0]),
             )
-            if node_id not in represented_ids
+            if handle.id not in represented_ids
         ]
         last_assessment = (
             LastValidAssessmentView(
@@ -230,7 +271,7 @@ class PolicyContextBuilder:
             AttemptedActionView(
                 step=record.step,
                 action=(
-                    record.decision.action
+                    _project_action(record.decision.action, state)
                     if record.decision is not None
                     else None
                 ),
@@ -246,9 +287,9 @@ class PolicyContextBuilder:
                     else None
                 ),
                 message=(
-                    record.observation.message
+                    _handle_safe_value(record.observation.message, state)
                     if record.observation is not None
-                    else record.validation_error
+                    else _handle_safe_value(record.validation_error, state)
                 ),
                 new_node_count=(
                     len(record.observation.novel_node_ids)
@@ -281,25 +322,87 @@ class PolicyContextBuilder:
             ),
         )
 
+    def _policy_handle(self, handle: Any) -> PolicyNodeHandle:
+        enabled = frozenset(self.enabled_expansions)
+        if isinstance(handle, EntityHandle):
+            return PolicyEntityHandle(
+                id=handle.id,
+                label=handle.label,
+                entity_type=handle.entity_type,
+                can_expand=bool(enabled & _ENTITY_EXPANSION_KINDS),
+            )
+        if isinstance(handle, SentenceHandle):
+            return PolicySentenceHandle(
+                id=handle.id,
+                text=handle.text,
+                parent_chunk_id=handle.parent_chunk_id,
+                title=handle.title,
+                can_use_as_evidence=handle.can_use_as_evidence,
+                can_expand=(
+                    handle.can_use_as_evidence
+                    and bool(enabled & _SENTENCE_EXPANSION_KINDS)
+                ),
+            )
+        if isinstance(handle, ChunkHandle):
+            return PolicyChunkHandle(
+                id=handle.id,
+                title=handle.title,
+                has_been_read=handle.has_been_read,
+                can_read=not handle.has_been_read,
+                can_expand=bool(enabled & _CHUNK_EXPANSION_KINDS),
+                can_use_as_evidence=handle.can_use_as_evidence,
+                previews=list(handle.previews),
+            )
+        raise TypeError(f"unsupported node handle: {type(handle).__name__}")
+
     def _selected_evidence(
         self,
         state: ControllerState,
         scope_id: str | None,
-    ) -> list[ResolvedEvidence]:
+    ) -> list[PolicyEvidenceView]:
         if not state.selected_evidence_refs:
             return []
         if self.evidence_resolver is None or scope_id is None:
             raise ValueError(
                 "selected evidence projection requires a resolver and scope_id"
             )
-        resolved: list[ResolvedEvidence] = []
+        resolved: list[PolicyEvidenceView] = []
         for ref in sorted(
             state.selected_evidence_refs,
             key=lambda item: (item.unit, item.id),
         ):
-            resolved.extend(
-                self.evidence_resolver.resolve([ref], state, scope_id)
-            )
+            for item in self.evidence_resolver.resolve(
+                [ref], state, scope_id
+            ):
+                if isinstance(item.ref, SentenceRef):
+                    handle = _require_handle(
+                        state, item.ref.id, "SENTENCE"
+                    )
+                    projected_ref = SentenceRef(id=handle)
+                else:
+                    handle = _require_handle(
+                        state, item.ref.id, "CHUNK"
+                    )
+                    projected_ref = ChunkRef(id=handle)
+                parent_chunk_id = (
+                    _require_handle(
+                        state, item.parent_chunk_id, "CHUNK"
+                    )
+                    if item.parent_chunk_id is not None
+                    else None
+                )
+                resolved.append(
+                    PolicyEvidenceView(
+                        ref=projected_ref,
+                        text=item.text,
+                        title=item.title,
+                        parent_chunk_id=parent_chunk_id,
+                        contained_sentence_ids=[
+                            _require_handle(state, sentence_id, "SENTENCE")
+                            for sentence_id in item.contained_sentence_ids
+                        ],
+                    )
+                )
         return resolved
 
     def _base_messages(
@@ -323,16 +426,33 @@ class PolicyContextBuilder:
             Message(role="user", content=f"Original question:\n{query}"),
         ]
 
+    def project_observation(
+        self,
+        observation: Any,
+        state: ControllerState,
+    ) -> dict[str, Any] | None:
+        """Project one raw observation using this run's action config."""
+
+        return project_observation_for_policy(
+            observation,
+            state,
+            enabled_expansions=self.enabled_expansions,
+        )
+
     def _append_only_history(
-        self, trajectory: Sequence[StepRecord]
+        self,
+        trajectory: Sequence[StepRecord],
+        state: ControllerState,
     ) -> list[Message]:
         messages: list[Message] = []
         for record in trajectory:
             decision_payload = (
-                record.decision.model_dump(mode="json")
+                _project_decision(record.decision, state)
                 if record.decision is not None
                 else {
-                    "policy_error": record.validation_error
+                    "policy_error": _handle_safe_value(
+                        record.validation_error, state
+                    )
                     or "Policy did not produce a valid decision."
                 }
             )
@@ -354,9 +474,13 @@ class PolicyContextBuilder:
                         {
                             "step": record.step,
                             "validation_status": record.validation_status,
-                            "validation_error": record.validation_error,
+                            "validation_error": _handle_safe_value(
+                                record.validation_error, state
+                            ),
                             "environment_observation": (
-                                record.observation.model_dump(mode="json")
+                                self.project_observation(
+                                    record.observation, state
+                                )
                                 if record.observation is not None
                                 else None
                             ),
@@ -367,14 +491,20 @@ class PolicyContextBuilder:
         return messages
 
     @staticmethod
-    def _append_only_state(state: ControllerState) -> dict[str, Any]:
+    def _append_only_state(
+        state: ControllerState,
+        policy_view: PolicyView,
+    ) -> dict[str, Any]:
         return {
             "step": state.step,
-            "visible_entity_ids": sorted(state.visible_entity_ids),
-            "visible_sentence_ids": sorted(state.visible_sentence_ids),
-            "visible_chunk_ids": sorted(state.visible_chunk_ids),
-            "eligible_sentence_ids": sorted(state.eligible_sentence_ids),
-            "read_chunk_ids": sorted(state.read_chunk_ids),
+            "selected_evidence": [
+                item.model_dump(mode="json")
+                for item in policy_view.policy_state.selected_evidence
+            ],
+            "actionable_handles": [
+                item.model_dump(mode="json")
+                for item in policy_view.policy_state.actionable_handles
+            ],
             "remaining_step_budget": state.remaining_step_budget,
             "remaining_retrieved_token_budget": (
                 state.remaining_retrieved_token_budget
@@ -424,14 +554,20 @@ class AppendOnlyContextBuilder(PolicyContextBuilder):
         )
 
 
-def _project_observation(
+def project_observation_for_policy(
     observation: Any,
     state: ControllerState,
+    *,
+    enabled_expansions: Sequence[
+        ExpansionKind
+    ] = DEFAULT_ENABLED_EXPANSIONS,
 ) -> dict[str, Any] | None:
+    """Return the exact handle-safe observation projection shown to Policy."""
+
     if observation is None:
         return None
     action = (
-        observation.action.model_dump(mode="json")
+        _project_action(observation.action, state).model_dump(mode="json")
         if observation.action is not None
         else None
     )
@@ -440,6 +576,7 @@ def _project_observation(
             item,
             state=state,
             is_read=bool(action and action["type"] == "READ"),
+            enabled_expansions=enabled_expansions,
         )
         for item in observation.results
     ]
@@ -454,7 +591,7 @@ def _project_observation(
         "results": results,
         "retrieved_tokens": observation.retrieved_tokens,
         "error_code": observation.error_code,
-        "message": observation.message,
+        "message": _handle_safe_value(observation.message, state),
         "metadata": metadata,
     }
 
@@ -464,15 +601,27 @@ def _project_result(
     *,
     state: ControllerState,
     is_read: bool,
+    enabled_expansions: Sequence[ExpansionKind],
 ) -> dict[str, Any]:
     projected = {
-        key: _project_result_value(value, state=state)
+        key: _project_result_value(
+            value,
+            state=state,
+            enabled_expansions=enabled_expansions,
+        )
         for key, value in result.items()
-        if key not in {"content_read", "evidence_eligible"}
+        if key
+        not in {
+            "content_read",
+            "evidence_eligible",
+            *_DOCUMENT_ID_KEYS,
+        }
     }
     if is_read and "sentences" in projected:
         projected.pop("text", None)
-    _annotate_evidence_usability(projected, state)
+    _annotate_evidence_usability(
+        projected, state, enabled_expansions
+    )
     return projected
 
 
@@ -480,34 +629,70 @@ def _project_result_value(
     value: Any,
     *,
     state: ControllerState,
+    enabled_expansions: Sequence[ExpansionKind],
 ) -> Any:
     if isinstance(value, list):
         return [
-            _project_result_value(item, state=state)
+            _project_result_value(
+                item,
+                state=state,
+                enabled_expansions=enabled_expansions,
+            )
             for item in value
         ]
     if not isinstance(value, Mapping):
-        return value
+        return _handle_safe_value(value, state)
     projected = {
-        key: _project_result_value(child, state=state)
+        key: _project_result_value(
+            child,
+            state=state,
+            enabled_expansions=enabled_expansions,
+        )
         for key, child in value.items()
-        if key not in {"content_read", "evidence_eligible"}
+        if key
+        not in {
+            "content_read",
+            "evidence_eligible",
+            *_DOCUMENT_ID_KEYS,
+        }
     }
-    _annotate_evidence_usability(projected, state)
+    _annotate_evidence_usability(
+        projected, state, enabled_expansions
+    )
     return projected
 
 
 def _annotate_evidence_usability(
     result: dict[str, Any],
     state: ControllerState,
+    enabled_expansions: Sequence[ExpansionKind],
 ) -> None:
+    enabled = frozenset(enabled_expansions)
+    entity_id = result.get(
+        "entity_id",
+        result.get("target_entity_id"),
+    )
+    if isinstance(entity_id, str):
+        result["can_expand"] = bool(enabled & _ENTITY_EXPANSION_KINDS)
+        return
+
     sentence_id = result.get(
         "sentence_id",
         result.get("bridge_sentence_id"),
     )
     if isinstance(sentence_id, str):
+        stable_sentence_id = (
+            state.handle_registry.stable_id_for(
+                sentence_id, "SENTENCE"
+            )
+            or sentence_id
+        )
         result["can_use_as_evidence"] = (
-            sentence_id in state.eligible_sentence_ids
+            stable_sentence_id in state.eligible_sentence_ids
+        )
+        result["can_expand"] = (
+            stable_sentence_id in state.eligible_sentence_ids
+            and bool(enabled & _SENTENCE_EXPANSION_KINDS)
         )
         return
 
@@ -518,9 +703,70 @@ def _annotate_evidence_usability(
         or "previews" in result
     )
     if is_chunk_result:
-        read = chunk_id in state.read_chunk_ids
-        result["read"] = read
+        stable_chunk_id = (
+            state.handle_registry.stable_id_for(chunk_id, "CHUNK")
+            or chunk_id
+        )
+        read = stable_chunk_id in state.read_chunk_ids
+        result["has_been_read"] = read
+        result["can_read"] = not read
+        result["can_expand"] = bool(enabled & _CHUNK_EXPANSION_KINDS)
         result["can_use_as_evidence"] = read
+
+
+def _project_action(
+    action: AgentAction,
+    state: ControllerState,
+) -> AgentAction:
+    payload = _handle_safe_value(action.model_dump(mode="json"), state)
+    return _ACTION_ADAPTER.validate_python(payload)
+
+
+def _project_decision(
+    decision: PolicyDecision,
+    state: ControllerState,
+) -> dict[str, Any]:
+    return _handle_safe_value(decision.model_dump(mode="json"), state)
+
+
+def _handle_safe_value(value: Any, state: ControllerState) -> Any:
+    """Recursively replace registered stable node IDs with short handles."""
+
+    if isinstance(value, Mapping):
+        return {
+            key: _handle_safe_value(child, state)
+            for key, child in value.items()
+            if key not in _DOCUMENT_ID_KEYS
+        }
+    if isinstance(value, list):
+        return [_handle_safe_value(item, state) for item in value]
+    if isinstance(value, tuple):
+        return [_handle_safe_value(item, state) for item in value]
+    if not isinstance(value, str):
+        return value
+    exact = state.handle_registry.handle_for(value)
+    if exact is not None:
+        return exact
+    projected = value
+    for stable_id, handle in sorted(
+        state.handle_registry.stable_id_to_handle.items(),
+        key=lambda item: (-len(item[0]), item[0]),
+    ):
+        projected = projected.replace(stable_id, handle)
+    return projected
+
+
+def _require_handle(
+    state: ControllerState,
+    stable_id: str,
+    expected_type: str,
+) -> str:
+    handle = state.handle_registry.handle_for(stable_id, expected_type)
+    if handle is None:
+        raise ValueError(
+            f"missing {expected_type} handle for visible stable node"
+        )
+    return handle
 
 
 def _node_ids(value: Any) -> set[str]:

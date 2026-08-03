@@ -17,6 +17,7 @@ from scipy import sparse
 
 from agentic_rag import __version__
 from agentic_rag.adapters import (
+    ARAGBenchmarkAdapter,
     AdapterOutput,
     HotpotQAAdapter,
     HotpotQABenchmarkExactAdapter,
@@ -118,6 +119,12 @@ class SubstrateBuilder:
         elif config.source_format == "hotpotqa_benchmark_exact":
             self.adapter = HotpotQABenchmarkExactAdapter(
                 scope_id=config.benchmark_scope_id
+            )
+        elif config.source_format == "arag_benchmark_exact":
+            self.adapter = ARAGBenchmarkAdapter(
+                config.dataset,
+                scope_id=config.benchmark_scope_id,
+                validate_reference_counts=config.validate_benchmark_profile,
             )
         else:
             self.adapter = HotpotQAAdapter()
@@ -950,16 +957,12 @@ class SubstrateBuilder:
         return BuildManifest(
             constructor_version=__version__,
             corpus_id=self.config.corpus_id,
-            dataset=self.config.dataset,
+            dataset=self.adapter.dataset_name,
             split=self.config.split,
-            source_path=str(source_path),
+            source_path=source_path.as_posix(),
             source_format=self.config.source_format,
             source_artifacts=list(adapter_output.source_artifacts),
-            scope_mode=(
-                "global"
-                if self.config.source_format == "hotpotqa_benchmark_exact"
-                else "question"
-            ),
+            scope_mode=adapter_output.scope_mode,
             preserved_source_chunks=bool(adapter_output.source_chunks),
             created_at_utc=datetime.now(timezone.utc).isoformat(),
             sentence_segmenter=ModelVersion(
@@ -982,9 +985,7 @@ class SubstrateBuilder:
             bm25_tokenizer="unicode-nfkc-casefold-regex-v1",
             chunk_tokenizer=processor.chunk_tokenizer_name,
             max_chunk_tokens=self.config.max_chunk_tokens,
-            overlapping_chunks=(
-                self.config.source_format == "hotpotqa_benchmark_exact"
-            ),
+            overlapping_chunks=adapter_output.overlapping_chunks,
             record_counts=records,
             matrix_shapes=matrix_shapes,
             index_versions={

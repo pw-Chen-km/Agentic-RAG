@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from agentic_rag.agent.handle_resolution import (
+    HandleResolutionError,
+    resolve_policy_decision,
+)
 from agentic_rag.agent.models import (
     AssessmentStatus,
     ChunkRef,
@@ -26,16 +30,34 @@ class ValidationResult:
     code: str | None = None
     message: str | None = None
     signature: str | None = None
+    resolved_decision: PolicyDecision | None = None
 
     @classmethod
-    def valid(cls, signature: str) -> "ValidationResult":
-        return cls(ok=True, signature=signature)
+    def valid(
+        cls, signature: str, resolved_decision: PolicyDecision
+    ) -> "ValidationResult":
+        return cls(
+            ok=True,
+            signature=signature,
+            resolved_decision=resolved_decision,
+        )
 
     @classmethod
     def invalid(
-        cls, code: str, message: str, *, signature: str | None = None
+        cls,
+        code: str,
+        message: str,
+        *,
+        signature: str | None = None,
+        resolved_decision: PolicyDecision | None = None,
     ) -> "ValidationResult":
-        return cls(ok=False, code=code, message=message, signature=signature)
+        return cls(
+            ok=False,
+            code=code,
+            message=message,
+            signature=signature,
+            resolved_decision=resolved_decision,
+        )
 
 
 _ENTITY_SOURCE_KINDS = frozenset(
@@ -76,7 +98,14 @@ class DecisionValidator:
         scope_id: str,
     ) -> ValidationResult:
         self.substrate.require_scope(scope_id)
-        action = decision.action
+        try:
+            resolved_decision = resolve_policy_decision(
+                decision, state, self.substrate
+            )
+        except HandleResolutionError as exc:
+            return ValidationResult.invalid(exc.code, str(exc))
+
+        action = resolved_decision.action
         signature = action_signature(action)
 
         if signature in state.action_signatures:
@@ -84,56 +113,74 @@ class DecisionValidator:
                 "duplicate_action",
                 "This exact action has already been attempted",
                 signature=signature,
+                resolved_decision=resolved_decision,
             )
 
         assessment_error = self._validate_assessment_refs(
-            decision, state, scope_id
+            resolved_decision, state, scope_id
         )
         if assessment_error is not None:
             return ValidationResult.invalid(
-                *assessment_error, signature=signature
+                *assessment_error,
+                signature=signature,
+                resolved_decision=resolved_decision,
             )
 
         if isinstance(action, FinishAction):
-            if decision.assessment.status is not AssessmentStatus.SUFFICIENT:
+            if (
+                resolved_decision.assessment.status
+                is not AssessmentStatus.SUFFICIENT
+            ):
                 return ValidationResult.invalid(
                     "finish_requires_sufficient",
                     "FINISH requires assessment.status=SUFFICIENT",
                     signature=signature,
+                    resolved_decision=resolved_decision,
                 )
             evidence_error = self._validate_finish_refs(
-                decision, state, scope_id
+                resolved_decision, state, scope_id
             )
             if evidence_error is not None:
                 return ValidationResult.invalid(
-                    *evidence_error, signature=signature
+                    *evidence_error,
+                    signature=signature,
+                    resolved_decision=resolved_decision,
                 )
-        elif decision.assessment.status is AssessmentStatus.SUFFICIENT:
+        elif (
+            resolved_decision.assessment.status
+            is AssessmentStatus.SUFFICIENT
+        ):
             return ValidationResult.invalid(
                 "sufficient_requires_finish",
                 "A SUFFICIENT assessment must choose FINISH",
                 signature=signature,
+                resolved_decision=resolved_decision,
             )
         elif isinstance(action, ExpandAction):
             expansion_error = self._validate_expand(action, state, scope_id)
             if expansion_error is not None:
                 return ValidationResult.invalid(
-                    *expansion_error, signature=signature
+                    *expansion_error,
+                    signature=signature,
+                    resolved_decision=resolved_decision,
                 )
         elif isinstance(action, ReadAction):
             read_error = self._validate_read(action, state, scope_id)
             if read_error is not None:
                 return ValidationResult.invalid(
-                    *read_error, signature=signature
+                    *read_error,
+                    signature=signature,
+                    resolved_decision=resolved_decision,
                 )
         elif not isinstance(action, SearchAction):
             return ValidationResult.invalid(
                 "unsupported_action",
                 f"Unsupported action type: {type(action).__name__}",
                 signature=signature,
+                resolved_decision=resolved_decision,
             )
 
-        return ValidationResult.valid(signature)
+        return ValidationResult.valid(signature, resolved_decision)
 
     def _validate_expand(
         self,

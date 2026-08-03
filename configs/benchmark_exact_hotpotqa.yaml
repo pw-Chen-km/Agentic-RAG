@@ -1,0 +1,30 @@
+substrate:
+  corpus_id: hotpotqa_benchmark_exact
+  dataset: hotpotqa
+  split: dev
+  source_format: hotpotqa_benchmark_exact
+  benchmark_scope_id: hotpotqa:benchmark_exact:dev
+  sentence_segmenter: spacy
+  sentence_model: en_core_web_sm
+  # Ignored for source Chunk boundaries in benchmark_exact mode.
+  max_chunk_tokens: 256
+
+entity:
+  extractor: spacy
+  exact_name_type_merge: true
+  abbreviation_detector: scispacy
+  external_kb_linking:
+    enabled: false
+
+retrieval:
+  top_k: 5
+  bm25:
+    sentence: true
+    chunk: true
+  dense:
+    model: sentence-transformers/all-MiniLM-L6-v2
+    batch_size: 64
+    device:
+    entity: true
+    sentence: true
+    chunk: true

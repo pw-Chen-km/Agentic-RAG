@@ -1,0 +1,18 @@
+[
+  {
+    "id": "benchmark-q1",
+    "source": "hotpotqa",
+    "question": "Where was Marie Curie born?",
+    "answer": "Warsaw",
+    "question_type": "bridge",
+    "evidence": [["Marie Curie", ["Marie Curie was born in Warsaw."]]]
+  },
+  {
+    "id": "benchmark-q2",
+    "source": "hotpotqa",
+    "question": "In which country was Marie Curie born?",
+    "answer": "Poland",
+    "question_type": "bridge",
+    "evidence": []
+  }
+]

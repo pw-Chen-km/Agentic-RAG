@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Protocol
+from typing import Iterable, Iterator, Literal, Protocol
 
+from agentic_rag.benchmark_profiles import (
+    AragDatasetProfile,
+    DuplicateQuestionIdPolicy,
+    get_arag_dataset_profile,
+    normalize_arag_task_type,
+)
 from agentic_rag.errors import InputFormatError
 from agentic_rag.models import (
     BenchmarkQuestion,
@@ -27,6 +34,8 @@ class AdapterOutput:
     source_chunks: tuple[RawChunk, ...] = ()
     benchmark_questions: tuple[BenchmarkQuestion, ...] = ()
     source_artifacts: tuple[SourceArtifact, ...] = ()
+    scope_mode: Literal["question", "global"] = "question"
+    overlapping_chunks: bool = False
 
 
 class SourceAdapter(Protocol):
@@ -70,7 +79,7 @@ def _load_json_or_jsonl(path: Path) -> list[dict]:
                 break
     if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
         raise InputFormatError(
-            "HotpotQA input must be a JSON array, JSONL objects, or an object "
+            "Source input must be a JSON array, JSONL objects, or an object "
             "containing a data/examples/records array"
         )
     return value
@@ -202,16 +211,30 @@ def _sha256(path: Path) -> str:
 def _source_artifact(path: Path, role: str) -> SourceArtifact:
     return SourceArtifact(
         role=role,
-        path=str(path.resolve()),
+        # Manifest paths use forward slashes on every operating system so
+        # provenance snapshots and tests are portable across rebuild hosts.
+        path=path.resolve().as_posix(),
         sha256=_sha256(path),
         size_bytes=path.stat().st_size,
     )
 
 
-def _benchmark_files(source_path: Path) -> tuple[Path, Path]:
+def _benchmark_files(
+    source_path: Path, *, subset: str | None = None
+) -> tuple[Path, Path]:
     if source_path.is_dir():
-        chunks_path = source_path / "chunks.json"
-        questions_path = source_path / "questions.json"
+        direct_chunks = source_path / "chunks.json"
+        direct_questions = source_path / "questions.json"
+        nested = source_path / subset if subset else None
+        if direct_chunks.is_file() and direct_questions.is_file():
+            chunks_path = direct_chunks
+            questions_path = direct_questions
+        elif nested is not None:
+            chunks_path = nested / "chunks.json"
+            questions_path = nested / "questions.json"
+        else:
+            chunks_path = direct_chunks
+            questions_path = direct_questions
     elif source_path.name == "chunks.json":
         chunks_path = source_path
         questions_path = source_path.with_name("questions.json")
@@ -231,23 +254,44 @@ def _benchmark_files(source_path: Path) -> tuple[Path, Path]:
     return chunks_path, questions_path
 
 
-class HotpotQABenchmarkExactAdapter:
-    """Load the reduced A-RAG/LinearRAG benchmark as one global corpus.
+class ARAGBenchmarkAdapter:
+    """Load one A-RAG evaluation set as a global retrieval corpus.
 
-    The supplied 1,000-token Chunk boundaries and numeric adjacency are kept
-    intact. Question-to-context mappings are deliberately not represented in
-    retrieval scopes; all questions search the same corpus.
+    A-RAG publishes the five sets in a common ``chunks.json`` / ``questions.json``
+    shape. Source Chunk boundaries and numeric source order are preserved. Gold
+    questions and answers are emitted only through the evaluation sidecar.
     """
 
-    dataset_name = "hotpotqa"
-
-    def __init__(self, scope_id: str | None = None) -> None:
+    def __init__(
+        self,
+        dataset: str | AragDatasetProfile,
+        scope_id: str | None = None,
+        *,
+        validate_reference_counts: bool = False,
+        _legacy_question_ids: bool = False,
+        _document_title: str | None = None,
+        _validate_task_types: bool = True,
+        _reject_blank_answers: bool = True,
+    ) -> None:
+        self.profile = (
+            dataset
+            if isinstance(dataset, AragDatasetProfile)
+            else get_arag_dataset_profile(dataset)
+        )
+        self.dataset_name = self.profile.key
         self.scope_id = scope_id
+        self.validate_reference_counts = validate_reference_counts
+        self._legacy_question_ids = _legacy_question_ids
+        self._document_title = _document_title
+        self._validate_task_types = _validate_task_types
+        self._reject_blank_answers = _reject_blank_answers
 
     def load(self, source_path: Path, split: str) -> AdapterOutput:
-        chunks_path, questions_path = _benchmark_files(source_path)
-        scope_id = self.scope_id or f"hotpotqa:benchmark_exact:{split}"
-        document_id = f"hotpotqa:{split}:benchmark_exact:corpus"
+        chunks_path, questions_path = _benchmark_files(
+            source_path, subset=self.profile.key
+        )
+        scope_id = self.scope_id or self.profile.scope_id(split)
+        document_id = self.profile.document_id(split)
 
         try:
             with chunks_path.open("r", encoding="utf-8") as handle:
@@ -274,7 +318,7 @@ class HotpotQABenchmarkExactAdapter:
                 raise InputFormatError(
                     f"Duplicate benchmark_exact source Chunk ID: {source_id}"
                 )
-            if not text:
+            if not text.strip():
                 raise InputFormatError(
                     f"benchmark_exact source Chunk {source_id} has empty text"
                 )
@@ -289,7 +333,7 @@ class HotpotQABenchmarkExactAdapter:
             )
         chunks = tuple(
             RawChunk(
-                chunk_id=f"hotpotqa:{split}:benchmark_exact:c:{source_id:06d}",
+                chunk_id=self.profile.chunk_id(split, source_id),
                 doc_id=document_id,
                 chunk_pos=source_id,
                 text=text,
@@ -298,49 +342,99 @@ class HotpotQABenchmarkExactAdapter:
         )
 
         rows = _load_json_or_jsonl(questions_path)
-        questions: list[BenchmarkQuestion] = []
-        seen_question_ids: set[str] = set()
+        source_question_ids: list[str] = []
         for row_index, row in enumerate(rows):
-            question_id = str(row.get("id") or row.get("_id") or "")
-            if not question_id:
+            source_question_id = str(row.get("id") or row.get("_id") or "")
+            if not source_question_id.strip():
                 raise InputFormatError(
                     f"benchmark_exact question record {row_index} has no id"
                 )
-            if question_id in seen_question_ids:
-                raise InputFormatError(
-                    f"Duplicate benchmark_exact question ID: {question_id}"
+            source_question_ids.append(source_question_id)
+
+        source_id_counts = Counter(source_question_ids)
+        duplicate_source_ids = sorted(
+            item for item, count in source_id_counts.items() if count > 1
+        )
+        if (
+            duplicate_source_ids
+            and self.profile.duplicate_question_id_policy
+            is DuplicateQuestionIdPolicy.REJECT
+        ):
+            raise InputFormatError(
+                f"Duplicate A-RAG {self.profile.key} question IDs: "
+                f"{duplicate_source_ids}"
+            )
+
+        questions: list[BenchmarkQuestion] = []
+        for row_index, row in enumerate(rows):
+            source_question_id = source_question_ids[row_index]
+            question_id = (
+                source_question_id
+                if self._legacy_question_ids
+                else (
+                    f"{self.profile.key}:benchmark_exact:q:{row_index:06d}"
                 )
+            )
             question = row.get("question")
             answer = row.get("answer")
             if not isinstance(question, str) or not question.strip():
                 raise InputFormatError(
-                    f"benchmark_exact question {question_id} has no question text"
+                    "benchmark_exact question "
+                    f"{source_question_id} has no question text"
                 )
-            if not isinstance(answer, str):
+            if not isinstance(answer, str) or (
+                self._reject_blank_answers and not answer.strip()
+            ):
                 raise InputFormatError(
-                    f"benchmark_exact question {question_id} has no string answer"
+                    "benchmark_exact question "
+                    f"{source_question_id} has no non-empty string answer"
                 )
-            seen_question_ids.add(question_id)
+            question_type = (
+                normalize_arag_task_type(
+                    self.profile,
+                    row.get("question_type"),
+                    question_id=source_question_id,
+                )
+                if self._validate_task_types
+                else (
+                    str(row["question_type"])
+                    if row.get("question_type") is not None
+                    else None
+                )
+            )
             questions.append(
                 BenchmarkQuestion(
                     question_id=question_id,
                     scope_id=scope_id,
-                    source=str(row.get("source") or "hotpotqa"),
+                    source=(
+                        str(row.get("source") or self.profile.key)
+                        if self._legacy_question_ids
+                        else self.profile.key
+                    ),
                     question=question,
                     answer=answer,
-                    question_type=(
-                        str(row["question_type"])
-                        if row.get("question_type") is not None
-                        else None
+                    question_type=question_type,
+                    source_question_id=(
+                        None if self._legacy_question_ids else source_question_id
+                    ),
+                    source_row_index=(
+                        None if self._legacy_question_ids else row_index
                     ),
                 )
+            )
+
+        if self.validate_reference_counts:
+            self._validate_reference_shape(
+                chunk_count=len(chunks),
+                questions=questions,
+                unique_source_question_ids=len(source_id_counts),
             )
 
         return AdapterOutput(
             documents=(
                 RawDocument(
                     doc_id=document_id,
-                    title="HotpotQA reduced benchmark corpus",
+                    title=self._document_title,
                     text="",
                 ),
             ),
@@ -354,12 +448,69 @@ class HotpotQABenchmarkExactAdapter:
                 _source_artifact(chunks_path, "chunks"),
                 _source_artifact(questions_path, "questions"),
             ),
+            scope_mode="global",
+            overlapping_chunks=True,
         )
+
+    def _validate_reference_shape(
+        self,
+        *,
+        chunk_count: int,
+        questions: list[BenchmarkQuestion],
+        unique_source_question_ids: int,
+    ) -> None:
+        errors: list[str] = []
+        if chunk_count != self.profile.reference_chunk_count:
+            errors.append(
+                f"Chunks expected {self.profile.reference_chunk_count}, "
+                f"found {chunk_count}"
+            )
+        if len(questions) != self.profile.reference_question_count:
+            errors.append(
+                f"questions expected {self.profile.reference_question_count}, "
+                f"found {len(questions)}"
+            )
+        if unique_source_question_ids != self.profile.reference_unique_question_ids:
+            errors.append(
+                "unique question IDs expected "
+                f"{self.profile.reference_unique_question_ids}, found "
+                f"{unique_source_question_ids}"
+            )
+        actual_task_types = Counter(
+            item.question_type for item in questions if item.question_type is not None
+        )
+        expected_task_types = dict(self.profile.reference_task_type_counts)
+        if actual_task_types != expected_task_types:
+            errors.append(
+                f"task type counts expected {expected_task_types}, found "
+                f"{dict(sorted(actual_task_types.items()))}"
+            )
+        if errors:
+            raise InputFormatError(
+                f"A-RAG {self.profile.key} reference profile mismatch: "
+                + "; ".join(errors)
+            )
 
     def iter_documents(
         self, source_path: Path, split: str
     ) -> Iterator[RawDocument]:
         yield from self.load(source_path, split).documents
+
+
+class HotpotQABenchmarkExactAdapter(ARAGBenchmarkAdapter):
+    """Backward-compatible adapter for the existing HotpotQA exact format."""
+
+    dataset_name = "hotpotqa"
+
+    def __init__(self, scope_id: str | None = None) -> None:
+        super().__init__(
+            "hotpotqa",
+            scope_id,
+            _legacy_question_ids=True,
+            _document_title="HotpotQA reduced benchmark corpus",
+            _validate_task_types=False,
+            _reject_blank_answers=False,
+        )
 
 
 def document_scope_map(scopes: Iterable[DocumentScope]) -> dict[str, set[str]]:
