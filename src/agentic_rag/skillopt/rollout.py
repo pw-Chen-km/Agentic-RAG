@@ -135,6 +135,10 @@ def run_rollout_batch(
             raise RuntimeError(
                 "Harness artifact_dir must equal the portable task directory"
             )
+        # Normalize the adapter boundary even when an injected Harness returns
+        # native Windows separators. Fresh and resumed rollout records must be
+        # byte-for-byte comparable on every supported operating system.
+        episode.artifact_dir = actual_task_dir.as_posix()
 
         # Commit the complete, provider-free trace before the judge boundary.
         # If the judge transport fails, the six Harness artifacts plus this
