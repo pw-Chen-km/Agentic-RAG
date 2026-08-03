@@ -194,7 +194,7 @@ class AgentHarness:
             question, scope_id, episode_id=episode_id
         )
         destination = self.artifact_writer.path_for_episode(result.episode_id)
-        result.artifact_dir = str(destination)
+        result.artifact_dir = destination.as_posix()
         written = self.artifact_writer.write_episode(
             episode_id=result.episode_id,
             episode=result,
@@ -210,7 +210,7 @@ class AgentHarness:
             skill_content=self.skill.content,
             effective_config=self.effective_config(),
         )
-        result.artifact_dir = str(written)
+        result.artifact_dir = written.as_posix()
         return result
 
     def build_io_trace(self, result: EpisodeResult) -> dict:
@@ -353,7 +353,7 @@ class AgentHarness:
                 "source_path": self.skill.source_path,
             },
             "substrate": {
-                "root": str(self.substrate.root),
+                "root": self.substrate.root.as_posix(),
                 "corpus_id": manifest.corpus_id,
                 "split": manifest.split,
                 "constructor_version": manifest.constructor_version,

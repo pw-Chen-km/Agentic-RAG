@@ -829,7 +829,7 @@ def test_harness_writes_six_skillopt_compatible_artifacts(
     )
 
     run_dir = output_root / "marie-curie-artifacts"
-    assert result.artifact_dir == str(run_dir)
+    assert result.artifact_dir == run_dir.as_posix()
     assert {path.name for path in run_dir.iterdir()} == {
         "episode.json",
         "conversation.json",

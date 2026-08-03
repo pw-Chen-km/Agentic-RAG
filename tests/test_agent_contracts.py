@@ -521,11 +521,15 @@ def test_provider_specific_expand_decision_normalizes_to_stable_contract() -> No
 def test_skill_document_hashes_exact_markdown_bytes(tmp_path: Path) -> None:
     content = "# Retrieval policy\n\nSearch with the full question.\n"
     path = tmp_path / "initial.md"
-    path.write_text(content, encoding="utf-8")
+    path.write_bytes(content.encode("utf-8"))
     skill = SkillDocument.load(path)
     assert skill.content == content
     assert skill.sha256 == hashlib.sha256(content.encode("utf-8")).hexdigest()
     assert skill.version == skill.sha256
+
+    snapshot = tmp_path / "snapshot.md"
+    skill.write_snapshot(snapshot)
+    assert snapshot.read_bytes() == content.encode("utf-8")
 
 
 def test_context_replays_complete_trajectory_append_only() -> None:

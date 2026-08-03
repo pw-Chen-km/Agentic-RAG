@@ -213,7 +213,7 @@ class AgenticRAGSkillOptDataLoader(_BaseDataLoader):
 
     def state_dict(self) -> dict[str, Any]:
         return {
-            "split_dir": str(self.split_dir),
+            "split_dir": self.split_dir.as_posix(),
             "dataset": self.dataset,
             "seed": self.seed,
             "limit": self.limit,

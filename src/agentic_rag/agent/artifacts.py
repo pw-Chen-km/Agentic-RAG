@@ -262,7 +262,7 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, Enum):
         return _to_jsonable(value.value)
     if isinstance(value, Path):
-        return str(value)
+        return value.as_posix()
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, UUID):

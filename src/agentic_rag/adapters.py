@@ -211,7 +211,9 @@ def _sha256(path: Path) -> str:
 def _source_artifact(path: Path, role: str) -> SourceArtifact:
     return SourceArtifact(
         role=role,
-        path=str(path.resolve()),
+        # Manifest paths use forward slashes on every operating system so
+        # provenance snapshots and tests are portable across rebuild hosts.
+        path=path.resolve().as_posix(),
         sha256=_sha256(path),
         size_bytes=path.stat().st_size,
     )

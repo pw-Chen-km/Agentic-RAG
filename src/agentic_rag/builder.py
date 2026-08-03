@@ -959,7 +959,7 @@ class SubstrateBuilder:
             corpus_id=self.config.corpus_id,
             dataset=self.adapter.dataset_name,
             split=self.config.split,
-            source_path=str(source_path),
+            source_path=source_path.as_posix(),
             source_format=self.config.source_format,
             source_artifacts=list(adapter_output.source_artifacts),
             scope_mode=adapter_output.scope_mode,

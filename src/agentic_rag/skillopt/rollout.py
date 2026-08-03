@@ -120,7 +120,7 @@ def run_rollout_batch(
                 raise ValueError(
                     f"persisted Episode does not match rollout item: {task_dir}"
                 )
-            episode.artifact_dir = str(task_dir)
+            episode.artifact_dir = task_dir.as_posix()
         else:
             # Only these two target inputs cross the benchmark boundary.  In
             # particular, answer, source, split, and evidence stay outside
@@ -311,7 +311,7 @@ def _to_jsonable(value: object) -> object:
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, Path):
-        return str(value)
+        return value.as_posix()
     if isinstance(value, BaseModel):
         return _to_jsonable(value.model_dump(mode="python"))
     if isinstance(value, Mapping):

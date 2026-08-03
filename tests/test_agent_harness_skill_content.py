@@ -202,7 +202,7 @@ def test_skill_content_harness_persists_candidate_and_logical_io_trace(
         (artifact_dir / "episode.json").read_text(encoding="utf-8")
     )
     assert persisted_episode["episode_id"] == episode_id
-    assert persisted_episode["artifact_dir"] == str(artifact_dir)
+    assert persisted_episode["artifact_dir"] == artifact_dir.as_posix()
 
     trace = harness.build_io_trace(result)
     assert trace["trace_format"] == "agentic-rag-logical-io-v2"

@@ -28,7 +28,7 @@ class SkillDocument(BaseModel):
         return cls(
             content=content,
             sha256=hashlib.sha256(raw).hexdigest(),
-            source_path=str(source),
+            source_path=source.as_posix(),
         )
 
     @classmethod
@@ -49,5 +49,7 @@ class SkillDocument(BaseModel):
     def write_snapshot(self, path: str | Path) -> Path:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(self.content, encoding="utf-8")
+        # Preserve the exact bytes represented by ``sha256``. Text-mode writes
+        # translate LF to CRLF on Windows and would corrupt that contract.
+        destination.write_bytes(self.content.encode("utf-8"))
         return destination
