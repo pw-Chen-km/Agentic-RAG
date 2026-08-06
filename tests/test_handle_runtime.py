@@ -17,6 +17,7 @@ from agentic_rag.agent.models import (
     SentenceRef,
 )
 from agentic_rag.agent.router import ActionRouter
+from agentic_rag.agent.repair import DecisionRepairer
 from agentic_rag.agent.validator import DecisionValidator
 from agentic_rag.retrieval import Retriever
 from agentic_rag.storage import Substrate
@@ -121,6 +122,50 @@ def test_validator_returns_typed_handle_errors(
     assert mismatch.resolved_decision is None
     assert not unknown.ok
     assert unknown.code == "unknown_handle"
+
+
+def test_repairer_flips_only_registered_unambiguous_inverse_expansion(
+    built_substrate: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    sentence_id = _sentence_id(
+        substrate, "Marie Curie was born in Warsaw."
+    )
+    state = ControllerState.initial()
+    sentence_handle = state.handle_registry.register(
+        sentence_id, "SENTENCE"
+    )
+    state.visible_sentence_ids.add(sentence_id)
+    state.eligible_sentence_ids.add(sentence_id)
+    raw = PolicyDecision(
+        assessment=EvidenceAssessment(
+            status=AssessmentStatus.INSUFFICIENT
+        ),
+        action=ExpandAction(
+            kind=ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
+            source_id=sentence_handle,
+        ),
+    )
+    repairer = DecisionRepairer(tuple(ExpansionKind))
+
+    repaired = repairer.repair(raw, state)
+
+    assert repaired.code == "expand_direction_repaired_from_handle_type"
+    assert repaired.decision.action == ExpandAction(
+        kind=ExpansionKind.SENTENCE_MENTIONS_ENTITY,
+        source_id=sentence_handle,
+    )
+    assert raw.action.kind is ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE
+    assert DecisionValidator(substrate, tuple(ExpansionKind)).validate(
+        repaired.decision, state, "q1"
+    ).ok
+
+    unknown = raw.model_copy(
+        update={"action": raw.action.model_copy(update={"source_id": "S999"})}
+    )
+    untouched = repairer.repair(unknown, state)
+    assert untouched.code is None
+    assert untouched.decision == unknown
 
 
 def test_router_and_evidence_resolver_accept_handles_defensively(

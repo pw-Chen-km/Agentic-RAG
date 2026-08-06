@@ -169,6 +169,8 @@ def test_agent_config_loads_nested_yaml_and_rejects_removed_kind(
         """
 agent:
   max_steps: 7
+  max_policy_attempts: 9
+  max_consecutive_invalid_attempts: 3
   max_retrieved_tokens: 9000
   enabled_expansions:
     - ENTITY_MENTIONED_IN_SENTENCE
@@ -182,6 +184,8 @@ answer:
     )
     config = AgentConfig.from_yaml(config_path)
     assert config.max_steps == 7
+    assert config.max_policy_attempts == 9
+    assert config.max_consecutive_invalid_attempts == 3
     assert config.context_mode is ContextMode.COMPACT_EVIDENCE
     assert config.policy.model == "gpt-5.6-terra"
     assert config.enabled_expansions == (

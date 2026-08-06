@@ -14,4 +14,11 @@ results/
 runs/
 dist/
 
+# Local research clones and Codex/rendering scratch space are not publication
+# artifacts for this repository.
+/.codex_tmp/
+/A-RAG/
+/agentic_skill_v2_architecture_detailed/
+/agentic_skill_v2_architecture_detailed.pptx.inspect.ndjson
+
 .DS_Store

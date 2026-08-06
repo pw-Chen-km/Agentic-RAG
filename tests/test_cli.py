@@ -380,6 +380,44 @@ def test_skillopt_prepare_cli_only_materializes_split_files(
     assert json.loads(result.output)["purpose"] == "workflow_smoke"
 
 
+def test_skillopt_prepare_cli_accepts_hotpotqa_train20(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_dir = tmp_path / "arag-dataset"
+    dataset_dir.mkdir()
+    split_dir = tmp_path / "smoke-splits"
+    captured: dict[str, object] = {}
+
+    def fake_prepare(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "schema_version": "1.1",
+            "purpose": "workflow_smoke",
+        }
+
+    monkeypatch.setattr(cli, "prepare_hotpotqa_smoke_splits", fake_prepare)
+    result = runner.invoke(
+        app,
+        [
+            "skillopt-prepare",
+            "--dataset-dir",
+            str(dataset_dir),
+            "--split-dir",
+            str(split_dir),
+            "--train-size",
+            "20",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "dataset_dir": dataset_dir,
+        "split_dir": split_dir,
+        "train_size": 20,
+    }
+
+
 def test_skillopt_train_cli_wires_native_trainer_without_gold_target_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

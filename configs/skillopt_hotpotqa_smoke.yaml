@@ -11,7 +11,7 @@ model:
 
 train:
   num_epochs: 1
-  train_size: 6
+  train_size: 20
   batch_size: 3
   accumulation: 1
   seed: 42

@@ -13,6 +13,7 @@ from agentic_rag.agent.answer import (
     ScriptedAnswerGenerator,
 )
 from agentic_rag.agent.config import AgentConfig
+from agentic_rag.agent.controller import BUDGET_FINALIZE_INSTRUCTION
 from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
@@ -108,10 +109,12 @@ def _harness(
     substrate_path: Path,
     fake_embedder: Any,
     output_root: Path,
-    decisions: list[PolicyDecision | dict[str, Any] | Exception],
+    decisions: list[Any],
     *,
     answer: str = "Warsaw",
     max_steps: int = 10,
+    max_policy_attempts: int | None = None,
+    max_consecutive_invalid_attempts: int = 10,
     max_retrieved_tokens: int = 12_000,
     enabled_expansions: tuple[ExpansionKind, ...] = (
         DEFAULT_ENABLED_EXPANSIONS
@@ -123,6 +126,14 @@ def _harness(
         substrate=Substrate.open(substrate_path),
         config=AgentConfig(
             max_steps=max_steps,
+            max_policy_attempts=(
+                max(1, len(decisions))
+                if max_policy_attempts is None
+                else max_policy_attempts
+            ),
+            max_consecutive_invalid_attempts=(
+                max_consecutive_invalid_attempts
+            ),
             max_retrieved_tokens=max_retrieved_tokens,
             enabled_expansions=enabled_expansions,
         ),
@@ -654,7 +665,7 @@ def test_entity_sentence_entity_bridge_reaches_poland_with_provenance(
     )
 
 
-def test_duplicate_and_invalid_steps_consume_budget_without_answer(
+def test_duplicate_and_invalid_attempts_preserve_step_budget_without_answer(
     built_substrate: Path,
     fake_embedder: Any,
     tmp_path: Path,
@@ -681,15 +692,16 @@ def test_duplicate_and_invalid_steps_consume_budget_without_answer(
         TerminationReason.BUDGET_EXHAUSTED
     )
     assert duplicate_result.answer is None
-    assert duplicate_result.error_code == "budget_exhausted"
+    assert duplicate_result.error_code == "policy_attempt_budget_exhausted"
     assert len(duplicate_policy.calls) == 2
     assert duplicate_answer.calls == []
     assert len(duplicate_result.trajectory) == 2
     assert duplicate_result.trajectory[1].observation.status is (
         ObservationStatus.DUPLICATE_ACTION
     )
-    assert duplicate_result.final_state.step == 2
-    assert duplicate_result.final_state.remaining_step_budget == 0
+    assert duplicate_result.final_state.step == 1
+    assert duplicate_result.final_state.policy_attempts == 2
+    assert duplicate_result.final_state.remaining_step_budget == 1
 
     substrate = Substrate.open(built_substrate)
     invisible_chunk_id = substrate.chunk_for_sentence(
@@ -714,8 +726,9 @@ def test_duplicate_and_invalid_steps_consume_budget_without_answer(
     assert invalid_step.validation_status is ValidationStatus.INVALID
     assert invalid_step.observation.status is ObservationStatus.INVALID_ACTION
     assert invalid_step.observation.error_code == "source_not_visible"
-    assert invalid_step.state_after.step == 1
-    assert invalid_step.state_after.remaining_step_budget == 0
+    assert invalid_step.state_after.step == 0
+    assert invalid_step.state_after.policy_attempts == 1
+    assert invalid_step.state_after.remaining_step_budget == 1
 
     schema_harness, _, schema_answer = _harness(
         built_substrate,
@@ -735,7 +748,8 @@ def test_duplicate_and_invalid_steps_consume_budget_without_answer(
     assert schema_result.trajectory[0].observation.error_code == (
         "invalid_policy_response"
     )
-    assert schema_result.final_state.step == 1
+    assert schema_result.final_state.step == 0
+    assert schema_result.final_state.policy_attempts == 1
 
 
 def test_state_dependent_invalid_action_can_be_retried_after_prerequisite(
@@ -781,6 +795,165 @@ def test_state_dependent_invalid_action_can_be_retried_after_prerequisite(
     assert successful_read.validation_status is ValidationStatus.VALID
     assert successful_read.observation.status is ObservationStatus.OK
     assert parent_chunk_id in successful_read.state_after.read_chunk_ids
+    assert [
+        step.observation.action_id for step in result.trajectory
+    ] == ["attempt-1", "attempt-2", "attempt-3"]
+
+
+def test_consecutive_invalid_attempts_are_bounded_without_spending_steps(
+    built_substrate: Path,
+    fake_embedder: Any,
+    tmp_path: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    invisible_chunk_id = substrate.chunk_for_sentence(
+        _sentence_id(substrate, "Marie Curie was born in Warsaw.")
+    ).chunk_id
+    invalid = _decision(ReadAction(chunk_id=invisible_chunk_id))
+    harness, policy, _ = _harness(
+        built_substrate,
+        fake_embedder,
+        tmp_path / "bounded-invalid-runs",
+        [invalid, invalid, invalid],
+        max_steps=1,
+        max_policy_attempts=3,
+        max_consecutive_invalid_attempts=2,
+    )
+
+    result = harness.controller.run_episode(
+        QUESTION_BIRTHPLACE,
+        "q1",
+        episode_id="bounded-invalid",
+    )
+
+    assert result.error_code == "invalid_action_retry_exhausted"
+    assert len(policy.calls) == 2
+    assert result.final_state.step == 0
+    assert result.final_state.policy_attempts == 2
+    assert result.final_state.remaining_step_budget == 1
+
+
+def test_controller_repairs_sentence_entity_direction_without_extra_call(
+    built_substrate: Path,
+    fake_embedder: Any,
+    tmp_path: Path,
+) -> None:
+    def wrong_direction(messages):
+        payload = json.loads(messages[-1].content)
+        source_id = payload["policy_state"]["allowed_expansions"][
+            "SENTENCE_MENTIONS_ENTITY"
+        ][0]
+        return _decision(
+            ExpandAction(
+                kind=ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
+                source_id=source_id,
+            )
+        )
+
+    harness, policy, _ = _harness(
+        built_substrate,
+        fake_embedder,
+        tmp_path / "repair-runs",
+        [
+            _decision(
+                SearchAction(
+                    query=QUESTION_BIRTHPLACE,
+                    method="BM25",
+                    target="SENTENCE",
+                )
+            ),
+            wrong_direction,
+        ],
+        max_steps=2,
+    )
+
+    result = harness.controller.run_episode(
+        QUESTION_BIRTHPLACE,
+        "q1",
+        episode_id="repair-direction",
+    )
+
+    repaired_step = result.trajectory[1]
+    assert len(policy.calls) == 2
+    assert result.final_state.step == 2
+    assert result.final_state.policy_attempts == 2
+    assert repaired_step.validation_status is ValidationStatus.VALID
+    assert repaired_step.repair_code == (
+        "expand_direction_repaired_from_handle_type"
+    )
+    assert repaired_step.decision.action.kind is (
+        ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE
+    )
+    assert repaired_step.repaired_decision.action.kind is (
+        ExpansionKind.SENTENCE_MENTIONS_ENTITY
+    )
+    assert repaired_step.resolved_decision.action.kind is (
+        ExpansionKind.SENTENCE_MENTIONS_ENTITY
+    )
+    trace_step = harness.build_io_trace(result)["policy_calls"][1]
+    assert trace_step["repair_code"] == (
+        "expand_direction_repaired_from_handle_type"
+    )
+    assert trace_step["raw_handle_action"]["kind"] == (
+        "ENTITY_MENTIONED_IN_SENTENCE"
+    )
+    assert trace_step["repaired_handle_action"]["kind"] == (
+        "SENTENCE_MENTIONS_ENTITY"
+    )
+
+
+def test_budget_boundary_allows_one_finalize_only_policy_attempt(
+    built_substrate: Path,
+    fake_embedder: Any,
+    tmp_path: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    sentence_id = _sentence_id(
+        substrate, "Marie Curie was born in Warsaw."
+    )
+    decisions = [
+        _decision(
+            SearchAction(
+                query=QUESTION_BIRTHPLACE,
+                method="BM25",
+                target="SENTENCE",
+            )
+        ),
+        _decision(
+            FinishAction(evidence_refs=[SentenceRef(id=sentence_id)]),
+            status=AssessmentStatus.SUFFICIENT,
+        ),
+    ]
+    harness, policy, answer_generator = _harness(
+        built_substrate,
+        fake_embedder,
+        tmp_path / "budget-finalize-runs",
+        decisions,
+        max_steps=1,
+        max_policy_attempts=2,
+    )
+
+    result = harness.controller.run_episode(
+        QUESTION_BIRTHPLACE,
+        "q1",
+        episode_id="budget-finalize",
+    )
+
+    assert result.termination_reason is TerminationReason.FINISH
+    assert result.answer == "Warsaw"
+    assert len(policy.calls) == 2
+    assert len(answer_generator.calls) == 1
+    assert result.final_state.step == 1
+    assert result.final_state.policy_attempts == 2
+    assert result.trajectory[-1].observation.metadata == {
+        "finish": True,
+        "budget_finalize": True,
+    }
+    trace = harness.build_io_trace(result)
+    assert trace["policy_calls"][-1]["input"][-1] == {
+        "role": "user",
+        "content": BUDGET_FINALIZE_INSTRUCTION,
+    }
 
 
 def test_harness_writes_six_skillopt_compatible_artifacts(
@@ -828,6 +1001,18 @@ def test_harness_writes_six_skillopt_compatible_artifacts(
         episode_id="marie-curie-artifacts",
     )
 
+    assert not {
+        "state",
+        "trajectory",
+        "total_usage",
+        "consecutive_invalid_attempts",
+        "state_updater",
+        "_state_updater",
+    } & vars(harness.controller).keys()
+    assert type(harness.controller.state_manager_factory).__name__ == (
+        "EpisodeStateManagerFactory"
+    )
+
     run_dir = output_root / "marie-curie-artifacts"
     assert result.artifact_dir == run_dir.as_posix()
     assert {path.name for path in run_dir.iterdir()} == {
@@ -867,7 +1052,15 @@ def test_harness_writes_six_skillopt_compatible_artifacts(
     assert conversation[0]["reasoning"] == (
         decisions[0].assessment.model_dump(mode="json")
     )
-    assert conversation[0]["env_feedback"]["status"] == "ok"
+    assert conversation[0]["env_feedback"]["outcome"] == "success"
+    assert set(conversation[0]["env_feedback"]) == {
+        "action_id",
+        "action",
+        "outcome",
+        "results",
+        "usage",
+        "error",
+    }
     assert conversation[1]["action"]["type"] == "FINISH"
     assert conversation[1]["reasoning"]["selected_evidence_refs"] == [
         {"unit": "SENTENCE", "id": born_sentence_id}
@@ -898,12 +1091,15 @@ def test_harness_writes_six_skillopt_compatible_artifacts(
     assert effective["policy_context"] == {
         "handle_summary_max_chars": 160,
         "node_reference_scheme": "episode_local_typed_handles_v1",
+        "observation_contract": "minimal_policy_observation_v1",
         "selection_semantics": "full_set_replacement",
         "stable_node_ids_visible_to_policy": False,
     }
     assert effective["runtime_components"] == {
         "policy_client": "ScriptedPolicy",
         "answer_generator": "FakeAnswerGenerator",
+        "state_manager": "EpisodeStateManager",
+        "controller_role": "stateless_loop_orchestrator",
     }
     assert effective["skill"]["sha256"] == harness.skill.sha256
 

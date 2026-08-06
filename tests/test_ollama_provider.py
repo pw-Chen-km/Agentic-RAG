@@ -16,6 +16,8 @@ from agentic_rag.agent.models import (
     PolicyDecision,
     ResolvedEvidence,
     SentenceRef,
+    V31PolicyDecision,
+    V3PolicyDecision,
 )
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.storage import Substrate
@@ -182,6 +184,52 @@ def test_ollama_policy_sends_native_structured_chat_and_maps_usage() -> None:
         "answer_output_tokens": 0,
         "answer_reasoning_tokens": 0,
     }
+
+
+def test_ollama_policy_parses_v3_semantic_memory_decision() -> None:
+    client = _FakeClient(
+        _chat_response(json.dumps(_v3_decision_payload()))
+    )
+    policy = OllamaChatPolicy(
+        model="qwen3:8b",
+        client=client,
+        semantic_memory_v3=True,
+        direct_answer=True,
+    )
+
+    decision = policy.decide(
+        [Message(role="user", content="Where was Marie Curie born?")]
+    )
+
+    assert isinstance(decision, V3PolicyDecision)
+    assert decision.action.type == "SEARCH"
+    schema = json.dumps(policy.decision_format.model_json_schema())
+    assert "source_context_index" in schema
+    assert "chunk_context_index" in schema
+    assert "citations" in schema
+    assert "selected_evidence_refs" not in schema
+
+
+def test_ollama_policy_parses_v31_typed_reference_decision() -> None:
+    client = _FakeClient(_chat_response(json.dumps(_v3_decision_payload())))
+    policy = OllamaChatPolicy(
+        model="qwen3:8b",
+        client=client,
+        semantic_memory_v31=True,
+        direct_answer=True,
+    )
+
+    decision = policy.decide(
+        [Message(role="user", content="Where was Marie Curie born?")]
+    )
+
+    assert isinstance(decision, V31PolicyDecision)
+    schema = json.dumps(policy.decision_format.model_json_schema())
+    assert "source_ref" in schema
+    assert "chunk_ref" in schema
+    assert "evidence_refs" in schema
+    assert "source_context_index" not in schema
+    assert "citations" not in schema
 
 
 def test_ollama_policy_forwards_explicit_thinking_level() -> None:
@@ -662,6 +710,25 @@ def test_ollama_adapters_run_real_controller_and_write_artifacts(
     assert effective["runtime_components"] == {
         "policy_client": "OllamaChatPolicy",
         "answer_generator": "OllamaChatAnswerGenerator",
+        "state_manager": "EpisodeStateManager",
+        "controller_role": "stateless_loop_orchestrator",
+    }
+
+
+def _v3_decision_payload() -> dict[str, object]:
+    return {
+        "assessment": {
+            "status": "INSUFFICIENT",
+            "supported_facts": [],
+            "missing_information": ["birthplace"],
+        },
+        "action": {
+            "type": "SEARCH",
+            "query": "Where was Marie Curie born?",
+            "method": "BM25",
+            "target": "SENTENCE",
+            "top_k": 5,
+        },
     }
     persisted_episode = json.loads(
         (run_dir / "episode.json").read_text(encoding="utf-8")

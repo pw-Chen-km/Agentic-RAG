@@ -49,6 +49,10 @@ SMOKE_SPLIT_ORDER: Final = ("train", "validation", "test")
 SMOKE_BRIDGE_PER_SPLIT: Final = 4
 SMOKE_COMPARISON_PER_SPLIT: Final = 2
 SELECTION_ALGORITHM: Final = "sha256(f'{seed}\\0{question_id}')-v1"
+EXTENDED_SPLIT_SCHEMA_VERSION: Final = "1.1"
+TRAIN_EXTENSION_ALGORITHM: Final = (
+    "sha256(f'{seed}\\0{question_id}')-v1-preserve-eval-extend-train"
+)
 
 QuestionType = Literal["bridge", "comparison"]
 
@@ -84,20 +88,35 @@ def prepare_hotpotqa_smoke_splits(
     split_dir: Path,
     *,
     seed: int = SMOKE_SPLIT_SEED,
+    train_size: int = 6,
     expected_question_count: int | None = ARAG_HOTPOTQA_QUESTION_COUNT,
     expected_chunk_count: int | None = ARAG_HOTPOTQA_CHUNK_COUNT,
 ) -> dict[str, Any]:
-    """Validate a local pinned A-RAG dataset and write 6/6/6 smoke splits.
+    """Validate A-RAG HotpotQA and write deterministic SkillOpt splits.
 
     The default count checks identify the exact reduced HotpotQA benchmark.
     Tests and deliberately reduced local fixtures may override the two
-    expected counts without changing the selection algorithm.
+    expected counts without changing the selection algorithm.  The default
+    remains the historical 6/6/6 contract.  A larger ``train_size`` preserves
+    every validation/test item and extends only the training split.
     """
 
     if not isinstance(seed, int):
         raise InputFormatError("Smoke split seed must be an integer")
     _validate_expected_count("question", expected_question_count)
     _validate_expected_count("Chunk", expected_chunk_count)
+    train_type_counts = _train_type_counts(train_size)
+    split_type_counts = {
+        "train": train_type_counts,
+        "validation": {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT,
+            "comparison": SMOKE_COMPARISON_PER_SPLIT,
+        },
+        "test": {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT,
+            "comparison": SMOKE_COMPARISON_PER_SPLIT,
+        },
+    }
 
     chunks_path, questions_path = _resolve_hotpotqa_files(dataset_dir)
     chunks = _load_json(chunks_path)
@@ -119,7 +138,11 @@ def prepare_hotpotqa_smoke_splits(
             role="chunks.json",
         )
 
-    selected = _select_splits(items, seed=seed)
+    selected = _select_splits(
+        items,
+        seed=seed,
+        train_type_counts=train_type_counts,
+    )
     split_dir.mkdir(parents=True, exist_ok=True)
 
     output_files: dict[str, dict[str, Any]] = {}
@@ -143,8 +166,37 @@ def prepare_hotpotqa_smoke_splits(
         }
 
     type_counts = Counter(item.question_type for item in items)
+    extended_train = train_size != 6
+    selection = (
+        {
+            "seed": seed,
+            "algorithm": TRAIN_EXTENSION_ALGORITHM,
+            "split_order": list(SMOKE_SPLIT_ORDER),
+            "train_size": train_size,
+            "validation_size": 6,
+            "test_size": 6,
+            "per_split_by_question_type": split_type_counts,
+            "preserves_v1_validation_and_test": True,
+        }
+        if extended_train
+        else {
+            "seed": seed,
+            "algorithm": SELECTION_ALGORITHM,
+            "split_order": list(SMOKE_SPLIT_ORDER),
+            "per_split": {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+                "total": (
+                    SMOKE_BRIDGE_PER_SPLIT
+                    + SMOKE_COMPARISON_PER_SPLIT
+                ),
+            },
+        }
+    )
     manifest: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": (
+            EXTENDED_SPLIT_SCHEMA_VERSION if extended_train else "1.0"
+        ),
         "purpose": "workflow_smoke",
         "dataset": {
             "repo_id": ARAG_DATASET_REPO_ID,
@@ -163,19 +215,7 @@ def prepare_hotpotqa_smoke_splits(
                 ),
             },
         },
-        "selection": {
-            "seed": seed,
-            "algorithm": SELECTION_ALGORITHM,
-            "split_order": list(SMOKE_SPLIT_ORDER),
-            "per_split": {
-                "bridge": SMOKE_BRIDGE_PER_SPLIT,
-                "comparison": SMOKE_COMPARISON_PER_SPLIT,
-                "total": (
-                    SMOKE_BRIDGE_PER_SPLIT
-                    + SMOKE_COMPARISON_PER_SPLIT
-                ),
-            },
-        },
+        "selection": selection,
         "splits": {
             split_name: {
                 "count": len(selected[split_name]),
@@ -269,9 +309,11 @@ def validate_hotpotqa_smoke_lineage(
     manifest = _load_json(manifest_path)
     if not isinstance(manifest, dict):
         raise InputFormatError("split_manifest.json must contain an object")
-    if manifest.get("schema_version") != "1.0":
+    schema_version = manifest.get("schema_version")
+    if schema_version not in {"1.0", EXTENDED_SPLIT_SCHEMA_VERSION}:
         raise InputFormatError(
-            "split manifest schema_version must be '1.0'"
+            "split manifest schema_version must be '1.0' or "
+            f"{EXTENDED_SPLIT_SCHEMA_VERSION!r}"
         )
     if manifest.get("purpose") != "workflow_smoke":
         raise InputFormatError(
@@ -310,20 +352,55 @@ def validate_hotpotqa_smoke_lineage(
         )
 
     selection = _require_mapping(manifest, "selection", "split manifest")
-    expected_selection = {
-        "seed": SMOKE_SPLIT_SEED,
-        "algorithm": SELECTION_ALGORITHM,
-        "split_order": list(SMOKE_SPLIT_ORDER),
-        "per_split": {
-            "bridge": SMOKE_BRIDGE_PER_SPLIT,
-            "comparison": SMOKE_COMPARISON_PER_SPLIT,
-            "total": SMOKE_BRIDGE_PER_SPLIT + SMOKE_COMPARISON_PER_SPLIT,
-        },
-    }
+    if schema_version == "1.0":
+        expected_split_counts = {
+            split_name: {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+            }
+            for split_name in SMOKE_SPLIT_ORDER
+        }
+        expected_selection = {
+            "seed": SMOKE_SPLIT_SEED,
+            "algorithm": SELECTION_ALGORITHM,
+            "split_order": list(SMOKE_SPLIT_ORDER),
+            "per_split": {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+                "total": (
+                    SMOKE_BRIDGE_PER_SPLIT
+                    + SMOKE_COMPARISON_PER_SPLIT
+                ),
+            },
+        }
+    else:
+        train_size = selection.get("train_size")
+        train_counts = _train_type_counts(train_size)
+        expected_split_counts = {
+            "train": train_counts,
+            "validation": {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+            },
+            "test": {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+            },
+        }
+        expected_selection = {
+            "seed": SMOKE_SPLIT_SEED,
+            "algorithm": TRAIN_EXTENSION_ALGORITHM,
+            "split_order": list(SMOKE_SPLIT_ORDER),
+            "train_size": train_size,
+            "validation_size": 6,
+            "test_size": 6,
+            "per_split_by_question_type": expected_split_counts,
+            "preserves_v1_validation_and_test": True,
+        }
     if dict(selection) != expected_selection:
         raise InputFormatError(
-            "split manifest selection does not match the workflow-smoke "
-            "seed, algorithm, and 4/2 split contract"
+            "split manifest selection does not match the deterministic "
+            "HotpotQA split contract"
         )
 
     record_counts = _object_field(substrate_manifest, "record_counts")
@@ -402,18 +479,17 @@ def validate_hotpotqa_smoke_lineage(
                 f"{expected_filename} contains a non-HotpotQA source"
             )
         actual_counts = Counter(item.question_type for item in items)
-        expected_counts = {
-            "bridge": SMOKE_BRIDGE_PER_SPLIT,
-            "comparison": SMOKE_COMPARISON_PER_SPLIT,
-        }
+        expected_counts = expected_split_counts[split_name]
         if len(items) != sum(expected_counts.values()):
             raise InputFormatError(
-                f"workflow smoke {split_name} split must contain 6 items"
+                f"workflow smoke {split_name} split must contain "
+                f"{sum(expected_counts.values())} items"
             )
         if dict(actual_counts) != expected_counts:
             raise InputFormatError(
                 f"workflow smoke {split_name} split must contain exactly "
-                "4 bridge and 2 comparison questions"
+                f"{expected_counts['bridge']} bridge and "
+                f"{expected_counts['comparison']} comparison questions"
             )
         if metadata.get("count") != len(items):
             raise InputFormatError(
@@ -592,8 +668,18 @@ def _smoke_item_from_row(
 
 
 def _select_splits(
-    items: tuple[SmokeBenchmarkItem, ...], *, seed: int
+    items: tuple[SmokeBenchmarkItem, ...],
+    *,
+    seed: int,
+    train_type_counts: Mapping[str, int] | None = None,
 ) -> dict[str, tuple[SmokeBenchmarkItem, ...]]:
+    requested_train_counts = dict(
+        train_type_counts
+        or {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT,
+            "comparison": SMOKE_COMPARISON_PER_SPLIT,
+        }
+    )
     by_type: dict[QuestionType, list[SmokeBenchmarkItem]] = {
         "bridge": [],
         "comparison": [],
@@ -604,10 +690,13 @@ def _select_splits(
         ("bridge", SMOKE_BRIDGE_PER_SPLIT),
         ("comparison", SMOKE_COMPARISON_PER_SPLIT),
     ):
-        required = required_per_split * len(SMOKE_SPLIT_ORDER)
+        train_extra = requested_train_counts[question_type] - required_per_split
+        required = (
+            required_per_split * len(SMOKE_SPLIT_ORDER) + train_extra
+        )
         if len(by_type[question_type]) < required:
             raise InputFormatError(
-                f"A-RAG HotpotQA smoke split needs at least {required} "
+                f"A-RAG HotpotQA split needs at least {required} "
                 f"{question_type} questions; found {len(by_type[question_type])}"
             )
         by_type[question_type].sort(key=lambda item: _rank(item.id, seed))
@@ -632,12 +721,81 @@ def _select_splits(
         bridge_offset += SMOKE_BRIDGE_PER_SPLIT
         comparison_offset += SMOKE_COMPARISON_PER_SPLIT
 
+    if requested_train_counts != {
+        "bridge": SMOKE_BRIDGE_PER_SPLIT,
+        "comparison": SMOKE_COMPARISON_PER_SPLIT,
+    }:
+        train_items = list(result["train"])
+        reserved_by_type = {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT * len(SMOKE_SPLIT_ORDER),
+            "comparison": (
+                SMOKE_COMPARISON_PER_SPLIT * len(SMOKE_SPLIT_ORDER)
+            ),
+        }
+        for question_type in ("bridge", "comparison"):
+            base_count = (
+                SMOKE_BRIDGE_PER_SPLIT
+                if question_type == "bridge"
+                else SMOKE_COMPARISON_PER_SPLIT
+            )
+            extra_count = requested_train_counts[question_type] - base_count
+            start = reserved_by_type[question_type]
+            train_items.extend(
+                by_type[question_type][start : start + extra_count]
+            )
+        result["train"] = tuple(
+            sorted(train_items, key=lambda item: _rank(item.id, seed))
+        )
+
     selected_ids = [item.id for split in result.values() for item in split]
     if len(selected_ids) != len(set(selected_ids)):
         raise InputFormatError(
             "Deterministic smoke split unexpectedly selected duplicate IDs"
         )
     return result
+
+
+def _train_type_counts(train_size: int) -> dict[str, int]:
+    if not isinstance(train_size, int) or isinstance(train_size, bool):
+        raise InputFormatError("train_size must be an integer")
+    if train_size < 6:
+        raise InputFormatError("train_size must be at least 6")
+    if train_size == 6:
+        return {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT,
+            "comparison": SMOKE_COMPARISON_PER_SPLIT,
+        }
+
+    reference_counts = dict(_HOTPOTQA_PROFILE.reference_task_type_counts)
+    total = sum(reference_counts.values())
+    exact = {
+        question_type: train_size * count / total
+        for question_type, count in reference_counts.items()
+    }
+    counts = {
+        question_type: int(value)
+        for question_type, value in exact.items()
+    }
+    remaining = train_size - sum(counts.values())
+    for question_type in sorted(
+        counts,
+        key=lambda value: (
+            -(exact[value] - counts[value]),
+            -reference_counts[value],
+            value,
+        ),
+    )[:remaining]:
+        counts[question_type] += 1
+    minimums = {
+        "bridge": SMOKE_BRIDGE_PER_SPLIT,
+        "comparison": SMOKE_COMPARISON_PER_SPLIT,
+    }
+    if any(counts[key] < minimum for key, minimum in minimums.items()):
+        raise InputFormatError(
+            "extended train_size must preserve at least 4 bridge and 2 "
+            "comparison questions"
+        )
+    return {key: counts[key] for key in ("bridge", "comparison")}
 
 
 def _rank(question_id: str, seed: int) -> tuple[str, str]:

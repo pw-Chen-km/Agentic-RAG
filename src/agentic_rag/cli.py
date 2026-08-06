@@ -379,6 +379,10 @@ def run_command(
             exists=True,
             dir_okay=False,
             readable=True,
+            help=(
+                "Skill Markdown file. For single_agent_v2_2 this must be "
+                "the progressive bundle root SKILL.md."
+            ),
         ),
     ],
     config_path: Annotated[
@@ -461,6 +465,17 @@ def skillopt_prepare_command(
     split_size: Annotated[
         int, typer.Option("--split-size", min=1)
     ] = 6,
+    train_size: Annotated[
+        int | None,
+        typer.Option(
+            "--train-size",
+            min=6,
+            help=(
+                "HotpotQA-only training size. Keeps validation/test at "
+                "the fixed six-item evaluation contract."
+            ),
+        ),
+    ] = None,
     allow_subset: Annotated[
         bool,
         typer.Option(
@@ -473,16 +488,29 @@ def skillopt_prepare_command(
 
     try:
         profile = get_arag_dataset_profile(dataset)
+        if train_size is not None and not (
+            profile.key == "hotpotqa"
+            and seed == 42
+            and split_size == 6
+            and not allow_subset
+        ):
+            raise ValueError(
+                "--train-size is supported only for the pinned HotpotQA "
+                "seed-42 split with --split-size 6"
+            )
         if (
             profile.key == "hotpotqa"
             and seed == 42
             and split_size == 6
             and not allow_subset
         ):
-            manifest = prepare_hotpotqa_smoke_splits(
-                dataset_dir=dataset_dir,
-                split_dir=split_dir,
-            )
+            prepare_kwargs = {
+                "dataset_dir": dataset_dir,
+                "split_dir": split_dir,
+            }
+            if train_size is not None:
+                prepare_kwargs["train_size"] = train_size
+            manifest = prepare_hotpotqa_smoke_splits(**prepare_kwargs)
         else:
             manifest = prepare_arag_smoke_splits(
                 dataset_dir=dataset_dir,
@@ -554,7 +582,7 @@ def skillopt_train_command(
         split_manifest = json.loads(
             (split_dir / "split_manifest.json").read_text(encoding="utf-8")
         )
-        if split_manifest.get("schema_version") == "1.0":
+        if split_manifest.get("schema_version") in {"1.0", "1.1"}:
             if profile.key != "hotpotqa":
                 raise ValueError(
                     "legacy SkillOpt split manifests support only HotpotQA"
@@ -581,19 +609,26 @@ def skillopt_train_command(
             )
             scope_id = str(lineage_report["scope_id"])
             substrate.require_scope(scope_id)
-        selection_metadata = split_manifest.get("selection")
-        declared_split_size = (
-            selection_metadata.get("split_size")
-            if isinstance(selection_metadata, dict)
-            else None
-        )
-        workflow_split_size = (
-            declared_split_size
-            if isinstance(declared_split_size, int)
-            and not isinstance(declared_split_size, bool)
-            and declared_split_size > 0
-            else 6
-        )
+        split_metadata = split_manifest.get("splits")
+        if not isinstance(split_metadata, dict):
+            raise ValueError("split manifest has no splits mapping")
+
+        def split_count(split_name: str) -> int:
+            metadata = split_metadata.get(split_name)
+            count = metadata.get("count") if isinstance(metadata, dict) else None
+            if (
+                not isinstance(count, int)
+                or isinstance(count, bool)
+                or count < 1
+            ):
+                raise ValueError(
+                    f"split manifest {split_name} count must be positive"
+                )
+            return count
+
+        workflow_train_size = split_count("train")
+        workflow_validation_size = split_count("validation")
+        workflow_test_size = split_count("test")
 
         agent_config = AgentConfig.from_yaml(agent_config_path)
         if (
@@ -642,7 +677,7 @@ def skillopt_train_command(
             "optimizer_model": "gpt-5.6-luna",
             "target_model": "gpt-5.6-luna",
             "num_epochs": 1,
-            "train_size": workflow_split_size,
+            "train_size": workflow_train_size,
             "batch_size": 3,
             "accumulation": 1,
             "seed": 42,
@@ -658,8 +693,8 @@ def skillopt_train_command(
             "use_slow_update": False,
             "use_meta_skill": False,
             "use_gate": True,
-            "sel_env_num": workflow_split_size,
-            "test_env_num": workflow_split_size,
+            "sel_env_num": workflow_validation_size,
+            "test_env_num": workflow_test_size,
             "eval_test": True,
             "workers": 1,
             "judge_model": "gpt-5.6-luna",

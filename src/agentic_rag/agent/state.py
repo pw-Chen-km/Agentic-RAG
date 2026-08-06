@@ -29,8 +29,14 @@ _SUMMARY_LIMIT = 160
 
 
 class StateUpdater:
-    def __init__(self, substrate: Substrate | None = None) -> None:
+    def __init__(
+        self,
+        substrate: Substrate | None = None,
+        *,
+        accumulate_selected_evidence: bool = False,
+    ) -> None:
         self.substrate = substrate
+        self.accumulate_selected_evidence = accumulate_selected_evidence
 
     def apply(
         self,
@@ -40,12 +46,18 @@ class StateUpdater:
         observation: Observation,
         action_signature: str | None,
         commit_assessment: bool = True,
+        consume_step: bool = True,
     ) -> ControllerState:
         updated = state.model_copy(deep=True)
-        updated.step += 1
-        updated.remaining_step_budget = max(
-            0, updated.remaining_step_budget - 1
+        updated.policy_attempts += 1
+        updated.remaining_policy_attempt_budget = max(
+            0, updated.remaining_policy_attempt_budget - 1
         )
+        if consume_step:
+            updated.step += 1
+            updated.remaining_step_budget = max(
+                0, updated.remaining_step_budget - 1
+            )
         updated.remaining_retrieved_token_budget = max(
             0,
             updated.remaining_retrieved_token_budget
@@ -62,18 +74,41 @@ class StateUpdater:
                     getattr(updated, field_name).update(
                         str(node_id) for node_id in raw_ids
                     )
+            ordered_candidates = [
+                *observation.novel_node_ids,
+                *(
+                    str(node_id)
+                    for field_name in (
+                        "visible_entity_ids",
+                        "visible_sentence_ids",
+                        "visible_chunk_ids",
+                    )
+                    for node_id in delta.get(field_name, [])
+                ),
+            ]
+            known_memory_ids = set(updated.semantic_memory_node_ids)
+            for node_id in ordered_candidates:
+                if node_id in known_memory_ids:
+                    continue
+                known_memory_ids.add(node_id)
+                updated.semantic_memory_node_ids.append(node_id)
 
         if action_signature is not None:
             updated.action_signatures.add(action_signature)
         if commit_assessment and assessment is not None:
             updated.last_assessment = assessment
-            updated.selected_evidence_refs = list(
-                assessment.selected_evidence_refs
-            )
+            if self.accumulate_selected_evidence:
+                updated.selected_evidence_refs = _merge_evidence_refs(
+                    updated.selected_evidence_refs,
+                    assessment.selected_evidence_refs,
+                )
+            else:
+                updated.selected_evidence_refs = list(
+                    assessment.selected_evidence_refs
+                )
         updated.newest_observation = observation
         self._update_node_handles(updated, observation)
         return updated
-
     def _update_node_handles(
         self,
         state: ControllerState,
@@ -160,6 +195,20 @@ class StateUpdater:
                     else previous_previews
                 )[:2],
             )
+
+
+def _merge_evidence_refs(first: list, second: list) -> list:
+    """Preserve first-seen evidence order while removing typed duplicates."""
+
+    merged = []
+    seen: set[tuple[object, str]] = set()
+    for ref in [*first, *second]:
+        key = (ref.unit, ref.id)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(ref)
+    return merged
 
 
 def _summary(text: str) -> str:

@@ -136,8 +136,24 @@ AnswerProviderConfig = Annotated[
 
 
 class AgentConfig(ConfigModel):
+    workflow_mode: Literal[
+        "legacy",
+        "single_agent_v2",
+        "single_agent_v2_compact",
+        "single_agent_v2_2",
+        "single_agent_v3",
+        "single_agent_v3_action_catalog",
+        "single_agent_v3_typed_refs",
+        "single_agent_v3_2",
+    ] = "legacy"
     max_steps: int = Field(default=10, ge=1)
+    max_policy_attempts: int | None = Field(default=None, ge=1)
+    max_consecutive_invalid_attempts: int = Field(default=2, ge=1, le=10)
     max_retrieved_tokens: int = Field(default=12_000, ge=1)
+    v3_include_last_assessment: bool = True
+    v3_include_latest_event: bool = True
+    v3_include_attempted_actions: bool = True
+    v3_include_budget: bool = True
     context_mode: ContextMode = ContextMode.COMPACT_EVIDENCE
     enabled_expansions: tuple[ExpansionKind, ...] = DEFAULT_ENABLED_EXPANSIONS
     policy: PolicyProviderConfig = Field(default_factory=PolicyConfig)

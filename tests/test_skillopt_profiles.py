@@ -202,7 +202,8 @@ def test_answer_prompt_respects_profile_answer_mode() -> None:
         "Question?", [], answer_mode=AnswerMode.LONG
     )[0]["content"]
 
-    assert "Return a concise answer" in short_prompt
+    assert "Return the shortest complete answer" in short_prompt
+    assert "Do not shorten a compound answer" in short_prompt
     assert "complete, well-supported answer" in long_prompt
     assert "unsupported claims" in long_prompt
 

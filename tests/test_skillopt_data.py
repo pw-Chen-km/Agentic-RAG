@@ -14,8 +14,10 @@ from agentic_rag.models import SourceArtifact
 from agentic_rag.skillopt.data import (
     ARAG_DATASET_REPO_ID,
     ARAG_DATASET_REVISION,
+    EXTENDED_SPLIT_SCHEMA_VERSION,
     HOTPOTQA_BENCHMARK_SCOPE_ID,
     SELECTION_ALGORITHM,
+    TRAIN_EXTENSION_ALGORITHM,
     load_smoke_split,
     prepare_hotpotqa_smoke_splits,
     validate_hotpotqa_smoke_lineage,
@@ -247,6 +249,80 @@ def test_prepare_writes_balanced_disjoint_deterministic_splits(
     for split_name in split_items:
         split_file = manifest["splits"][split_name]["file"]
         assert split_file["sha256"] == _hash(split_dir / split_file["path"])
+
+
+def test_train20_extension_preserves_the_existing_evaluation_splits(
+    tmp_path: Path,
+) -> None:
+    questions = [
+        *[
+            _question(f"bridge-{index:02d}", "bridge")
+            for index in range(30)
+        ],
+        *[
+            _question(f"comparison-{index:02d}", "comparison")
+            for index in range(15)
+        ],
+    ]
+    dataset_dir = _write_dataset(tmp_path, questions)
+    baseline_dir = tmp_path / "baseline"
+    extended_dir = tmp_path / "extended"
+    prepare_hotpotqa_smoke_splits(
+        dataset_dir,
+        baseline_dir,
+        expected_question_count=len(questions),
+        expected_chunk_count=2,
+    )
+    extended = prepare_hotpotqa_smoke_splits(
+        dataset_dir,
+        extended_dir,
+        train_size=20,
+        expected_question_count=len(questions),
+        expected_chunk_count=2,
+    )
+
+    assert extended["schema_version"] == EXTENDED_SPLIT_SCHEMA_VERSION
+    assert extended["selection"] == {
+        "seed": 42,
+        "algorithm": TRAIN_EXTENSION_ALGORITHM,
+        "split_order": ["train", "validation", "test"],
+        "train_size": 20,
+        "validation_size": 6,
+        "test_size": 6,
+        "per_split_by_question_type": {
+            "train": {"bridge": 16, "comparison": 4},
+            "validation": {"bridge": 4, "comparison": 2},
+            "test": {"bridge": 4, "comparison": 2},
+        },
+        "preserves_v1_validation_and_test": True,
+    }
+    for split_name in ("validation", "test"):
+        assert (extended_dir / f"{split_name}.jsonl").read_bytes() == (
+            baseline_dir / f"{split_name}.jsonl"
+        ).read_bytes()
+
+    baseline_train_ids = {
+        item.id for item in load_smoke_split(baseline_dir / "train.jsonl")
+    }
+    extended_train = load_smoke_split(extended_dir / "train.jsonl")
+    assert len(extended_train) == 20
+    assert Counter(item.question_type for item in extended_train) == {
+        "bridge": 16,
+        "comparison": 4,
+    }
+    assert baseline_train_ids <= {item.id for item in extended_train}
+
+    report = validate_hotpotqa_smoke_lineage(
+        extended_dir,
+        _substrate_manifest(
+            extended,
+            question_count=len(questions),
+            chunk_count=2,
+        ),
+        expected_question_count=len(questions),
+        expected_chunk_count=2,
+    )
+    assert report["total_question_count"] == 32
 
 
 def test_lineage_validation_binds_splits_to_substrate_sources(

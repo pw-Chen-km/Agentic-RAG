@@ -23,7 +23,7 @@ from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
     ExpansionKind,
     Message,
-    PolicyDecision,
+    PolicyDecisionOutput,
     ResolvedEvidence,
     Usage,
 )
@@ -32,6 +32,8 @@ from agentic_rag.agent.policy import (
     PolicyConfigurationError,
     PolicyResponseError,
     PolicyTransportError,
+    StructuredModelT,
+    _decision_type_for_format,
     _is_transient,
     policy_decision_model,
 )
@@ -59,6 +61,9 @@ class OllamaChatPolicy(PolicyClient):
         timeout_seconds: float | None = 120.0,
         max_retries: int = 2,
         retry_backoff_seconds: float = 0.5,
+        direct_answer: bool = False,
+        semantic_memory_v3: bool = False,
+        semantic_memory_v31: bool = False,
     ) -> None:
         normalized_model = _normalize_model(
             model, error_type=PolicyConfigurationError
@@ -87,9 +92,14 @@ class OllamaChatPolicy(PolicyClient):
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        self.semantic_memory_v3 = semantic_memory_v3
+        self.semantic_memory_v31 = semantic_memory_v31
         try:
             self.decision_format = policy_decision_model(
-                enabled_expansions
+                enabled_expansions,
+                direct_answer=direct_answer,
+                semantic_memory_v3=semantic_memory_v3,
+                semantic_memory_v31=semantic_memory_v31,
             )
         except (TypeError, ValueError) as exc:
             raise PolicyConfigurationError(
@@ -103,13 +113,34 @@ class OllamaChatPolicy(PolicyClient):
         self.last_usage = Usage()
 
     def decide(
-        self, messages: Sequence[Message | dict[str, str]]
-    ) -> PolicyDecision:
+        self,
+        messages: Sequence[Message | dict[str, str]],
+        *,
+        decision_format: type[BaseModel] | None = None,
+    ) -> PolicyDecisionOutput:
+        response_format = decision_format or self.decision_format
+        parsed = self.generate_structured(messages, response_format)
+        payload = parsed.model_dump(mode="json")
+        try:
+            decision_type = _decision_type_for_format(response_format)
+            return decision_type.model_validate(payload)
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise PolicyResponseError(
+                "Ollama response failed PolicyDecision validation"
+            ) from exc
+
+    def generate_structured(
+        self,
+        messages: Sequence[Message | dict[str, str]],
+        response_model: type[StructuredModelT],
+    ) -> StructuredModelT:
+        """Generate and validate any Pydantic structured policy response."""
+
         self.last_usage = Usage()
         request = _chat_request(
             model=self.model,
             messages=messages,
-            schema=self.decision_format.model_json_schema(),
+            schema=response_model.model_json_schema(),
             temperature=self.temperature,
             num_ctx=self.num_ctx,
             think=self.think,
@@ -124,19 +155,13 @@ class OllamaChatPolicy(PolicyClient):
         content = _response_content(response)
         if content is None or not content.strip():
             raise PolicyResponseError(
-                "Ollama response did not contain a structured policy decision"
+                "Ollama response did not contain structured output"
             )
         try:
-            parsed = self.decision_format.model_validate_json(content)
-            payload = (
-                parsed.model_dump(mode="json")
-                if isinstance(parsed, BaseModel)
-                else parsed
-            )
-            return PolicyDecision.model_validate(payload)
+            return response_model.model_validate_json(content)
         except (ValidationError, ValueError, TypeError) as exc:
             raise PolicyResponseError(
-                "Ollama response failed PolicyDecision validation"
+                "Ollama response failed structured response validation"
             ) from exc
 
     def _call_with_retries(self, operation: Callable[[], Any]) -> Any:

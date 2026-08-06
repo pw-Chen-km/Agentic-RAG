@@ -10,6 +10,7 @@ from agentic_rag.agent.config import AgentConfig
 from agentic_rag.agent.context import (
     AppendOnlyContextBuilder,
     PolicyContextBuilder,
+    project_observation_for_policy,
 )
 from agentic_rag.agent.evidence import EvidenceResolver
 from agentic_rag.agent.expansion import ExpansionEngine
@@ -20,6 +21,8 @@ from agentic_rag.agent.models import (
     ControllerState,
     EntityHandle,
     EvidenceAssessment,
+    ExpandAction,
+    ExpansionKind,
     Observation,
     ObservationStatus,
     NodeHandleRegistry,
@@ -213,10 +216,12 @@ def test_default_compact_context_has_four_messages_and_no_history_payload(
     assert set(payload) == {"instruction", "policy_state"}
     assert set(payload["policy_state"]) == {
         "step",
+        "policy_attempts",
         "last_valid_assessment",
         "selected_evidence",
         "latest_observation",
         "actionable_handles",
+        "allowed_expansions",
         "attempted_actions",
         "budget",
     }
@@ -282,7 +287,7 @@ def test_selected_sentence_is_resolved_with_full_text_and_removed_from_handles(
     assert chunk_handle_id not in handle_ids
 
 
-def test_sentence_projection_exposes_system_derived_evidence_usability(
+def test_sentence_projection_is_minimal_and_handle_safe(
     built_substrate: Path,
 ) -> None:
     substrate = Substrate.open(built_substrate)
@@ -301,14 +306,75 @@ def test_sentence_projection_exposes_system_derived_evidence_usability(
     projected_result = _payload(built)["policy_state"][
         "latest_observation"
     ]["results"][0]
+    projected_observation = _payload(built)["policy_state"][
+        "latest_observation"
+    ]
 
     assert "can_use_as_evidence" not in raw_observation.results[0]
     assert projected_result["sentence_id"] == "S1"
-    assert projected_result["can_use_as_evidence"] is True
+    assert "can_use_as_evidence" not in projected_result
+    assert "can_expand" not in projected_result
+    assert set(projected_observation) == {
+        "action_id",
+        "action",
+        "outcome",
+        "results",
+        "usage",
+        "error",
+    }
+    assert projected_observation["outcome"] == "success"
+    assert projected_observation["usage"] == {"retrieved_tokens": 8}
+    assert projected_observation["error"] is None
     assert "eligible_sentence_ids" not in json.dumps(
         _payload(built), sort_keys=True
     )
     assert built.policy_view.policy_state.actionable_handles == []
+
+
+def test_invalid_projection_has_structured_retryable_error() -> None:
+    state = ControllerState.initial()
+    state.node_handles["entity:known"] = EntityHandle(
+        id="E1",
+        label="Marie Curie",
+        entity_type="PERSON",
+    )
+    observation = Observation(
+        action_id="attempt-2",
+        status=ObservationStatus.INVALID_ACTION,
+        action=ExpandAction(
+            kind=ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
+            source_id="E999",
+        ),
+        error_code="unknown_handle",
+        message="Unknown ENTITY handle: E999",
+    )
+
+    projected = project_observation_for_policy(observation, state)
+
+    assert projected == {
+        "action_id": "attempt-2",
+        "action": {
+            "type": "EXPAND",
+            "kind": "ENTITY_MENTIONED_IN_SENTENCE",
+            "source_id": "E999",
+            "direction": None,
+            "query": None,
+            "top_k": 5,
+        },
+        "outcome": "invalid_action",
+        "results": [],
+        "usage": {"retrieved_tokens": 0},
+        "error": {
+            "code": "unknown_handle",
+            "message": "Unknown ENTITY handle: E999",
+            "retryable": True,
+            "details": {
+                "expected_type": "ENTITY",
+                "received_handle": "E999",
+                "available_handles": ["E1"],
+            },
+        },
+    }
 
 
 def test_read_projection_omits_duplicate_chunk_text_but_keeps_sentences(
@@ -348,14 +414,14 @@ def test_read_projection_omits_duplicate_chunk_text_but_keeps_sentences(
     assert raw_observation.results[0]["text"] == chunk.text
     assert "text" not in projected_result
     assert projected_result["chunk_id"] == "C1"
-    assert projected_result["has_been_read"] is True
-    assert projected_result["can_use_as_evidence"] is True
+    assert "has_been_read" not in projected_result
+    assert "can_use_as_evidence" not in projected_result
     assert projected_result["sentences"]
     assert all(
         item["text"] for item in projected_result["sentences"]
     )
     assert all(
-        item["can_use_as_evidence"] is True
+        "can_use_as_evidence" not in item
         for item in projected_result["sentences"]
     )
     assert state.handle_registry.handle_for(
@@ -387,6 +453,7 @@ def test_attempted_actions_are_summaries_without_historical_results(
     assert attempts == [
         {
             "step": 1,
+            "policy_attempt": 1,
             "action": {
                 "type": "SEARCH",
                 "query": QUESTION,
@@ -394,6 +461,8 @@ def test_attempted_actions_are_summaries_without_historical_results(
                 "target": "SENTENCE",
                 "top_k": 5,
             },
+            "repaired_action": None,
+            "repair_code": None,
             "validation_status": "valid",
             "observation_status": "ok",
             "error_code": None,
@@ -546,10 +615,10 @@ def test_chunk_preview_handles_remain_ineligible_and_read_upgrades_chunk(
         ]["results"]
         if item["chunk_id"] == chunk_handle.id
     )
-    assert projected_chunk["has_been_read"] is False
-    assert projected_chunk["can_use_as_evidence"] is False
+    assert "has_been_read" not in projected_chunk
+    assert "can_use_as_evidence" not in projected_chunk
     assert all(
-        preview["can_use_as_evidence"] is False
+        "can_use_as_evidence" not in preview
         for preview in projected_chunk["previews"]
     )
     assert "evidence_eligible" not in json.dumps(

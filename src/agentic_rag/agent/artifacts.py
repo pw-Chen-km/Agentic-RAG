@@ -37,6 +37,7 @@ _ARTIFACT_FILENAMES = frozenset(
         "effective_config.json",
     }
 )
+_V22_ARTIFACT_FILENAMES = _ARTIFACT_FILENAMES | {"skill_bundle.json"}
 _SECRET_KEY_PARTS = frozenset(
     {
         "apikey",
@@ -78,6 +79,7 @@ class ArtifactWriter:
         skill_content: str,
         effective_config: Any,
         trajectory: Sequence[Any] | None = None,
+        skill_bundle: Any | None = None,
     ) -> Path:
         """Persist all public artifacts for one episode and return its path."""
 
@@ -103,6 +105,10 @@ class ArtifactWriter:
             "skill.md": skill_content.encode("utf-8"),
             "effective_config.json": _json_bytes(config_value),
         }
+        if skill_bundle is not None:
+            payloads["skill_bundle.json"] = _json_bytes(
+                _to_jsonable(skill_bundle)
+            )
         return self._publish(episode_id, payloads)
 
     def path_for_episode(self, episode_id: str) -> Path:
@@ -121,6 +127,7 @@ class ArtifactWriter:
         skill_content: str,
         effective_config: Any,
         trajectory: Sequence[Any] | None = None,
+        skill_bundle: Any | None = None,
     ) -> Path:
         """Alias for :meth:`write_episode` for concise harness integration."""
 
@@ -132,10 +139,14 @@ class ArtifactWriter:
             skill_content=skill_content,
             effective_config=effective_config,
             trajectory=trajectory,
+            skill_bundle=skill_bundle,
         )
 
     def _publish(self, episode_id: str, payloads: Mapping[str, bytes]) -> Path:
-        if frozenset(payloads) != _ARTIFACT_FILENAMES:
+        if frozenset(payloads) not in {
+            _ARTIFACT_FILENAMES,
+            _V22_ARTIFACT_FILENAMES,
+        }:
             raise ValueError("artifact payload set does not match the public contract")
 
         self.runs_root.mkdir(parents=True, exist_ok=True)

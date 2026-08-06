@@ -1,0 +1,36 @@
+agent:
+  workflow_mode: single_agent_v2
+  max_steps: 10
+  max_policy_attempts: 12
+  max_consecutive_invalid_attempts: 2
+  max_retrieved_tokens: 12000
+  context_mode: compact_evidence
+  enabled_expansions:
+    - ENTITY_MENTIONED_IN_SENTENCE
+    - SENTENCE_MENTIONS_ENTITY
+    - ENTITY_CO_OCCURS_ENTITY_SENTENCE
+    - CHUNK_ADJACENT_CHUNK
+
+policy:
+  provider: ollama
+  model: qwen3.5:9b
+  host: http://localhost:11434
+  temperature: 0
+  think: false
+  timeout_seconds: 600
+  keep_alive: 10m
+  max_retries: 2
+  num_ctx: 32768
+
+# Retained only as a legacy fallback for scripted decisions without
+# FINISH.answer. Native V2 policy decisions do not call this component.
+answer:
+  provider: ollama
+  model: qwen3.5:9b
+  host: http://localhost:11434
+  temperature: 0
+  think: false
+  timeout_seconds: 600
+  keep_alive: 10m
+  max_retries: 2
+  num_ctx: 32768

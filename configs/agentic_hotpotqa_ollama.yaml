@@ -1,5 +1,7 @@
 agent:
   max_steps: 10
+  max_policy_attempts: 12
+  max_consecutive_invalid_attempts: 2
   max_retrieved_tokens: 12000
   context_mode: compact_evidence
   enabled_expansions:

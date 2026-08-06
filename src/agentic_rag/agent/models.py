@@ -30,6 +30,15 @@ class AssessmentStatus(StrEnum):
     UNCERTAIN = "UNCERTAIN"
 
 
+class ActionType(StrEnum):
+    """High-level action family selected by the V2-2 root policy stage."""
+
+    SEARCH = "SEARCH"
+    EXPAND = "EXPAND"
+    READ = "READ"
+    FINISH = "FINISH"
+
+
 class ContextMode(StrEnum):
     COMPACT_EVIDENCE = "compact_evidence"
     APPEND_ONLY = "append_only"
@@ -95,6 +104,38 @@ class ChunkRef(AgentModel):
 
 
 EvidenceRef = Annotated[SentenceRef | ChunkRef, Field(discriminator="unit")]
+
+
+class ActionSelection(AgentModel):
+    """High-level V2-2 choice made before an action skill is disclosed.
+
+    Action-specific fields deliberately do not belong in this contract.  The
+    intent carries the information gap and rationale into the second policy
+    stage, while the evidence references remain pending until the resulting
+    action has passed validation.
+    """
+
+    action_type: ActionType
+    action_intent: str = Field(min_length=1)
+    selected_evidence_refs: list[EvidenceRef] = Field(max_length=20)
+
+    @field_validator("action_intent")
+    @classmethod
+    def action_intent_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError(
+                "action_intent must contain non-whitespace characters"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def selected_evidence_refs_must_be_unique(self) -> Self:
+        keys = [(ref.unit, ref.id) for ref in self.selected_evidence_refs]
+        if len(keys) != len(set(keys)):
+            raise ValueError(
+                "selected_evidence_refs must not contain duplicates"
+            )
+        return self
 
 
 class EvidenceAssessment(AgentModel):
@@ -186,6 +227,19 @@ class ReadAction(AgentModel):
 class FinishAction(AgentModel):
     type: Literal["FINISH"] = "FINISH"
     evidence_refs: list[EvidenceRef] = Field(min_length=1, max_length=20)
+    # In single-agent V2 the retrieval Policy also supplies the grounded final
+    # answer, avoiding a lossy hand-off to a separate Answer call. Legacy
+    # scripted decisions may omit it and continue to use AnswerGenerator.
+    answer: str | None = None
+
+    @field_validator("answer")
+    @classmethod
+    def optional_answer_must_not_be_blank(
+        cls, value: str | None
+    ) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("answer must be omitted rather than blank")
+        return value
 
     @model_validator(mode="after")
     def evidence_refs_must_be_unique(self) -> Self:
@@ -193,6 +247,105 @@ class FinishAction(AgentModel):
         if len(keys) != len(set(keys)):
             raise ValueError("evidence_refs must not contain duplicates")
         return self
+
+
+class SearchParameters(AgentModel):
+    """V2-2 SEARCH fields emitted after the search skill is disclosed."""
+
+    query: str = Field(min_length=1)
+    method: SearchMethod
+    target: SearchTarget
+    top_k: Literal[5]
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must contain non-whitespace characters")
+        return value
+
+    @model_validator(mode="after")
+    def validate_method_target(self) -> Self:
+        if (self.method, self.target) not in VALID_SEARCH_PAIRS:
+            raise ValueError(
+                f"unsupported retrieval pair: {self.method.value} -> "
+                f"{self.target.value}"
+            )
+        return self
+
+
+class ExpandParameters(AgentModel):
+    """V2-2 EXPAND fields emitted after the expand skill is disclosed."""
+
+    kind: ExpansionKind
+    source_id: str = Field(min_length=1)
+    direction: ExpansionDirection | None
+    query: str | None
+    top_k: Literal[5]
+
+    @field_validator("source_id")
+    @classmethod
+    def source_id_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError(
+                "source_id must contain non-whitespace characters"
+            )
+        return value
+
+    @field_validator("query")
+    @classmethod
+    def optional_query_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("query must be null rather than blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_direction(self) -> Self:
+        is_adjacent = self.kind.value == ExpansionKind.CHUNK_ADJACENT_CHUNK.value
+        if is_adjacent and self.direction is None:
+            raise ValueError("CHUNK_ADJACENT_CHUNK requires direction")
+        if not is_adjacent and self.direction is not None:
+            raise ValueError("direction is only valid for CHUNK_ADJACENT_CHUNK")
+        return self
+
+
+class ReadParameters(AgentModel):
+    """V2-2 READ fields emitted after the read skill is disclosed."""
+
+    chunk_id: str = Field(min_length=1)
+
+    @field_validator("chunk_id")
+    @classmethod
+    def chunk_id_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("chunk_id must contain non-whitespace characters")
+        return value
+
+
+class FinishParameters(AgentModel):
+    """V2-2 FINISH fields emitted after the finish skill is disclosed."""
+
+    answer: str = Field(min_length=1)
+    evidence_refs: list[EvidenceRef] = Field(min_length=1, max_length=20)
+
+    @field_validator("answer")
+    @classmethod
+    def answer_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("answer must contain non-whitespace characters")
+        return value
+
+    @model_validator(mode="after")
+    def evidence_refs_must_be_unique(self) -> Self:
+        keys = [(ref.unit, ref.id) for ref in self.evidence_refs]
+        if len(keys) != len(set(keys)):
+            raise ValueError("evidence_refs must not contain duplicates")
+        return self
+
+
+ActionParameters = (
+    SearchParameters | ExpandParameters | ReadParameters | FinishParameters
+)
 
 
 AgentAction = Annotated[
@@ -206,6 +359,222 @@ class PolicyDecision(AgentModel):
     action: AgentAction
 
 
+def assemble_policy_decision(
+    selection: ActionSelection,
+    parameters: ActionParameters,
+) -> PolicyDecision:
+    """Combine the two V2-2 stages into the existing stable decision model.
+
+    Evidence eligibility and the FINISH-reference subset rule are intentionally
+    runtime-validator concerns because they depend on the frozen controller
+    state.  This helper only enforces that the parameter contract matches the
+    action family chosen in stage one.
+    """
+
+    parameter_types: dict[ActionType, type[AgentModel]] = {
+        ActionType.SEARCH: SearchParameters,
+        ActionType.EXPAND: ExpandParameters,
+        ActionType.READ: ReadParameters,
+        ActionType.FINISH: FinishParameters,
+    }
+    expected_type = parameter_types[selection.action_type]
+    if not isinstance(parameters, expected_type):
+        raise ValueError(
+            f"{selection.action_type.value} selection requires "
+            f"{expected_type.__name__}"
+        )
+
+    payload = parameters.model_dump(mode="python")
+    action_constructors: dict[ActionType, type[AgentModel]] = {
+        ActionType.SEARCH: SearchAction,
+        ActionType.EXPAND: ExpandAction,
+        ActionType.READ: ReadAction,
+        ActionType.FINISH: FinishAction,
+    }
+    action = action_constructors[selection.action_type](
+        type=selection.action_type.value,
+        **payload,
+    )
+    is_finish = selection.action_type is ActionType.FINISH
+    assessment = EvidenceAssessment(
+        status=(
+            AssessmentStatus.SUFFICIENT
+            if is_finish
+            else AssessmentStatus.INSUFFICIENT
+        ),
+        supported_facts=[],
+        missing_information=[] if is_finish else [selection.action_intent],
+        selected_evidence_refs=selection.selected_evidence_refs,
+    )
+    return PolicyDecision(assessment=assessment, action=action)
+
+
+class V3EvidenceAssessment(AgentModel):
+    """Assessment-only reasoning for semantic-memory Policy calls."""
+
+    status: AssessmentStatus
+    supported_facts: list[str] = Field(default_factory=list, max_length=5)
+    missing_information: list[str] = Field(default_factory=list, max_length=3)
+
+
+class V3ExpandAction(AgentModel):
+    type: Literal["EXPAND"] = "EXPAND"
+    kind: ExpansionKind
+    source_context_index: int = Field(ge=1)
+    direction: ExpansionDirection | None = None
+    query: str | None = None
+    top_k: Literal[5] = 5
+
+    @field_validator("query")
+    @classmethod
+    def optional_query_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("query must be omitted rather than blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_direction(self) -> Self:
+        is_adjacent = self.kind is ExpansionKind.CHUNK_ADJACENT_CHUNK
+        if is_adjacent and self.direction is None:
+            raise ValueError("CHUNK_ADJACENT_CHUNK requires direction")
+        if not is_adjacent and self.direction is not None:
+            raise ValueError("direction is only valid for CHUNK_ADJACENT_CHUNK")
+        return self
+
+
+class V3ReadAction(AgentModel):
+    type: Literal["READ"] = "READ"
+    chunk_context_index: int = Field(ge=1)
+
+
+class V3FinishAction(AgentModel):
+    type: Literal["FINISH"] = "FINISH"
+    answer: str = Field(min_length=1)
+    citations: list[int] = Field(min_length=1, max_length=20)
+
+    @field_validator("answer")
+    @classmethod
+    def answer_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("answer must contain non-whitespace characters")
+        return value
+
+    @model_validator(mode="after")
+    def citations_must_be_unique(self) -> Self:
+        if any(index < 1 for index in self.citations):
+            raise ValueError("citations must contain positive context indices")
+        if len(self.citations) != len(set(self.citations)):
+            raise ValueError("citations must not contain duplicates")
+        return self
+
+
+V3AgentAction = Annotated[
+    SearchAction | V3ExpandAction | V3ReadAction | V3FinishAction,
+    Field(discriminator="type"),
+]
+
+
+class V3PolicyDecision(AgentModel):
+    assessment: V3EvidenceAssessment
+    action: V3AgentAction
+
+
+_TYPED_NODE_REF_PATTERN = r"^[ESC][1-9][0-9]*$"
+TypedNodeRef = Annotated[
+    str,
+    Field(min_length=2, pattern=_TYPED_NODE_REF_PATTERN),
+]
+
+
+def _normalize_typed_node_ref(value: object) -> object:
+    """Normalize harmless formatting without guessing a reference target."""
+
+    if isinstance(value, str):
+        return value.strip().upper()
+    return value
+
+
+class V31ExpandAction(AgentModel):
+    type: Literal["EXPAND"] = "EXPAND"
+    kind: ExpansionKind
+    source_ref: TypedNodeRef
+    direction: ExpansionDirection | None = None
+    query: str | None = None
+    top_k: Literal[5] = 5
+
+    @field_validator("source_ref", mode="before")
+    @classmethod
+    def normalize_source_ref(cls, value: object) -> object:
+        return _normalize_typed_node_ref(value)
+
+    @field_validator("query")
+    @classmethod
+    def optional_query_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("query must be omitted rather than blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_direction(self) -> Self:
+        is_adjacent = self.kind is ExpansionKind.CHUNK_ADJACENT_CHUNK
+        if is_adjacent and self.direction is None:
+            raise ValueError("CHUNK_ADJACENT_CHUNK requires direction")
+        if not is_adjacent and self.direction is not None:
+            raise ValueError("direction is only valid for CHUNK_ADJACENT_CHUNK")
+        return self
+
+
+class V31ReadAction(AgentModel):
+    type: Literal["READ"] = "READ"
+    chunk_ref: TypedNodeRef
+
+    @field_validator("chunk_ref", mode="before")
+    @classmethod
+    def normalize_chunk_ref(cls, value: object) -> object:
+        return _normalize_typed_node_ref(value)
+
+
+class V31FinishAction(AgentModel):
+    type: Literal["FINISH"] = "FINISH"
+    answer: str = Field(min_length=1)
+    evidence_refs: list[TypedNodeRef] = Field(min_length=1, max_length=20)
+
+    @field_validator("answer")
+    @classmethod
+    def answer_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("answer must contain non-whitespace characters")
+        return value
+
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def normalize_evidence_refs(cls, value: object) -> object:
+        if isinstance(value, list):
+            return [_normalize_typed_node_ref(item) for item in value]
+        return value
+
+    @field_validator("evidence_refs")
+    @classmethod
+    def validate_evidence_refs(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("evidence_refs must not contain duplicates")
+        return value
+
+
+V31AgentAction = Annotated[
+    SearchAction | V31ExpandAction | V31ReadAction | V31FinishAction,
+    Field(discriminator="type"),
+]
+
+
+class V31PolicyDecision(AgentModel):
+    assessment: V3EvidenceAssessment
+    action: V31AgentAction
+
+
+PolicyDecisionOutput = PolicyDecision | V3PolicyDecision | V31PolicyDecision
+
+
 class ObservationStatus(StrEnum):
     OK = "ok"
     INVALID_ACTION = "invalid_action"
@@ -214,6 +583,8 @@ class ObservationStatus(StrEnum):
 
 
 class Observation(AgentModel):
+    """Complete internal environment record used for state updates and audit."""
+
     action_id: str | None = None
     status: ObservationStatus
     action: AgentAction | None = None
@@ -224,6 +595,46 @@ class Observation(AgentModel):
     error_code: str | None = None
     message: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ObservationOutcome(StrEnum):
+    """Small outcome vocabulary exposed to the Policy LLM."""
+
+    SUCCESS = "success"
+    EMPTY = "empty"
+    INVALID_ACTION = "invalid_action"
+    DUPLICATE_ACTION = "duplicate_action"
+    BUDGET_REJECTED = "budget_rejected"
+    TOOL_ERROR = "tool_error"
+
+
+class PolicyObservationUsage(AgentModel):
+    retrieved_tokens: int = Field(default=0, ge=0)
+
+
+class PolicyObservationError(AgentModel):
+    code: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    retryable: bool
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class PolicyObservation(AgentModel):
+    """Minimal handle-safe observation shown to the Policy LLM.
+
+    Controller-only novelty, visibility, stable IDs, and budget transitions stay
+    on :class:`Observation` and :class:`ControllerState` rather than leaking
+    into this provider-facing contract.
+    """
+
+    action_id: str | None = None
+    action: AgentAction | None = None
+    outcome: ObservationOutcome
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    usage: PolicyObservationUsage = Field(
+        default_factory=PolicyObservationUsage
+    )
+    error: PolicyObservationError | None = None
 
 
 class Usage(AgentModel):
@@ -492,6 +903,7 @@ def _normalize_node_type(node_type: object) -> str:
 
 class ControllerState(AgentModel):
     step: int = Field(default=0, ge=0)
+    policy_attempts: int = Field(default=0, ge=0)
     visible_entity_ids: set[str] = Field(default_factory=set)
     visible_sentence_ids: set[str] = Field(default_factory=set)
     visible_chunk_ids: set[str] = Field(default_factory=set)
@@ -499,10 +911,14 @@ class ControllerState(AgentModel):
     read_chunk_ids: set[str] = Field(default_factory=set)
     action_signatures: set[str] = Field(default_factory=set)
     remaining_step_budget: int = Field(ge=0)
+    remaining_policy_attempt_budget: int = Field(default=0, ge=0)
     remaining_retrieved_token_budget: int = Field(ge=0)
     last_assessment: EvidenceAssessment | None = None
     newest_observation: Observation | None = None
     selected_evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    # First-seen order for the V3 semantic-memory projection. Stable IDs stay
+    # internal and are never exposed in the V3 Policy context.
+    semantic_memory_node_ids: list[str] = Field(default_factory=list)
     node_handles: dict[str, NodeHandle] = Field(default_factory=dict)
     handle_registry: NodeHandleRegistry = Field(
         default_factory=NodeHandleRegistry
@@ -510,10 +926,20 @@ class ControllerState(AgentModel):
 
     @classmethod
     def initial(
-        cls, *, max_steps: int = 10, max_retrieved_tokens: int = 12_000
+        cls,
+        *,
+        max_steps: int = 10,
+        max_retrieved_tokens: int = 12_000,
+        max_policy_attempts: int | None = None,
     ) -> "ControllerState":
+        attempt_budget = (
+            max_steps + 2
+            if max_policy_attempts is None
+            else max_policy_attempts
+        )
         return cls(
             remaining_step_budget=max_steps,
+            remaining_policy_attempt_budget=attempt_budget,
             remaining_retrieved_token_budget=max_retrieved_tokens,
         )
 
@@ -561,7 +987,10 @@ class LastValidAssessmentView(AgentModel):
 
 class AttemptedActionView(AgentModel):
     step: int = Field(ge=1)
+    policy_attempt: int = Field(default=1, ge=1)
     action: AgentAction | None = None
+    repaired_action: AgentAction | None = None
+    repair_code: str | None = None
     validation_status: ValidationStatus
     observation_status: ObservationStatus | None = None
     error_code: str | None = None
@@ -572,15 +1001,20 @@ class AttemptedActionView(AgentModel):
 
 class PolicyBudgetView(AgentModel):
     remaining_steps: int = Field(ge=0)
+    remaining_policy_attempts: int = Field(default=0, ge=0)
     remaining_retrieved_tokens: int = Field(ge=0)
 
 
 class PolicyStateView(AgentModel):
     step: int = Field(ge=0)
+    policy_attempts: int = Field(default=0, ge=0)
     last_valid_assessment: LastValidAssessmentView | None = None
     selected_evidence: list[PolicyEvidenceView] = Field(default_factory=list)
     latest_observation: dict[str, Any] | None = None
     actionable_handles: list[PolicyNodeHandle] = Field(default_factory=list)
+    allowed_expansions: dict[ExpansionKind, list[str]] = Field(
+        default_factory=dict
+    )
     attempted_actions: list[AttemptedActionView] = Field(default_factory=list)
     budget: PolicyBudgetView
 
@@ -593,10 +1027,206 @@ class PolicyView(AgentModel):
     policy_state: PolicyStateView
 
 
+class V3EntityMemoryItem(AgentModel):
+    context_index: int = Field(ge=1)
+    node_type: Literal["ENTITY"] = "ENTITY"
+    canonical_name: str
+    entity_type: str | None = None
+
+
+class V3SentenceMemoryItem(AgentModel):
+    context_index: int = Field(ge=1)
+    node_type: Literal["SENTENCE"] = "SENTENCE"
+    citation_index: int = Field(ge=1)
+    title: str | None = None
+    text: str
+    parent_chunk_context_index: int = Field(ge=1)
+
+
+class V3ChunkMemoryItem(AgentModel):
+    context_index: int = Field(ge=1)
+    node_type: Literal["CHUNK"] = "CHUNK"
+    citation_index: int | None = Field(default=None, ge=1)
+    title: str | None = None
+    chunk_position: int = Field(ge=0)
+    has_been_read: bool
+    text: str | None = None
+    previews: list[str] = Field(default_factory=list, max_length=2)
+
+    @model_validator(mode="after")
+    def read_content_and_citation_are_consistent(self) -> Self:
+        if self.has_been_read and (self.text is None or self.citation_index is None):
+            raise ValueError("a read Chunk requires text and a citation index")
+        if not self.has_been_read and (
+            self.text is not None or self.citation_index is not None
+        ):
+            raise ValueError("an unread Chunk cannot expose text or a citation index")
+        return self
+
+
+V3SemanticMemoryItem = Annotated[
+    V3EntityMemoryItem | V3SentenceMemoryItem | V3ChunkMemoryItem,
+    Field(discriminator="node_type"),
+]
+
+
+class ContextNodeReference(AgentModel):
+    """One audit-only mapping from a context index to a stable node ID."""
+
+    node_type: Literal["ENTITY", "SENTENCE", "CHUNK"]
+    stable_id: str = Field(min_length=1)
+    can_read: bool = False
+
+
+class ContextReferenceMap(AgentModel):
+    """Frozen reference namespaces associated with exactly one Policy call."""
+
+    memory: dict[int, ContextNodeReference] = Field(default_factory=dict)
+    citations: dict[int, EvidenceRef] = Field(default_factory=dict)
+
+
+class TypedContextNodeReference(AgentModel):
+    """One V3.1 typed ref resolved only within its frozen prompt snapshot."""
+
+    node_type: Literal["ENTITY", "SENTENCE", "CHUNK"]
+    stable_id: str = Field(min_length=1)
+    can_read: bool = False
+    can_use_as_evidence: bool = False
+
+
+class TypedContextReferenceMap(AgentModel):
+    """Single E#/S#/C# namespace associated with exactly one Policy call."""
+
+    typed_refs: dict[str, TypedContextNodeReference] = Field(
+        default_factory=dict
+    )
+
+
+class V3PolicyStateView(AgentModel):
+    step: int = Field(ge=0)
+    policy_attempts: int = Field(default=0, ge=0)
+    last_assessment: V3EvidenceAssessment | None = None
+    semantic_memory: list[V3SemanticMemoryItem] = Field(default_factory=list)
+    latest_event: dict[str, Any] | None = None
+    attempted_actions: list[dict[str, Any]] = Field(default_factory=list)
+    budget: PolicyBudgetView
+
+
+class V3PolicyView(AgentModel):
+    context_mode: Literal["semantic_memory_v3"] = "semantic_memory_v3"
+    instruction: Literal["Produce the next V3PolicyDecision."] = (
+        "Produce the next V3PolicyDecision."
+    )
+    policy_state: V3PolicyStateView
+
+
+class V31EntityMemoryItem(AgentModel):
+    ref: str = Field(min_length=2, pattern=_TYPED_NODE_REF_PATTERN)
+    node_type: Literal["ENTITY"] = "ENTITY"
+    canonical_name: str
+    entity_type: str | None = None
+
+
+class V31SentenceMemoryItem(AgentModel):
+    ref: str = Field(min_length=2, pattern=_TYPED_NODE_REF_PATTERN)
+    node_type: Literal["SENTENCE"] = "SENTENCE"
+    title: str | None = None
+    text: str
+    parent_chunk_ref: str = Field(
+        min_length=2,
+        pattern=r"^C[1-9][0-9]*$",
+    )
+
+
+class V31ChunkMemoryItem(AgentModel):
+    ref: str = Field(min_length=2, pattern=_TYPED_NODE_REF_PATTERN)
+    node_type: Literal["CHUNK"] = "CHUNK"
+    title: str | None = None
+    chunk_position: int = Field(ge=0)
+    has_been_read: bool
+    text: str | None = None
+    previews: list[str] = Field(default_factory=list, max_length=2)
+
+    @model_validator(mode="after")
+    def read_content_is_consistent(self) -> Self:
+        if self.has_been_read and self.text is None:
+            raise ValueError("a read Chunk requires full text")
+        if not self.has_been_read and self.text is not None:
+            raise ValueError("an unread Chunk cannot expose full text")
+        return self
+
+
+V31SemanticMemoryItem = Annotated[
+    V31EntityMemoryItem | V31SentenceMemoryItem | V31ChunkMemoryItem,
+    Field(discriminator="node_type"),
+]
+
+
+class V31PolicyStateView(AgentModel):
+    step: int = Field(ge=0)
+    policy_attempts: int = Field(default=0, ge=0)
+    last_assessment: V3EvidenceAssessment | None = None
+    semantic_memory: list[V31SemanticMemoryItem] = Field(default_factory=list)
+    latest_event: dict[str, Any] | None = None
+    attempted_actions: list[dict[str, Any]] = Field(default_factory=list)
+    budget: PolicyBudgetView | str
+
+
+class V31PolicyView(AgentModel):
+    context_mode: Literal[
+        "semantic_memory_v3_typed_refs",
+        "semantic_memory_v3_2",
+    ] = (
+        "semantic_memory_v3_typed_refs"
+    )
+    instruction: Literal["Produce the next V31PolicyDecision."] = (
+        "Produce the next V31PolicyDecision."
+    )
+    policy_state: V31PolicyStateView
+
+
+PolicyViewOutput = PolicyView | V3PolicyView | V31PolicyView
+
+
+class Message(AgentModel):
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+    def as_openai_input(self) -> dict[str, str]:
+        return {"role": self.role, "content": self.content}
+
+
+class PolicyStagePhase(StrEnum):
+    """Auditable phases of one progressive V2-2 policy cycle."""
+
+    ACTION_SELECTION = "action_selection"
+    ACTION_DRAFT = "action_draft"
+    ACTION_REPAIR = "action_repair"
+
+
+class PolicyStageRecord(AgentModel):
+    """Provider-call audit record for one V2-2 policy stage."""
+
+    phase: PolicyStagePhase
+    messages: list[Message] = Field(default_factory=list)
+    output: dict[str, Any] | None = None
+    error: str | None = None
+    action_type: ActionType | None = None
+    disclosed_skill_paths: list[str] = Field(default_factory=list)
+    disclosed_skill_hashes: dict[str, str] = Field(default_factory=dict)
+    usage: Usage = Field(default_factory=Usage)
+
+
 class StepRecord(AgentModel):
     step: int = Field(ge=1)
+    policy_attempt: int = Field(default=1, ge=1)
     # The raw Policy LLM decision uses episode-local S#/C#/E# handles.
-    decision: PolicyDecision | None = None
+    decision: PolicyDecisionOutput | None = None
+    # A narrowly repaired handle-form decision, when the source handle makes
+    # one inverse expansion direction unambiguous. The raw decision above is
+    # always retained for audit and SkillOpt diagnosis.
+    repaired_decision: PolicyDecision | None = None
+    repair_code: str | None = None
     # The Controller-owned audit form resolves those handles back to stable
     # substrate IDs before validation and execution.
     resolved_decision: PolicyDecision | None = None
@@ -610,7 +1240,11 @@ class StepRecord(AgentModel):
     state_before: ControllerState
     state_after: ControllerState
     usage: Usage = Field(default_factory=Usage)
-    policy_view: PolicyView | None = None
+    policy_view: PolicyViewOutput | None = None
+    context_reference_map: (
+        ContextReferenceMap | TypedContextReferenceMap | None
+    ) = None
+    policy_stages: list[PolicyStageRecord] = Field(default_factory=list)
 
 
 class TerminationReason(StrEnum):
@@ -645,18 +1279,14 @@ class EpisodeResult(AgentModel):
         return self.selected_evidence_refs
 
 
-class Message(AgentModel):
-    role: Literal["system", "user", "assistant"]
-    content: str
-
-    def as_openai_input(self) -> dict[str, str]:
-        return {"role": self.role, "content": self.content}
-
-
 def action_signature(action: AgentAction) -> str:
     """Return a deterministic signature used for duplicate-action detection."""
 
     payload = action.model_dump(mode="json", exclude_none=True)
+    # FINISH identity is its evidence selection. Rewording an answer must not
+    # make the same terminal action appear novel.
+    if isinstance(action, FinishAction):
+        payload.pop("answer", None)
     query = payload.get("query")
     if isinstance(query, str):
         payload["query"] = " ".join(query.casefold().split())

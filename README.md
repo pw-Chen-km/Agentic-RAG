@@ -5,6 +5,21 @@ HotpotQA contexts. The offline builder creates stable Document, Chunk, Sentence,
 Entity, Mention, and EntityAlias records. The online controller executes one
 structured `SEARCH`, `EXPAND`, `READ`, or `FINISH` decision per step.
 
+## Version iteration archive
+
+The repository intentionally keeps eight workflow modes for controlled
+architecture ablations, from the original `legacy` loop through V3.2. The
+Chinese technical archive includes one report and Mermaid flowchart per
+version, module-level input/output contracts, representative wire examples,
+and the fixed HotpotQA pilot results:
+
+- [Pre-singularity version overview](docs/version-iterations/README.md)
+- [Pilot experiment report](docs/version-iterations/09-pilot-experiments.md)
+
+The snapshot tag `pre-singularity-v3.2-20260806` marks the state described by
+those reports (「奇異點之前」). V3.2 has implementation and regression
+coverage at this snapshot, but no persisted Resample-20 inference result yet.
+
 ## Quick start
 
 ```bash
@@ -63,6 +78,10 @@ uv run agentic-rag run artifacts/hotpotqa \
 
 The formal config uses `gpt-5.6-terra`. The smoke config uses
 `gpt-5.6-luna`:
+
+`max_steps` now counts only validated environment actions. Policy validation
+failures use the separate `max_policy_attempts` budget and never consume a
+retrieval step; `max_consecutive_invalid_attempts` bounds retry loops.
 
 ```bash
 uv run agentic-rag run artifacts/hotpotqa \
@@ -239,14 +258,16 @@ uv sync --extra dev --extra skillopt
 uv run python -m spacy download en_core_web_sm
 ```
 
-Prepare the deterministic 6/6/6 split. Each split contains four bridge and
-two comparison questions, all using the global benchmark scope
+Prepare the deterministic 20/6/6 split. Training contains 16 bridge and four
+comparison questions; validation and test retain the original four bridge and
+two comparison questions. All items use the global benchmark scope
 `hotpotqa:benchmark_exact:dev`:
 
 ```bash
 uv run agentic-rag skillopt-prepare \
   --dataset-dir data/arag_hotpotqa \
-  --split-dir data/skillopt/hotpotqa_smoke
+  --split-dir data/skillopt/hotpotqa_smoke \
+  --train-size 20
 ```
 
 Build the substrate separately. `skillopt-prepare` never builds or mutates an
@@ -276,7 +297,7 @@ environment variables only in process memory. The key is never inserted into
 the flattened trainer config or an artifact. Policy, Answer, Judge, and
 Optimizer roles are configured for `gpt-5.6-luna`.
 
-The 6/6/6 split means **18 unique question IDs**, not exactly 18 Episode
+The 20/6/6 split means **32 unique question IDs**, not exactly 32 Episode
 executions. Native `ReflACTTrainer` first scores the initial skill on the
 validation set, validates candidate skills during training, and with
 `eval_test: true` evaluates both initial and best skills on test. This is the
@@ -343,3 +364,86 @@ SKILLOPT_SMOKE_SPLIT_DIR=data/skillopt/hotpotqa_smoke \
 OPENAI_API_KEY=... \
 uv run pytest -m skillopt_smoke tests/test_skillopt_live_smoke.py
 ```
+
+## Single-agent V2 Compact
+
+`agent.workflow_mode: single_agent_v2_compact` is the interface-cost ablation
+of V2. It keeps cumulative selected evidence, typed `S#`/`C#`/`E#` handles,
+handle resolution, validation, and the V2 Policy output schema. Only the
+Policy-facing context is compacted: semantic known nodes replace repeated
+capability fields, expansion legality is one minimal `expand_sources` map, and
+action history is serialized as short semantic summaries.
+
+The Luna HotpotQA profile is
+`configs/agentic_hotpotqa_luna_v2_compact.yaml`. Because state selection and
+references remain V2-style, this workflow is not V3 semantic memory.
+
+## Single-agent V2-2 progressive actions
+
+`agent.workflow_mode: single_agent_v2_2` separates each policy cycle into a
+root strategy call and an action-parameter call. Only the selected action skill
+is disclosed; validator recovery guidance and legal handle options appear only
+on the optional third repair call. Evidence selected by the root call is
+committed only after the complete action validates.
+
+On Windows PowerShell with local Ollama Qwen (thinking disabled):
+
+```powershell
+$env:HF_HUB_OFFLINE = "1"
+$env:TRANSFORMERS_OFFLINE = "1"
+uv run agentic-rag run artifacts/hotpotqa_benchmark_exact `
+  "Where was Marie Curie born?" `
+  --scope-id QUESTION_ID `
+  --skill-file skills/agentic-rag-v2-2/SKILL.md `
+  --config configs/agentic_hotpotqa_qwen35_9b_v2_2.yaml `
+  --output runs/v2_2_qwen35_9b
+```
+
+V2-2 is intentionally excluded from the in-memory SkillOpt candidate path.
+To run the non-SkillOpt operational matrix (the first fixed six items from
+train/validation/test for all five prepared datasets):
+
+```powershell
+.venv\Scripts\python.exe scripts\run_v22_fixed6_matrix.py `
+  --config configs\agentic_hotpotqa_qwen35_9b_v2_2.yaml `
+  --skill skills\agentic-rag-v2-2\SKILL.md `
+  --output runs\v22_qwen35_9b_fixed6
+```
+
+The matrix records answers for audit but does not call an LLM judge and does
+not use accuracy or speed as a completion gate. It is resumable with
+`--resume`.
+
+## Single-agent V3 semantic memory
+
+`agent.workflow_mode: single_agent_v3` enables the derived semantic-memory
+workflow. The Policy sees complete entity, sentence, and chunk content. Every
+prompt receives two frozen context-local reference namespaces: memory indices
+for EXPAND/READ and citation indices for FINISH. SEARCH remains an unrestricted
+action and no `S#`/`C#`/`E#` handle is exposed to the V3 Policy.
+
+The Ollama comparison profile is
+`configs/agentic_hotpotqa_qwen35_9b_v3.yaml` with strategy
+`skills/hotpotqa_single_agent_v3.md`.
+
+`agent.workflow_mode: single_agent_v3_action_catalog` is the V3 action-target
+variation. It preserves baseline V3 but adds a frozen, Policy-visible catalog
+of all structurally executable SEARCH templates, EXPAND source-index pairs,
+READ targets, and currently available FINISH citations. The Luna profile is
+`configs/agentic_hotpotqa_luna_v3_action_catalog.yaml`.
+
+`agent.workflow_mode: single_agent_v3_typed_refs` is the V3.1 reference
+ablation. It preserves the same automatic semantic memory and unrestricted
+SEARCH behavior, but replaces the separate memory/citation indices with one
+episode-stable typed namespace: E# for entities, S# for sentences, and C# for
+chunks. Context Builder freezes only the refs visible in each prompt;
+Controller resolves that frozen map without owning state. FINISH accepts
+visible S# refs and already-read C# refs. The Qwen profile is
+`configs/agentic_hotpotqa_qwen35_9b_v3_typed_refs.yaml`.
+
+`agent.workflow_mode: single_agent_v3_2` keeps the V3.1 semantic memory,
+typed-reference action contract, last assessment, and compact attempted-action
+history. It removes `latest_event` from the Policy-visible state and replaces
+the structured budget object with one compact line such as
+`Budget: 4 steps, 5 attempts, 3200 retrieval tokens left`. State Management
+and the audit trajectory still retain the complete Observation and budget.

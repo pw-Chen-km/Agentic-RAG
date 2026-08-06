@@ -55,7 +55,12 @@ def answer_provider_input(
         "needed to satisfy a long-form question, but do not add unsupported "
         "claims."
         if answer_mode is AnswerMode.LONG
-        else "Return a concise answer."
+        else (
+            "Return the shortest complete answer. Preserve every coordinated "
+            "role, qualifier, date, nationality, and comparison target that is "
+            "needed to answer the question and explicitly supported by the "
+            "evidence. Do not shorten a compound answer by dropping one part."
+        )
     )
     return [
         {

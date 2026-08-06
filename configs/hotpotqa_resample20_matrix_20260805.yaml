@@ -1,0 +1,34 @@
+experiment:
+  name: hotpotqa_resample20_seed20260805
+  split: data/evaluations/hotpotqa_resample20_seed20260805/questions.jsonl
+  split_sha256: 57fd2bf9871cd7fd310f5937810caa715539f55f7ffc8134103d0755865fec75
+  substrate: artifacts/hotpotqa_benchmark_exact
+  question_count: 20
+  bridge_count: 16
+  comparison_count: 4
+  excluded_prior_question_count: 32
+
+matrix:
+  models:
+    qwen:
+      v2_config: configs/agentic_hotpotqa_qwen35_9b_v2.yaml
+      v3_config: configs/agentic_hotpotqa_qwen35_9b_v3.yaml
+    luna:
+      v2_config: configs/agentic_hotpotqa_luna_v2.yaml
+      v3_config: configs/agentic_hotpotqa_luna_v3.yaml
+  skills:
+    v2:
+      a: skills/hotpotqa_v2_a_evidence_adaptive.md
+      b: skills/hotpotqa_v2_b_chunk_entity_expert.md
+      c: skills/hotpotqa_v2_c_posthoc_guarded.md
+    v3:
+      a: skills/hotpotqa_v3_a_baseline_clean.md
+      b: skills/hotpotqa_v3_b_chunk_entity_expert.md
+      c: skills/hotpotqa_v3_c_posthoc_guarded.md
+
+execution:
+  runner: scripts/run_hotpotqa_eval.py
+  output_root: runs/hotpotqa_resample20_seed20260805
+  hf_hub_offline: true
+  transformers_offline: true
+  resume_enabled: true
