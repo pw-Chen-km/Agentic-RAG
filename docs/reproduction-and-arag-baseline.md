@@ -12,7 +12,7 @@ A-RAG baseline 的單一重現入口。`data/`、`artifacts/`、`runs/`、`.env`
 | Agentic RAG repository | `https://github.com/pw-Chen-km/Agentic-RAG.git` |
 | A-RAG upstream | `https://github.com/Ayanami0730/arag.git` |
 | A-RAG commit | `a44de6b2216bf6791979c4b6ac4ae106212fa1a6` |
-| Dataset | `Ayanami0730/rag_test` |
+| Dataset collection | `Ayanami0730/rag_test`（五個 subsets） |
 | Dataset revision | `b9198a5a8702cc35c6df7542529357a9af95d928` |
 | HotpotQA scope | `hotpotqa:benchmark_exact:dev` |
 | Qwen | Ollama `qwen3.5:9b` |
@@ -24,18 +24,52 @@ A-RAG baseline 的單一重現入口。`data/`、`artifacts/`、`runs/`、`.env`
 | Held-out set | fixed resample-20, 16 bridge + 4 comparison |
 | SkillOpt | train 20 + validation 6 + test 6, seed 42 |
 
-Raw-data hashes:
+### 完整 raw dataset registry
+
+五套資料都來自同一個 pinned revision。`chunks`／`questions` 是原始資料筆數，
+不是 SkillOpt 或 held-out 題數。
+
+| Dataset | Chunks | Questions | `chunks.json` SHA-256 | `questions.json` SHA-256 |
+|---|---:|---:|---|---|
+| 2WikiMultiHopQA | 658 | 1,000 | `e92b8bcfcd2748100d60ad86819abe2e4cb318dc8d5f33b1aebdb0b4735c8aa8` | `246e43fb624413e38e11e3a582d5945185a3290efe4c2adbe32af2f112b70ab8` |
+| HotpotQA | 1,311 | 1,000 | `cb76f6fdb54e7b2853d51d400bacdba01c814baf43b74207bc79c2a06474d231` | `ecc641d532a4d2518f1ceb57627f2e41044e0c4fd07012bf0aaa02327dc770a9` |
+| Medical (GraphRAG-Bench) | 225 | 2,062 | `ffbc583386e145f807755d338c55201f4c2a924ba4beec7d363537a08b0c652e` | `022f41d22cd618c7d5f10c5056cf5385f75d8bd4f763b70cc093abb2e0d87753` |
+| MuSiQue | 1,354 | 1,000 | `41d439ad258a09b602cce4b4b4151747c0682f30ba64486fec819fc965e84630` | `42dfd487e7e08d0892ed94bd9e0d0e56744cd92239f41b190e156f563ab49fb4` |
+| Novel (GraphRAG-Bench) | 1,117 | 2,010 | `34f05833f0cab3956f2066f709b697ec4ee7b4b46c5474cd92d7d95e30e9d738` | `9d7a58fa0d613e46a96b85f461f0920d4f3ad47a322c85e392e2071362d5d963` |
+
+### 資料存在和正式 runtime 支援是兩件事
+
+目前乾淨的 V3.2 `main` 有意只保留 HotpotQA 的 builder、evaluation profile
+與 SkillOpt contract。其餘四套資料及既有 substrate 仍是研究資產，但重建與
+正式評估程式保存在：
 
 ```text
-hotpotqa/chunks.json
-cb76f6fdb54e7b2853d51d400bacdba01c814baf43b74207bc79c2a06474d231
-
-hotpotqa/questions.json
-ecc641d532a4d2518f1ceb57627f2e41044e0c4fd07012bf0aaa02327dc770a9
-
-held-out questions.jsonl
-57fd2bf9871cd7fd310f5937810caa715539f55f7ffc8134103d0755865fec75
+branch: codex/pre-singularity-version-archive
+tag:    pre-singularity-v3.2-20260806
 ```
+
+因此有兩種可重現層級：
+
+1. 要重現目前正式 V3.2 與 A-RAG comparison：使用 HotpotQA。
+2. 要重現奇異點前五資料集矩陣：checkout archive branch/tag，不要假設現在
+   `main` 的 HotpotQA-only evaluator 能正確處理 Medical/Novel 長答案或各資料集
+   的 task-type normalization。
+
+### 派生資料 registry
+
+| 資料 | 用途 | 大小 | SHA-256 |
+|---|---|---:|---|
+| HotpotQA SkillOpt train | optimizer training | 20 | `79f4e165a390af2ac7752e9aa4ca7765f94dc01821a828cb4f40e02f830826ea` |
+| HotpotQA SkillOpt validation | selection/gate | 6 | `67c9fcf7a25da604c976e74eeef4dd83b5b7d1b068da946e26cb6727db6d02fd` |
+| HotpotQA SkillOpt test | final SkillOpt test | 6 | `aa2107867a8f9faa406dae77a3aabc17780af093f239c6f334fef969f087e9a6` |
+| HotpotQA held-out resample | pre/post skill evaluation | 20 | `57fd2bf9871cd7fd310f5937810caa715539f55f7ffc8134103d0755865fec75` |
+| 2Wiki SkillOpt train/validation/test | historical smoke | 6/6/6 | `cdcc8f84abaed31a541a7ca8c8fd3a0517def593f2bf5161f691081d64df2b8c` / `64f5874df22e8d2d5b26f0f7f237334c8cde68bac57b838ed7e8b24eb9f0182f` / `bb9fc06552188d0fc4a55e398788208f84fb24f6523f589b4f1d937fddf4de20` |
+| Medical SkillOpt train/validation/test | historical smoke | 6/6/6 | `a7d9876e61620892de74e02ebe83b90f65ec2e623214a995e66369324a3884bb` / `74f5df0c2dab6f862b3089ea21c2a45582d4225e2c1ed430877d406f384054cc` / `9d9ba03cf802add8640996fa0dc347be14ee7ef67ee64bcbc47a7445433380fd` |
+| MuSiQue SkillOpt train/validation/test | historical smoke | 6/6/6 | `2d76bbfd88ea845e38d58321cb882db144630e1c8e48a390c30d45b8dcfc999f` / `abdd623845b3786ccaf6f61dcfaee0b95e03282225a73491aa7ea16897a5e87a` / `b462d6293a7219d81f5f07c3c3d94a8294bfd2784adc4ff3174cd1f744bfcacf` |
+| Novel SkillOpt train/validation/test | historical smoke | 6/6/6 | `675559e05c358c76d5a473f6ef6ad670ec10f470c8e3140d670113832eb0830e` / `e1df00d2e5010a31a1af92c168449d3124c8e983fcf2adcd74ea1d3d2671d8d0` / `785c76b574fa6b970790c260b1ea296cbbcf32645bc0fc898408b9581dd0c8d3` |
+
+非 HotpotQA split 的完整 hash 保存在各自的 `split_manifest.json`；複製後應以
+manifest 驗證，不要只比對上表的縮寫。
 
 每次正式實驗另記錄 `git rev-parse HEAD`、Ollama model digest、config hash
 與 skill hash。不要只寫「使用 main」，因為 main 會繼續演進。
@@ -66,38 +100,76 @@ Invoke-RestMethod http://localhost:11434/api/tags
 
 `.env` 只能留在本機，不得 commit。純 Ollama 流程不需要真正 API key。
 
-## 3. 取得相同 HotpotQA 原始資料
+## 3. 取得相同五套原始資料
 
 ```powershell
-git clone https://huggingface.co/datasets/Ayanami0730/rag_test data\arag_hotpotqa
-git -C data\arag_hotpotqa checkout b9198a5a8702cc35c6df7542529357a9af95d928
-git -C data\arag_hotpotqa lfs pull
+git clone https://huggingface.co/datasets/Ayanami0730/rag_test data\rag_test
+git -C data\rag_test checkout b9198a5a8702cc35c6df7542529357a9af95d928
+git -C data\rag_test lfs pull
 
-Get-FileHash data\arag_hotpotqa\hotpotqa\chunks.json -Algorithm SHA256
-Get-FileHash data\arag_hotpotqa\hotpotqa\questions.json -Algorithm SHA256
+Get-ChildItem data\rag_test -Recurse -Filter *.json |
+  Get-FileHash -Algorithm SHA256
 ```
 
-兩個 hash 必須與第 1 節完全相同。不同就停止，不要建立 index。
+十個 raw-file hash 必須與第 1 節完全相同。不同就停止，不要建立 index。
 
 ### 最快搬機方式
 
 若舊電腦仍可使用，直接複製下列 ignored directories 可省下重建時間：
 
 ```text
-data/arag_hotpotqa/
-data/skillopt/hotpotqa_smoke/
+data/rag_test/                         # 五個 raw datasets
+data/skillopt/                         # 五套 deterministic splits
 data/evaluations/hotpotqa_resample20_seed20260805/
-artifacts/hotpotqa_benchmark_exact/
-A-RAG/data/hotpotqa/index/        # 只供 A-RAG
+artifacts/hotpotqa_benchmark_exact/    # 正式 V3.2
+artifacts/*_benchmark_exact/           # 奇異點前其他四套
+A-RAG/data/*/index/                    # 每個 A-RAG dataset 各自的 index
 ```
 
 搬完仍要驗證 raw-data hash、`agentic-rag validate`，以及 A-RAG index 使用的
 embedding 名稱；不可只相信檔案成功複製。
 
+### 目前本機已有的五套 Agentic RAG substrates
+
+| Artifact | Scope | Chunks | Sentences | Entities | 約略大小 |
+|---|---|---:|---:|---:|---:|
+| `2wikimultihop_benchmark_exact` | `2wikimultihop:benchmark_exact:dev` | 658 | 24,316 | 24,130 | 92 MB |
+| `hotpotqa_benchmark_exact` | `hotpotqa:benchmark_exact:dev` | 1,311 | 46,935 | 36,380 | 162 MB |
+| `medical_benchmark_exact` | `medical:benchmark_exact:dev` | 225 | 13,493 | 1,794 | 29 MB |
+| `musique_benchmark_exact` | `musique:benchmark_exact:dev` | 1,354 | 47,709 | 38,239 | 166 MB |
+| `novel_benchmark_exact` | `novel:benchmark_exact:dev` | 1,117 | 47,510 | 17,569 | 125 MB |
+
+`artifacts/hotpotqa-mini/` 只有 5 chunks，是開發測試 fixture，不是正式研究
+dataset。若直接搬 substrate，逐一執行：
+
+```powershell
+Get-ChildItem artifacts -Directory | ForEach-Object {
+  uv run agentic-rag validate $_.FullName
+}
+```
+
+Manifest 內含建立時間與舊電腦的絕對 source path，所以「重新 build」後整份
+manifest 的 hash 不一定相同；真正必須相同的是 raw source hashes、embedding
+model/dimension、record counts、schema 與 scope。直接位元複製 artifact 時才適合
+再比對整個 directory 或 manifest hash。
+
+若要從 raw data 重建另外四套，應在另一個 checkout 使用 archive tag，避免把
+現在的 V3.2 `main` 切回多版本程式：
+
+```powershell
+git clone https://github.com/pw-Chen-km/Agentic-RAG.git Agentic-RAG-archive
+Set-Location Agentic-RAG-archive
+git checkout pre-singularity-v3.2-20260806
+uv sync --frozen --extra dev --extra skillopt
+```
+
+該版本保留 `arag_benchmark_exact` adapter、五套 dataset profiles、各資料集
+task-type normalization，以及 Medical/Novel 長答案 evaluation contract。
+
 ## 4. 建立 V3.2 substrate
 
 ```powershell
-uv run agentic-rag build data\arag_hotpotqa\hotpotqa artifacts\hotpotqa_benchmark_exact `
+uv run agentic-rag build data\rag_test\hotpotqa artifacts\hotpotqa_benchmark_exact `
   --corpus-id hotpotqa_benchmark_exact `
   --split dev `
   --dataset hotpotqa `
@@ -117,7 +189,7 @@ entities、embedding dimension 384、schema version 2.0。
 
 ```powershell
 uv run agentic-rag skillopt-prepare `
-  --dataset-dir data\arag_hotpotqa `
+  --dataset-dir data\rag_test `
   --split-dir data\skillopt\hotpotqa_smoke `
   --dataset hotpotqa `
   --seed 42 `
@@ -150,7 +222,7 @@ ids = [
     "5a7c8a3b55429935c91b5204", "5adfc77b554299603e4183ab",
 ]
 source = json.loads(
-    Path("data/arag_hotpotqa/hotpotqa/questions.json").read_text(encoding="utf-8")
+    Path("data/rag_test/hotpotqa/questions.json").read_text(encoding="utf-8")
 )
 by_id = {str(row["id"]): row for row in source}
 out = Path("data/evaluations/hotpotqa_resample20_seed20260805")
@@ -262,7 +334,7 @@ agent:
   verbose: false
 
 data:
-  chunks_file: "../data/arag_hotpotqa/hotpotqa/chunks.json"
+    chunks_file: "../data/rag_test/hotpotqa/chunks.json"
   index_dir: "data/hotpotqa/index"
 ```
 
@@ -270,7 +342,7 @@ data:
 
 ```powershell
 uv run python scripts\build_index.py `
-  --chunks ..\data\arag_hotpotqa\hotpotqa\chunks.json `
+  --chunks ..\data\rag_test\hotpotqa\chunks.json `
   --output data\hotpotqa\index `
   --model sentence-transformers/all-MiniLM-L6-v2 `
   --device cpu
@@ -326,6 +398,32 @@ uv run python scripts\batch_runner.py `
 `workers=1` 可避免單張 GPU 上的並行 request 改變 latency、OOM 與 token 行為。
 Batch runner 原生支援 checkpoint resume，重跑同一 output 會跳過已完成 ID。
 
+### A-RAG 的五資料集 baseline
+
+A-RAG 本身可以分別為五套 raw chunks 建 index；不要讓不同 dataset 共用同一個
+`index_dir`。為每套建立一份 config，只替換：
+
+```yaml
+data:
+  chunks_file: "../data/rag_test/<dataset>/chunks.json"
+  index_dir: "data/<dataset>/index"
+```
+
+然後以相同 dataset 的完整 questions 或固定 split 執行：
+
+```powershell
+uv run python scripts\batch_runner.py `
+  --config configs\<dataset>_qwen.yaml `
+  --questions ..\data\rag_test\<dataset>\questions.json `
+  --output results\<dataset>_qwen `
+  --workers 1
+```
+
+`<dataset>` 分別是 `2wikimultihop`、`hotpotqa`、`medical`、`musique`、
+`novel`。但目前 V3.2 `main` 的正式對照只涵蓋 HotpotQA；若要宣稱五資料集
+Agentic RAG vs A-RAG，Agentic RAG 端必須使用 archive evaluator，或先把四套
+profiles 乾淨地重新導入主線並重新驗證，不能用 HotpotQA judge contract 代替。
+
 ## 10. 轉成共同 summary 並評分
 
 先回到 Agentic-RAG root。舊 A-RAG normalization adapter 保存在 archive
@@ -377,9 +475,9 @@ baseline。
 ## 12. 最終重現檢查清單
 
 - `git status` 沒有把 `.env`、data、artifact、run 或 A-RAG 加入追蹤。
-- raw HotpotQA 兩個 SHA-256 正確。
+- 五套 raw datasets 共十個 SHA-256 正確。
 - held-out JSONL SHA-256 正確且恰好 20 題。
-- SkillOpt split 為 20/6/6，seed 42。
+- HotpotQA SkillOpt split 為 20/6/6；其他四套歷史 split 為 6/6/6；seed 皆為 42。
 - V3.2 substrate validation 通過且 record counts 正確。
 - Ollama 顯示 `qwen3.5:9b`，並記錄 model digest。
 - V3.2 與 A-RAG 都使用同一 raw chunks、20 questions、embedding model、workers。
