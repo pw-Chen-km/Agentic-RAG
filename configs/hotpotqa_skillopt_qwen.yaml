@@ -1,0 +1,48 @@
+run_name: hotpotqa_skillopt_qwen_thinking
+
+model:
+  backend: qwen_chat
+  optimizer: qwen3.5:9b
+  target: qwen3.5:9b
+  optimizer_backend: qwen_chat
+  target_backend: qwen_chat
+  qwen_chat_base_url: http://localhost:11434/v1
+  qwen_chat_api_key: ollama-local
+  qwen_chat_temperature: 0
+  qwen_chat_timeout_seconds: 600
+  qwen_chat_max_tokens: 8192
+  qwen_chat_enable_thinking: true
+
+train:
+  num_epochs: 1
+  train_size: 20
+  batch_size: 3
+  accumulation: 1
+  seed: 42
+
+gradient:
+  minibatch_size: 3
+  merge_batch_size: 3
+  analyst_workers: 1
+  max_analyst_rounds: 1
+  failure_only: false
+
+optimizer:
+  learning_rate: 1
+  min_learning_rate: 1
+  lr_scheduler: constant
+  skill_update_mode: patch
+  use_slow_update: false
+  use_meta_skill: false
+
+evaluation:
+  use_gate: true
+  sel_env_num: 6
+  test_env_num: 6
+  eval_test: true
+
+env:
+  name: agentic_rag_hotpotqa
+  workers: 1
+  workflow_label: qwen_thinking_full
+  judge_model: qwen3.5:9b

@@ -38,7 +38,9 @@ a retrieval step.
 
 See [architecture.md](docs/architecture.md),
 [action-contract.md](docs/action-contract.md), and
-[evaluation.md](docs/evaluation.md).
+[evaluation.md](docs/evaluation.md). For a clean-machine setup, pinned HotpotQA
+data, local Qwen SkillOpt, and the A-RAG baseline procedure, use the
+[reproduction and A-RAG baseline guide](docs/reproduction-and-arag-baseline.md).
 
 ## Install
 
