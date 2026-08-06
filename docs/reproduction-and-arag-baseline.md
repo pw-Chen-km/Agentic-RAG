@@ -123,7 +123,7 @@ data/skillopt/                         # 五套 deterministic splits
 data/evaluations/hotpotqa_resample20_seed20260805/
 artifacts/hotpotqa_benchmark_exact/    # 正式 V3.2
 artifacts/*_benchmark_exact/           # 奇異點前其他四套
-A-RAG/data/*/index/                    # 每個 A-RAG dataset 各自的 index
+A-RAG/data/*/index/                    # 若已建立；目前本機只有 HotpotQA
 ```
 
 搬完仍要驗證 raw-data hash、`agentic-rag validate`，以及 A-RAG index 使用的
