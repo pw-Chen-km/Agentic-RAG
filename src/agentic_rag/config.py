@@ -18,7 +18,6 @@ class BuildConfig(BaseModel):
     source_format: Literal[
         "hotpotqa_scoped",
         "hotpotqa_benchmark_exact",
-        "arag_benchmark_exact",
     ] = "hotpotqa_scoped"
     benchmark_scope_id: str | None = None
     validate_benchmark_profile: bool = False

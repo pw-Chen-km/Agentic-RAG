@@ -1,4 +1,4 @@
-"""Query-time agent configuration."""
+"""Configuration for the single semantic-memory agent workflow."""
 
 from __future__ import annotations
 
@@ -11,45 +11,25 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
-from agentic_rag.agent.models import (
-    DEFAULT_ENABLED_EXPANSIONS,
-    ContextMode,
-    ExpansionKind,
-)
+from agentic_rag.agent.models import DEFAULT_ENABLED_EXPANSIONS, ExpansionKind
 
 
 class ConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class PolicyConfig(ConfigModel):
-    """OpenAI policy configuration.
-
-    The historical class name remains the OpenAI configuration so existing
-    ``PolicyConfig()`` callers keep working unchanged.
-    """
-
+class OpenAIPolicyConfig(ConfigModel):
     provider: Literal["openai"] = "openai"
-    model: str = Field(default="gpt-5.6-terra", min_length=1)
-    max_retries: int = Field(default=2, ge=0, le=10)
-
-
-class AnswerConfig(ConfigModel):
-    """OpenAI answer-generator configuration (backward compatible)."""
-
-    provider: Literal["openai"] = "openai"
-    model: str = Field(default="gpt-5.6-terra", min_length=1)
+    model: str = Field(default="gpt-5.6-luna", min_length=1)
     max_retries: int = Field(default=2, ge=0, le=10)
 
 
 OllamaThink = bool | Literal["low", "medium", "high"] | None
 
 
-class OllamaConfig(ConfigModel):
-    """Fields shared by Ollama policy and answer generation."""
-
+class OllamaPolicyConfig(ConfigModel):
     provider: Literal["ollama"] = "ollama"
-    model: str = Field(min_length=1)
+    model: str = Field(default="qwen3.5:9b", min_length=1)
     host: str = Field(default="http://localhost:11434", min_length=1)
     temperature: float = Field(default=0.0, ge=0.0)
     think: OllamaThink = False
@@ -69,37 +49,27 @@ class OllamaConfig(ConfigModel):
     @field_validator("host")
     @classmethod
     def validate_ollama_host(cls, value: str) -> str:
-        invalid_message = (
-            "Ollama host must be a valid HTTP(S) URL with a hostname"
-        )
+        message = "Ollama host must be a valid HTTP(S) URL with a hostname"
         try:
             parsed = urlparse(value)
             hostname = (parsed.hostname or "").casefold().rstrip(".")
-            # Accessing ``port`` performs urllib's numeric/range validation.
             parsed.port
         except ValueError as exc:
-            raise PydanticCustomError(
-                "ollama_host_invalid",
-                invalid_message,
-            ) from exc
+            raise PydanticCustomError("ollama_host_invalid", message) from exc
         if (
             parsed.scheme.casefold() not in {"http", "https"}
             or not hostname
             or any(character.isspace() for character in value)
             or parsed.username is not None
             or parsed.password is not None
-            or bool(parsed.query)
-            or bool(parsed.fragment)
+            or parsed.query
+            or parsed.fragment
         ):
-            raise PydanticCustomError(
-                "ollama_host_invalid",
-                invalid_message,
-            )
+            raise PydanticCustomError("ollama_host_invalid", message)
         if hostname == "ollama.com" or hostname.endswith(".ollama.com"):
             raise PydanticCustomError(
                 "ollama_cloud_unsupported",
-                "Ollama Cloud does not support the structured output "
-                "required by the Agentic RAG provider",
+                "Ollama Cloud does not support the required structured output",
             )
         return value.rstrip("/")
 
@@ -117,39 +87,24 @@ class OllamaConfig(ConfigModel):
         return value
 
 
-class OllamaPolicyConfig(OllamaConfig):
-    """Ollama chat policy configuration."""
-
-
-class OllamaAnswerConfig(OllamaConfig):
-    """Ollama chat answer-generator configuration."""
-
-
 PolicyProviderConfig = Annotated[
-    PolicyConfig | OllamaPolicyConfig,
-    Field(discriminator="provider"),
-]
-AnswerProviderConfig = Annotated[
-    AnswerConfig | OllamaAnswerConfig,
+    OpenAIPolicyConfig | OllamaPolicyConfig,
     Field(discriminator="provider"),
 ]
 
 
 class AgentConfig(ConfigModel):
+    """One configuration surface; no architecture selector exists."""
+
     max_steps: int = Field(default=10, ge=1)
+    max_policy_attempts: int = Field(default=12, ge=1)
     max_retrieved_tokens: int = Field(default=12_000, ge=1)
-    context_mode: ContextMode = ContextMode.COMPACT_EVIDENCE
     enabled_expansions: tuple[ExpansionKind, ...] = DEFAULT_ENABLED_EXPANSIONS
-    policy: PolicyProviderConfig = Field(default_factory=PolicyConfig)
-    answer: AnswerProviderConfig = Field(default_factory=AnswerConfig)
+    policy: PolicyProviderConfig = Field(default_factory=OpenAIPolicyConfig)
 
-    @field_validator("policy", "answer", mode="before")
+    @field_validator("policy", mode="before")
     @classmethod
-    def omitted_provider_remains_openai(
-        cls, value: Any
-    ) -> Any:
-        """Preserve legacy mappings that predate provider selection."""
-
+    def omitted_provider_is_openai(cls, value: Any) -> Any:
         if isinstance(value, dict) and "provider" not in value:
             return {"provider": "openai", **value}
         return value
@@ -170,31 +125,24 @@ class AgentConfig(ConfigModel):
             loaded = yaml.safe_load(handle) or {}
         if not isinstance(loaded, dict):
             raise ValueError("agent config must be a YAML mapping")
-
-        raw: dict[str, Any]
-        if "agent" in loaded:
-            allowed_root_keys = {"agent", "policy", "answer"}
-            unknown_root_keys = sorted(set(loaded) - allowed_root_keys)
-            if unknown_root_keys:
-                raise ValueError(
-                    "unknown root key(s) in agent config: "
-                    + ", ".join(unknown_root_keys)
-                )
-            agent_section = loaded["agent"]
-            if not isinstance(agent_section, dict):
-                raise ValueError("agent must be a YAML mapping")
-            raw = dict(agent_section)
-            for section in ("policy", "answer"):
-                if section in loaded and section in raw:
-                    raise ValueError(
-                        f"{section} must be configured either under agent "
-                        "or at the YAML root, not both"
-                    )
-                if section in loaded:
-                    raw[section] = loaded[section]
-        else:
-            raw = dict(loaded)
+        if "agent" not in loaded:
+            return cls.model_validate(loaded)
+        unknown = sorted(set(loaded) - {"agent", "policy"})
+        if unknown:
+            raise ValueError("unknown root key(s) in agent config: " + ", ".join(unknown))
+        agent = loaded["agent"]
+        if not isinstance(agent, dict):
+            raise ValueError("agent must be a YAML mapping")
+        raw = dict(agent)
+        if "policy" in loaded:
+            if "policy" in raw:
+                raise ValueError("policy must be configured at one YAML level only")
+            raw["policy"] = loaded["policy"]
         return cls.model_validate(raw)
 
     def effective_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
+
+
+# A concise alias for callers that prefer the provider-specific name.
+PolicyConfig = OpenAIPolicyConfig

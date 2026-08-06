@@ -1,4 +1,4 @@
-"""SkillOpt-compatible plain Markdown skill documents."""
+"""Plain Markdown retrieval skills."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class SkillDocument(BaseModel):
-    """Exact Markdown contents plus a content-addressed version."""
+    """Exact Markdown content plus a content-addressed identifier."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -49,7 +49,5 @@ class SkillDocument(BaseModel):
     def write_snapshot(self, path: str | Path) -> Path:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        # Preserve the exact bytes represented by ``sha256``. Text-mode writes
-        # translate LF to CRLF on Windows and would corrupt that contract.
         destination.write_bytes(self.content.encode("utf-8"))
         return destination

@@ -1,33 +1,31 @@
 """Typed substrate and retrieval interfaces for Agentic RAG."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-from agentic_rag.adapters import (
-    ARAGBenchmarkAdapter,
+from agentic_rag.substrate.adapters import (
     HotpotQAAdapter,
     HotpotQABenchmarkExactAdapter,
     SourceAdapter,
 )
-from agentic_rag.benchmark_profiles import (
-    ARAG_DATASET_PROFILES,
-    AragDatasetProfile,
-    get_arag_dataset_profile,
+from agentic_rag.evaluation.profiles import (
+    DatasetProfile,
+    HOTPOTQA_PROFILE,
+    get_dataset_profile,
 )
 from agentic_rag.agent import AgentConfig, AgentController, AgentHarness
-from agentic_rag.bridge import SubstrateBridge
-from agentic_rag.builder import SubstrateBuilder
+from agentic_rag.substrate.bridge import SubstrateBridge
+from agentic_rag.substrate.builder import SubstrateBuilder
 from agentic_rag.config import BuildConfig
-from agentic_rag.retrieval import Retriever
-from agentic_rag.storage import Substrate
+from agentic_rag.substrate.retrieval import Retriever
+from agentic_rag.substrate.storage import Substrate
 
 __all__ = [
     "BuildConfig",
     "AgentConfig",
     "AgentController",
     "AgentHarness",
-    "ARAGBenchmarkAdapter",
-    "ARAG_DATASET_PROFILES",
-    "AragDatasetProfile",
+    "DatasetProfile",
+    "HOTPOTQA_PROFILE",
     "HotpotQAAdapter",
     "HotpotQABenchmarkExactAdapter",
     "Retriever",
@@ -35,5 +33,5 @@ __all__ = [
     "Substrate",
     "SubstrateBridge",
     "SubstrateBuilder",
-    "get_arag_dataset_profile",
+    "get_dataset_profile",
 ]

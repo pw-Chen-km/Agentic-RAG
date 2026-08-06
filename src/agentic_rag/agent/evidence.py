@@ -4,16 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from agentic_rag.agent.handle_resolution import resolve_evidence_ref
 from agentic_rag.agent.models import (
     ChunkRef,
-    ControllerState,
+    EpisodeState,
     EvidenceRef,
     ResolvedEvidence,
     SentenceRef,
 )
 from agentic_rag.errors import EvidenceEligibilityError, NodeNotFoundError
-from agentic_rag.storage import Substrate
+from agentic_rag.substrate.storage import Substrate
 
 
 class EvidenceResolver:
@@ -23,16 +22,13 @@ class EvidenceResolver:
     def resolve(
         self,
         refs: Iterable[EvidenceRef],
-        state: ControllerState,
+        state: EpisodeState,
         scope_id: str,
     ) -> list[ResolvedEvidence]:
         self.substrate.require_scope(scope_id)
         unique: list[EvidenceRef] = []
         seen: set[tuple[str, str]] = set()
-        for policy_ref in refs:
-            ref = resolve_evidence_ref(
-                policy_ref, state, self.substrate
-            )
+        for ref in refs:
             key = (ref.unit, ref.id)
             if key not in seen:
                 seen.add(key)

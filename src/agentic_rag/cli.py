@@ -12,13 +12,12 @@ from typing import Annotated, Iterator
 import typer
 from pydantic import ValidationError
 
-from agentic_rag.agent.answer import AnswerGenerationError
 from agentic_rag.agent.config import AgentConfig
 from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.agent.policy import PolicyError
-from agentic_rag.bridge import SubstrateBridge
-from agentic_rag.builder import SubstrateBuilder
-from agentic_rag.benchmark_profiles import get_arag_dataset_profile
+from agentic_rag.substrate.bridge import SubstrateBridge
+from agentic_rag.substrate.builder import SubstrateBuilder
+from agentic_rag.evaluation.profiles import get_dataset_profile
 from agentic_rag.config import BuildConfig
 from agentic_rag.errors import AgenticRAGError
 from agentic_rag.evaluation import (
@@ -26,17 +25,13 @@ from agentic_rag.evaluation import (
     EvaluationError,
     OpenAIResponsesJudge,
 )
-from agentic_rag.retrieval import Retriever
+from agentic_rag.substrate.retrieval import Retriever
 from agentic_rag.skillopt.adapter import AgenticRAGSkillOptAdapter
-from agentic_rag.skillopt.benchmark import (
-    prepare_arag_smoke_splits,
-    split_manifest_profile,
-    validate_arag_smoke_lineage,
-)
-from agentic_rag.storage import Substrate
+from agentic_rag.substrate.storage import Substrate
 from agentic_rag.skillopt.data import (
     HOTPOTQA_BENCHMARK_SCOPE_ID,
     prepare_hotpotqa_smoke_splits,
+    split_manifest_profile,
     validate_hotpotqa_smoke_lineage,
 )
 from agentic_rag.skillopt.trainer import (
@@ -44,7 +39,7 @@ from agentic_rag.skillopt.trainer import (
     load_skillopt_config,
     run_skillopt_training,
 )
-from agentic_rag.validation import validate_substrate
+from agentic_rag.substrate.validation import validate_substrate
 
 app = typer.Typer(
     name="agentic-rag",
@@ -239,7 +234,7 @@ def build_command(
         bool,
         typer.Option(
             "--validate-benchmark-profile",
-            help="Require the selected A-RAG profile's reference counts.",
+            help="Require the pinned HotpotQA reference counts.",
         ),
     ] = False,
 ) -> None:
@@ -379,6 +374,7 @@ def run_command(
             exists=True,
             dir_okay=False,
             readable=True,
+            help="Skill Markdown file loaded into every Policy context.",
         ),
     ],
     config_path: Annotated[
@@ -416,8 +412,6 @@ def run_command(
         _fail(exc)
     except PolicyError as exc:
         _fail_typed("policy_error", str(exc))
-    except AnswerGenerationError as exc:
-        _fail_typed("answer_generation_error", str(exc))
     except ValidationError as exc:
         _fail_typed("agent_configuration_error", str(exc))
     except (OSError, ValueError) as exc:
@@ -451,16 +445,24 @@ def skillopt_prepare_command(
         str,
         typer.Option(
             "--dataset",
-            help=(
-                "A-RAG subset: musique, hotpotqa, 2wikimultihop, "
-                "medical, or novel."
-            ),
+            help="Dataset profile; only hotpotqa is supported.",
         ),
     ] = "hotpotqa",
     seed: Annotated[int, typer.Option("--seed")] = 42,
     split_size: Annotated[
         int, typer.Option("--split-size", min=1)
     ] = 6,
+    train_size: Annotated[
+        int | None,
+        typer.Option(
+            "--train-size",
+            min=6,
+            help=(
+                "HotpotQA-only training size. Keeps validation/test at "
+                "the fixed six-item evaluation contract."
+            ),
+        ),
+    ] = None,
     allow_subset: Annotated[
         bool,
         typer.Option(
@@ -469,29 +471,25 @@ def skillopt_prepare_command(
         ),
     ] = False,
 ) -> None:
-    """Prepare deterministic profile-stratified A-RAG smoke splits."""
+    """Prepare deterministic HotpotQA SkillOpt splits."""
 
     try:
-        profile = get_arag_dataset_profile(dataset)
-        if (
-            profile.key == "hotpotqa"
-            and seed == 42
-            and split_size == 6
-            and not allow_subset
-        ):
-            manifest = prepare_hotpotqa_smoke_splits(
-                dataset_dir=dataset_dir,
-                split_dir=split_dir,
+        profile = get_dataset_profile(dataset)
+        if seed != 42 or split_size != 6:
+            raise ValueError("the canonical HotpotQA split uses seed 42 and size 6")
+        if train_size is not None and allow_subset:
+            raise ValueError(
+                "--train-size cannot be combined with --allow-subset"
             )
-        else:
-            manifest = prepare_arag_smoke_splits(
-                dataset_dir=dataset_dir,
-                split_dir=split_dir,
-                dataset=profile,
-                seed=seed,
-                split_size=split_size,
-                validate_reference_counts=not allow_subset,
-            )
+        prepare_kwargs = {
+            "dataset_dir": dataset_dir,
+            "split_dir": split_dir,
+            "expected_question_count": None if allow_subset else profile.reference_question_count,
+            "expected_chunk_count": None if allow_subset else profile.reference_chunk_count,
+        }
+        if train_size is not None:
+            prepare_kwargs["train_size"] = train_size
+        manifest = prepare_hotpotqa_smoke_splits(**prepare_kwargs)
         _emit(manifest)
     except AgenticRAGError as exc:
         _fail(exc)
@@ -544,9 +542,9 @@ def skillopt_train_command(
     output: Annotated[
         Path,
         typer.Option("--output", file_okay=False),
-    ] = Path("runs/skillopt_arag_smoke"),
+    ] = Path("runs/skillopt_hotpotqa"),
 ) -> None:
-    """Run the native SkillOpt v0.2.0 workflow for one A-RAG profile."""
+    """Run the native SkillOpt v0.2.0 workflow for HotpotQA."""
 
     try:
         substrate = Substrate.open(substrate_path)
@@ -554,57 +552,41 @@ def skillopt_train_command(
         split_manifest = json.loads(
             (split_dir / "split_manifest.json").read_text(encoding="utf-8")
         )
-        if split_manifest.get("schema_version") == "1.0":
-            if profile.key != "hotpotqa":
-                raise ValueError(
-                    "legacy SkillOpt split manifests support only HotpotQA"
-                )
-            scope_id = HOTPOTQA_BENCHMARK_SCOPE_ID
-            substrate.require_scope(scope_id)
-            if substrate.manifest.source_format not in {
-                "hotpotqa_benchmark_exact",
-                "arag_benchmark_exact",
-            }:
-                raise ValueError(
-                    "HotpotQA SkillOpt requires a benchmark_exact substrate"
-                )
-            validate_hotpotqa_smoke_lineage(split_dir, substrate.manifest)
-            lineage_report = {
-                "dataset": profile.key,
-                "scope_id": scope_id,
-            }
-        else:
-            lineage_report = validate_arag_smoke_lineage(
-                split_dir,
-                substrate.manifest,
-                dataset=profile,
+        scope_id = HOTPOTQA_BENCHMARK_SCOPE_ID
+        substrate.require_scope(scope_id)
+        if substrate.manifest.source_format != "hotpotqa_benchmark_exact":
+            raise ValueError(
+                "HotpotQA SkillOpt requires a hotpotqa_benchmark_exact substrate"
             )
-            scope_id = str(lineage_report["scope_id"])
-            substrate.require_scope(scope_id)
-        selection_metadata = split_manifest.get("selection")
-        declared_split_size = (
-            selection_metadata.get("split_size")
-            if isinstance(selection_metadata, dict)
-            else None
-        )
-        workflow_split_size = (
-            declared_split_size
-            if isinstance(declared_split_size, int)
-            and not isinstance(declared_split_size, bool)
-            and declared_split_size > 0
-            else 6
-        )
+        validate_hotpotqa_smoke_lineage(split_dir, substrate.manifest)
+        split_metadata = split_manifest.get("splits")
+        if not isinstance(split_metadata, dict):
+            raise ValueError("split manifest has no splits mapping")
+
+        def split_count(split_name: str) -> int:
+            metadata = split_metadata.get(split_name)
+            count = metadata.get("count") if isinstance(metadata, dict) else None
+            if (
+                not isinstance(count, int)
+                or isinstance(count, bool)
+                or count < 1
+            ):
+                raise ValueError(
+                    f"split manifest {split_name} count must be positive"
+                )
+            return count
+
+        workflow_train_size = split_count("train")
+        workflow_validation_size = split_count("validation")
+        workflow_test_size = split_count("test")
 
         agent_config = AgentConfig.from_yaml(agent_config_path)
         if (
             agent_config.policy.provider != "openai"
-            or agent_config.answer.provider != "openai"
             or agent_config.policy.model != "gpt-5.6-luna"
-            or agent_config.answer.model != "gpt-5.6-luna"
         ):
             raise ValueError(
-                "workflow smoke requires OpenAI gpt-5.6-luna for both "
-                "Policy and Answer roles"
+                "SkillOpt workflow requires OpenAI gpt-5.6-luna Policy"
             )
         if not skill_file.read_text(encoding="utf-8").strip():
             raise ValueError("initial SkillOpt Markdown must not be blank")
@@ -642,7 +624,7 @@ def skillopt_train_command(
             "optimizer_model": "gpt-5.6-luna",
             "target_model": "gpt-5.6-luna",
             "num_epochs": 1,
-            "train_size": workflow_split_size,
+            "train_size": workflow_train_size,
             "batch_size": 3,
             "accumulation": 1,
             "seed": 42,
@@ -658,8 +640,8 @@ def skillopt_train_command(
             "use_slow_update": False,
             "use_meta_skill": False,
             "use_gate": True,
-            "sel_env_num": workflow_split_size,
-            "test_env_num": workflow_split_size,
+            "sel_env_num": workflow_validation_size,
+            "test_env_num": workflow_test_size,
             "eval_test": True,
             "workers": 1,
             "judge_model": "gpt-5.6-luna",

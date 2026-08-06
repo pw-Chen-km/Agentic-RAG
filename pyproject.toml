@@ -1,7 +1,7 @@
 [project]
-name = "agentic-rag-substrate"
-version = "0.1.0"
-description = "Typed multi-granularity substrate for agentic retrieval-augmented generation"
+name = "agentic-rag"
+version = "0.2.0"
+description = "Single-agent semantic-memory retrieval-augmented generation"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 classifiers = [
@@ -48,8 +48,8 @@ addopts = "-q"
 testpaths = ["tests"]
 markers = [
     "real_models: downloads and exercises real spaCy/scispaCy/MiniLM models",
-    "openai_smoke: opt-in live gpt-5.6-luna policy and answer API smoke test",
-    "ollama_smoke: opt-in live local Ollama policy and answer API smoke test",
+    "openai_smoke: opt-in live gpt-5.6-luna Policy smoke test",
+    "ollama_smoke: opt-in live local Ollama Policy smoke test",
     "skillopt_smoke: opt-in live 18-question SkillOpt workflow smoke test",
 ]
 

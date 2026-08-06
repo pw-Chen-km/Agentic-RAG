@@ -190,61 +190,12 @@ def _skillopt_conversation(trajectory: Any) -> list[dict[str, Any]]:
 
         decision = step.get("decision")
         decision = decision if isinstance(decision, Mapping) else {}
-        outcome = step.get("outcome")
-        outcome = outcome if isinstance(outcome, Mapping) else {}
-
-        action = _first_not_none(
-            step.get("action"),
-            decision.get("action"),
-        )
-        assessment = _first_not_none(
-            step.get("assessment"),
-            decision.get("assessment"),
-            step.get("reasoning"),
-        )
-        agent_visible_observation = _first_not_none(
-            step.get("agent_visible_observation"),
-            step.get("policy_observation"),
-        )
-        observation = _first_not_none(
-            step.get("observation"),
-            outcome.get("observation"),
-        )
-        validation = _first_not_none(
-            step.get("validation"),
-            step.get("validation_error"),
-            outcome.get("validation"),
-            outcome.get("validation_error"),
-        )
-
-        # SkillOpt must learn from the same handle-safe semantic feedback that
-        # the target Policy saw.  The raw stable-ID Observation remains in
-        # episode.json/io_trace.json for replay and audit, but is only a legacy
-        # fallback for older trajectory records without this projection.
-        if agent_visible_observation is not None:
-            feedback = agent_visible_observation
-        elif observation is not None and validation is not None:
-            feedback: Any = {
-                "observation": observation,
-                "validation": validation,
-            }
-        elif observation is not None:
-            feedback = observation
-        elif validation is not None:
-            feedback = validation
-        else:
-            feedback = step.get("env_feedback")
-
         conversation.append(
             {
-                "step": _first_not_none(
-                    step.get("step"),
-                    step.get("step_index"),
-                    position,
-                ),
-                "action": action,
-                "reasoning": assessment,
-                "env_feedback": feedback,
+                "step": step.get("step", position),
+                "action": decision.get("action"),
+                "reasoning": decision.get("assessment"),
+                "env_feedback": step.get("agent_visible_observation"),
             }
         )
     return conversation

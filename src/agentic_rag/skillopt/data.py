@@ -1,4 +1,4 @@
-"""Deterministic A-RAG HotpotQA smoke-split preparation.
+"""Deterministic HotpotQA smoke-split preparation.
 
 This module owns evaluation data, including gold answers.  Target-agent code
 must consume only the ``id``, ``question``, and ``scope_id`` fields projected
@@ -15,10 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from agentic_rag.benchmark_profiles import (
-    ARAG_DATASET_REPO_ID,
-    ARAG_DATASET_REVISION,
-    get_arag_dataset_profile,
+from agentic_rag.evaluation.profiles import (
+    DatasetProfile,
+    HOTPOTQA_DATASET_REPO_ID,
+    HOTPOTQA_DATASET_REVISION,
+    get_dataset_profile,
 )
 from agentic_rag.errors import InputFormatError
 from agentic_rag.skillopt.lineage import (
@@ -31,17 +32,17 @@ from agentic_rag.skillopt.lineage import (
     validate_source_lineage as _validate_source_lineage,
 )
 
-ARAG_HOTPOTQA_SUBSET: Final = "hotpotqa"
-_HOTPOTQA_PROFILE: Final = get_arag_dataset_profile("hotpotqa")
+HOTPOTQA_SUBSET: Final = "hotpotqa"
+_HOTPOTQA_PROFILE: Final = get_dataset_profile("hotpotqa")
 HOTPOTQA_BENCHMARK_SCOPE_ID: Final = _HOTPOTQA_PROFILE.scope_id("dev")
-ARAG_HOTPOTQA_QUESTION_COUNT: Final = (
+HOTPOTQA_QUESTION_COUNT: Final = (
     _HOTPOTQA_PROFILE.reference_question_count
 )
-ARAG_HOTPOTQA_CHUNK_COUNT: Final = _HOTPOTQA_PROFILE.reference_chunk_count
-ARAG_HOTPOTQA_QUESTIONS_SHA256: Final = (
+HOTPOTQA_CHUNK_COUNT: Final = _HOTPOTQA_PROFILE.reference_chunk_count
+HOTPOTQA_QUESTIONS_SHA256: Final = (
     "ecc641d532a4d2518f1ceb57627f2e41044e0c4fd07012bf0aaa02327dc770a9"
 )
-ARAG_HOTPOTQA_CHUNKS_SHA256: Final = (
+HOTPOTQA_CHUNKS_SHA256: Final = (
     "cb76f6fdb54e7b2853d51d400bacdba01c814baf43b74207bc79c2a06474d231"
 )
 SMOKE_SPLIT_SEED: Final = 42
@@ -49,6 +50,10 @@ SMOKE_SPLIT_ORDER: Final = ("train", "validation", "test")
 SMOKE_BRIDGE_PER_SPLIT: Final = 4
 SMOKE_COMPARISON_PER_SPLIT: Final = 2
 SELECTION_ALGORITHM: Final = "sha256(f'{seed}\\0{question_id}')-v1"
+EXTENDED_SPLIT_SCHEMA_VERSION: Final = "1.1"
+TRAIN_EXTENSION_ALGORITHM: Final = (
+    "sha256(f'{seed}\\0{question_id}')-v1-preserve-eval-extend-train"
+)
 
 QuestionType = Literal["bridge", "comparison"]
 
@@ -57,8 +62,7 @@ QuestionType = Literal["bridge", "comparison"]
 class SmokeBenchmarkItem:
     """One scored benchmark item used by a SkillOpt rollout.
 
-    ``answer`` is evaluation-only.  It must never be included in the target
-    Policy or Answer Generator input.
+    ``answer`` is evaluation-only. It must never be included in Policy input.
     """
 
     id: str
@@ -84,20 +88,35 @@ def prepare_hotpotqa_smoke_splits(
     split_dir: Path,
     *,
     seed: int = SMOKE_SPLIT_SEED,
-    expected_question_count: int | None = ARAG_HOTPOTQA_QUESTION_COUNT,
-    expected_chunk_count: int | None = ARAG_HOTPOTQA_CHUNK_COUNT,
+    train_size: int = 6,
+    expected_question_count: int | None = HOTPOTQA_QUESTION_COUNT,
+    expected_chunk_count: int | None = HOTPOTQA_CHUNK_COUNT,
 ) -> dict[str, Any]:
-    """Validate a local pinned A-RAG dataset and write 6/6/6 smoke splits.
+    """Validate HotpotQA and write deterministic SkillOpt splits.
 
     The default count checks identify the exact reduced HotpotQA benchmark.
     Tests and deliberately reduced local fixtures may override the two
-    expected counts without changing the selection algorithm.
+    expected counts without changing the selection algorithm.  The default
+    remains the historical 6/6/6 contract.  A larger ``train_size`` preserves
+    every validation/test item and extends only the training split.
     """
 
     if not isinstance(seed, int):
         raise InputFormatError("Smoke split seed must be an integer")
     _validate_expected_count("question", expected_question_count)
     _validate_expected_count("Chunk", expected_chunk_count)
+    train_type_counts = _train_type_counts(train_size)
+    split_type_counts = {
+        "train": train_type_counts,
+        "validation": {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT,
+            "comparison": SMOKE_COMPARISON_PER_SPLIT,
+        },
+        "test": {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT,
+            "comparison": SMOKE_COMPARISON_PER_SPLIT,
+        },
+    }
 
     chunks_path, questions_path = _resolve_hotpotqa_files(dataset_dir)
     chunks = _load_json(chunks_path)
@@ -105,21 +124,25 @@ def prepare_hotpotqa_smoke_splits(
     chunk_count = _validate_chunks(chunks, expected_chunk_count)
     items = _validate_questions(questions, expected_question_count)
     if (
-        expected_question_count == ARAG_HOTPOTQA_QUESTION_COUNT
-        and expected_chunk_count == ARAG_HOTPOTQA_CHUNK_COUNT
+        expected_question_count == HOTPOTQA_QUESTION_COUNT
+        and expected_chunk_count == HOTPOTQA_CHUNK_COUNT
     ):
         _require_sha256(
             questions_path,
-            expected=ARAG_HOTPOTQA_QUESTIONS_SHA256,
+            expected=HOTPOTQA_QUESTIONS_SHA256,
             role="questions.json",
         )
         _require_sha256(
             chunks_path,
-            expected=ARAG_HOTPOTQA_CHUNKS_SHA256,
+            expected=HOTPOTQA_CHUNKS_SHA256,
             role="chunks.json",
         )
 
-    selected = _select_splits(items, seed=seed)
+    selected = _select_splits(
+        items,
+        seed=seed,
+        train_type_counts=train_type_counts,
+    )
     split_dir.mkdir(parents=True, exist_ok=True)
 
     output_files: dict[str, dict[str, Any]] = {}
@@ -143,13 +166,42 @@ def prepare_hotpotqa_smoke_splits(
         }
 
     type_counts = Counter(item.question_type for item in items)
+    extended_train = train_size != 6
+    selection = (
+        {
+            "seed": seed,
+            "algorithm": TRAIN_EXTENSION_ALGORITHM,
+            "split_order": list(SMOKE_SPLIT_ORDER),
+            "train_size": train_size,
+            "validation_size": 6,
+            "test_size": 6,
+            "per_split_by_question_type": split_type_counts,
+            "preserves_v1_validation_and_test": True,
+        }
+        if extended_train
+        else {
+            "seed": seed,
+            "algorithm": SELECTION_ALGORITHM,
+            "split_order": list(SMOKE_SPLIT_ORDER),
+            "per_split": {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+                "total": (
+                    SMOKE_BRIDGE_PER_SPLIT
+                    + SMOKE_COMPARISON_PER_SPLIT
+                ),
+            },
+        }
+    )
     manifest: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": (
+            EXTENDED_SPLIT_SCHEMA_VERSION if extended_train else "1.0"
+        ),
         "purpose": "workflow_smoke",
         "dataset": {
-            "repo_id": ARAG_DATASET_REPO_ID,
-            "revision": ARAG_DATASET_REVISION,
-            "subset": ARAG_HOTPOTQA_SUBSET,
+            "repo_id": HOTPOTQA_DATASET_REPO_ID,
+            "revision": HOTPOTQA_DATASET_REVISION,
+            "subset": HOTPOTQA_SUBSET,
             "scope_id": HOTPOTQA_BENCHMARK_SCOPE_ID,
             "question_count": len(items),
             "chunk_count": chunk_count,
@@ -163,19 +215,7 @@ def prepare_hotpotqa_smoke_splits(
                 ),
             },
         },
-        "selection": {
-            "seed": seed,
-            "algorithm": SELECTION_ALGORITHM,
-            "split_order": list(SMOKE_SPLIT_ORDER),
-            "per_split": {
-                "bridge": SMOKE_BRIDGE_PER_SPLIT,
-                "comparison": SMOKE_COMPARISON_PER_SPLIT,
-                "total": (
-                    SMOKE_BRIDGE_PER_SPLIT
-                    + SMOKE_COMPARISON_PER_SPLIT
-                ),
-            },
-        },
+        "selection": selection,
         "splits": {
             split_name: {
                 "count": len(selected[split_name]),
@@ -202,6 +242,28 @@ def prepare_hotpotqa_smoke_splits(
         + "\n",
     )
     return manifest
+
+
+def split_manifest_profile(
+    split_dir: str | Path,
+    *,
+    expected_dataset: str | None = None,
+) -> DatasetProfile:
+    """Resolve and validate the HotpotQA profile declared by a split."""
+
+    manifest = _load_json(Path(split_dir) / "split_manifest.json")
+    if not isinstance(manifest, Mapping):
+        raise InputFormatError("split_manifest.json must contain an object")
+    dataset = manifest.get("dataset")
+    subset = dataset.get("subset") if isinstance(dataset, Mapping) else None
+    profile = get_dataset_profile(str(subset or expected_dataset or "hotpotqa"))
+    if expected_dataset is not None:
+        expected = get_dataset_profile(expected_dataset)
+        if profile.key != expected.key:
+            raise InputFormatError(
+                f"split manifest dataset is {profile.key!r}; expected {expected.key!r}"
+            )
+    return profile
 
 
 def load_smoke_split(path: Path) -> tuple[SmokeBenchmarkItem, ...]:
@@ -243,8 +305,8 @@ def validate_hotpotqa_smoke_lineage(
     split_dir: Path,
     substrate_manifest: object,
     *,
-    expected_question_count: int = ARAG_HOTPOTQA_QUESTION_COUNT,
-    expected_chunk_count: int = ARAG_HOTPOTQA_CHUNK_COUNT,
+    expected_question_count: int = HOTPOTQA_QUESTION_COUNT,
+    expected_chunk_count: int = HOTPOTQA_CHUNK_COUNT,
 ) -> dict[str, Any]:
     """Verify prepared splits and their source identity before training.
 
@@ -256,7 +318,7 @@ def validate_hotpotqa_smoke_lineage(
       must match the source artifacts recorded when the substrate was built.
 
     The second check prevents a valid split from being paired with an index
-    built from a different A-RAG corpus checkout.
+    built from a different upstream corpus checkout.
     """
 
     _validate_expected_count("question", expected_question_count)
@@ -269,9 +331,11 @@ def validate_hotpotqa_smoke_lineage(
     manifest = _load_json(manifest_path)
     if not isinstance(manifest, dict):
         raise InputFormatError("split_manifest.json must contain an object")
-    if manifest.get("schema_version") != "1.0":
+    schema_version = manifest.get("schema_version")
+    if schema_version not in {"1.0", EXTENDED_SPLIT_SCHEMA_VERSION}:
         raise InputFormatError(
-            "split manifest schema_version must be '1.0'"
+            "split manifest schema_version must be '1.0' or "
+            f"{EXTENDED_SPLIT_SCHEMA_VERSION!r}"
         )
     if manifest.get("purpose") != "workflow_smoke":
         raise InputFormatError(
@@ -280,9 +344,9 @@ def validate_hotpotqa_smoke_lineage(
 
     dataset = _require_mapping(manifest, "dataset", "split manifest")
     expected_dataset_values = {
-        "repo_id": ARAG_DATASET_REPO_ID,
-        "revision": ARAG_DATASET_REVISION,
-        "subset": ARAG_HOTPOTQA_SUBSET,
+        "repo_id": HOTPOTQA_DATASET_REPO_ID,
+        "revision": HOTPOTQA_DATASET_REVISION,
+        "subset": HOTPOTQA_SUBSET,
         "scope_id": HOTPOTQA_BENCHMARK_SCOPE_ID,
         "question_count": expected_question_count,
         "chunk_count": expected_chunk_count,
@@ -310,20 +374,55 @@ def validate_hotpotqa_smoke_lineage(
         )
 
     selection = _require_mapping(manifest, "selection", "split manifest")
-    expected_selection = {
-        "seed": SMOKE_SPLIT_SEED,
-        "algorithm": SELECTION_ALGORITHM,
-        "split_order": list(SMOKE_SPLIT_ORDER),
-        "per_split": {
-            "bridge": SMOKE_BRIDGE_PER_SPLIT,
-            "comparison": SMOKE_COMPARISON_PER_SPLIT,
-            "total": SMOKE_BRIDGE_PER_SPLIT + SMOKE_COMPARISON_PER_SPLIT,
-        },
-    }
+    if schema_version == "1.0":
+        expected_split_counts = {
+            split_name: {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+            }
+            for split_name in SMOKE_SPLIT_ORDER
+        }
+        expected_selection = {
+            "seed": SMOKE_SPLIT_SEED,
+            "algorithm": SELECTION_ALGORITHM,
+            "split_order": list(SMOKE_SPLIT_ORDER),
+            "per_split": {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+                "total": (
+                    SMOKE_BRIDGE_PER_SPLIT
+                    + SMOKE_COMPARISON_PER_SPLIT
+                ),
+            },
+        }
+    else:
+        train_size = selection.get("train_size")
+        train_counts = _train_type_counts(train_size)
+        expected_split_counts = {
+            "train": train_counts,
+            "validation": {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+            },
+            "test": {
+                "bridge": SMOKE_BRIDGE_PER_SPLIT,
+                "comparison": SMOKE_COMPARISON_PER_SPLIT,
+            },
+        }
+        expected_selection = {
+            "seed": SMOKE_SPLIT_SEED,
+            "algorithm": TRAIN_EXTENSION_ALGORITHM,
+            "split_order": list(SMOKE_SPLIT_ORDER),
+            "train_size": train_size,
+            "validation_size": 6,
+            "test_size": 6,
+            "per_split_by_question_type": expected_split_counts,
+            "preserves_v1_validation_and_test": True,
+        }
     if dict(selection) != expected_selection:
         raise InputFormatError(
-            "split manifest selection does not match the workflow-smoke "
-            "seed, algorithm, and 4/2 split contract"
+            "split manifest selection does not match the deterministic "
+            "HotpotQA split contract"
         )
 
     record_counts = _object_field(substrate_manifest, "record_counts")
@@ -344,18 +443,18 @@ def validate_hotpotqa_smoke_lineage(
 
     source_report = _validate_source_lineage(dataset, substrate_manifest)
     if (
-        expected_question_count == ARAG_HOTPOTQA_QUESTION_COUNT
-        and expected_chunk_count == ARAG_HOTPOTQA_CHUNK_COUNT
+        expected_question_count == HOTPOTQA_QUESTION_COUNT
+        and expected_chunk_count == HOTPOTQA_CHUNK_COUNT
     ):
         pinned_hashes = {
-            "questions": ARAG_HOTPOTQA_QUESTIONS_SHA256,
-            "chunks": ARAG_HOTPOTQA_CHUNKS_SHA256,
+            "questions": HOTPOTQA_QUESTIONS_SHA256,
+            "chunks": HOTPOTQA_CHUNKS_SHA256,
         }
         for role, expected_hash in pinned_hashes.items():
             if source_report[role]["sha256"] != expected_hash:
                 raise InputFormatError(
                     f"split/substrate {role} source SHA-256 does not match "
-                    f"pinned A-RAG revision {ARAG_DATASET_REVISION}"
+                    f"pinned upstream revision {HOTPOTQA_DATASET_REVISION}"
                 )
     split_metadata = _require_mapping(manifest, "splits", "split manifest")
     if set(split_metadata) != set(SMOKE_SPLIT_ORDER):
@@ -397,23 +496,22 @@ def validate_hotpotqa_smoke_lineage(
             )
 
         items = load_smoke_split(split_path)
-        if any(item.source != ARAG_HOTPOTQA_SUBSET for item in items):
+        if any(item.source != HOTPOTQA_SUBSET for item in items):
             raise InputFormatError(
                 f"{expected_filename} contains a non-HotpotQA source"
             )
         actual_counts = Counter(item.question_type for item in items)
-        expected_counts = {
-            "bridge": SMOKE_BRIDGE_PER_SPLIT,
-            "comparison": SMOKE_COMPARISON_PER_SPLIT,
-        }
+        expected_counts = expected_split_counts[split_name]
         if len(items) != sum(expected_counts.values()):
             raise InputFormatError(
-                f"workflow smoke {split_name} split must contain 6 items"
+                f"workflow smoke {split_name} split must contain "
+                f"{sum(expected_counts.values())} items"
             )
         if dict(actual_counts) != expected_counts:
             raise InputFormatError(
                 f"workflow smoke {split_name} split must contain exactly "
-                "4 bridge and 2 comparison questions"
+                f"{expected_counts['bridge']} bridge and "
+                f"{expected_counts['comparison']} comparison questions"
             )
         if metadata.get("count") != len(items):
             raise InputFormatError(
@@ -455,17 +553,17 @@ def validate_hotpotqa_smoke_lineage(
 def _resolve_hotpotqa_files(dataset_dir: Path) -> tuple[Path, Path]:
     if not dataset_dir.is_dir():
         raise InputFormatError(
-            f"A-RAG dataset directory does not exist: {dataset_dir}"
+            f"HotpotQA dataset directory does not exist: {dataset_dir}"
         )
     direct = dataset_dir
-    nested = dataset_dir / ARAG_HOTPOTQA_SUBSET
+    nested = dataset_dir / HOTPOTQA_SUBSET
     for root in (direct, nested):
         chunks_path = root / "chunks.json"
         questions_path = root / "questions.json"
         if chunks_path.is_file() and questions_path.is_file():
             return chunks_path, questions_path
     raise InputFormatError(
-        "A-RAG dataset directory must contain chunks.json and questions.json "
+        "HotpotQA dataset directory must contain chunks.json and questions.json "
         "directly or under hotpotqa/"
     )
 
@@ -473,38 +571,38 @@ def _resolve_hotpotqa_files(dataset_dir: Path) -> tuple[Path, Path]:
 def _validate_chunks(raw: Any, expected_count: int | None) -> int:
     if not isinstance(raw, list):
         raise InputFormatError(
-            "A-RAG HotpotQA chunks.json must be a JSON list"
+            "HotpotQA chunks.json must be a JSON list"
         )
     seen_ids: set[int] = set()
     positions: list[int] = []
     for index, entry in enumerate(raw):
         if not isinstance(entry, str):
             raise InputFormatError(
-                f"A-RAG HotpotQA Chunk {index} must be an 'id:text' string"
+                f"HotpotQA Chunk {index} must be an 'id:text' string"
             )
         source_id, separator, text = entry.partition(":")
         if not separator or not source_id.isdigit():
             raise InputFormatError(
-                f"A-RAG HotpotQA Chunk {index} must use a numeric 'id:text' prefix"
+                f"HotpotQA Chunk {index} must use a numeric 'id:text' prefix"
             )
         numeric_id = int(source_id)
         if numeric_id in seen_ids:
             raise InputFormatError(
-                f"Duplicate A-RAG HotpotQA Chunk ID: {numeric_id}"
+                f"Duplicate HotpotQA Chunk ID: {numeric_id}"
             )
         if not text.strip():
             raise InputFormatError(
-                f"A-RAG HotpotQA Chunk {numeric_id} has empty text"
+                f"HotpotQA Chunk {numeric_id} has empty text"
             )
         seen_ids.add(numeric_id)
         positions.append(numeric_id)
     if positions != list(range(len(raw))):
         raise InputFormatError(
-            "A-RAG HotpotQA Chunk IDs must be ordered and contiguous from 0"
+            "HotpotQA Chunk IDs must be ordered and contiguous from 0"
         )
     if expected_count is not None and len(raw) != expected_count:
         raise InputFormatError(
-            "A-RAG HotpotQA chunks.json contains "
+            "HotpotQA chunks.json contains "
             f"{len(raw)} Chunks; expected {expected_count}"
         )
     return len(raw)
@@ -515,41 +613,41 @@ def _validate_questions(
 ) -> tuple[SmokeBenchmarkItem, ...]:
     if not isinstance(raw, list):
         raise InputFormatError(
-            "A-RAG HotpotQA questions.json must be a JSON list"
+            "HotpotQA questions.json must be a JSON list"
         )
     items: list[SmokeBenchmarkItem] = []
     seen_ids: set[str] = set()
     for index, row in enumerate(raw):
         if not isinstance(row, dict):
             raise InputFormatError(
-                f"A-RAG HotpotQA question {index} must be an object"
+                f"HotpotQA question {index} must be an object"
             )
         if "evidence" not in row:
             raise InputFormatError(
-                f"A-RAG HotpotQA question {index} is missing evidence"
+                f"HotpotQA question {index} is missing evidence"
             )
         item = _smoke_item_from_row(
             {
                 **row,
                 "scope_id": HOTPOTQA_BENCHMARK_SCOPE_ID,
             },
-            location=f"A-RAG HotpotQA question {index}",
+            location=f"HotpotQA question {index}",
             require_global_scope=True,
         )
-        if item.source != ARAG_HOTPOTQA_SUBSET:
+        if item.source != HOTPOTQA_SUBSET:
             raise InputFormatError(
-                f"A-RAG HotpotQA question {item.id} has source "
+                f"HotpotQA question {item.id} has source "
                 f"{item.source!r}; expected 'hotpotqa'"
             )
         if item.id in seen_ids:
             raise InputFormatError(
-                f"Duplicate A-RAG HotpotQA question ID: {item.id}"
+                f"Duplicate HotpotQA question ID: {item.id}"
             )
         seen_ids.add(item.id)
         items.append(item)
     if expected_count is not None and len(items) != expected_count:
         raise InputFormatError(
-            "A-RAG HotpotQA questions.json contains "
+            "HotpotQA questions.json contains "
             f"{len(items)} questions; expected {expected_count}"
         )
     return tuple(items)
@@ -592,8 +690,18 @@ def _smoke_item_from_row(
 
 
 def _select_splits(
-    items: tuple[SmokeBenchmarkItem, ...], *, seed: int
+    items: tuple[SmokeBenchmarkItem, ...],
+    *,
+    seed: int,
+    train_type_counts: Mapping[str, int] | None = None,
 ) -> dict[str, tuple[SmokeBenchmarkItem, ...]]:
+    requested_train_counts = dict(
+        train_type_counts
+        or {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT,
+            "comparison": SMOKE_COMPARISON_PER_SPLIT,
+        }
+    )
     by_type: dict[QuestionType, list[SmokeBenchmarkItem]] = {
         "bridge": [],
         "comparison": [],
@@ -604,10 +712,13 @@ def _select_splits(
         ("bridge", SMOKE_BRIDGE_PER_SPLIT),
         ("comparison", SMOKE_COMPARISON_PER_SPLIT),
     ):
-        required = required_per_split * len(SMOKE_SPLIT_ORDER)
+        train_extra = requested_train_counts[question_type] - required_per_split
+        required = (
+            required_per_split * len(SMOKE_SPLIT_ORDER) + train_extra
+        )
         if len(by_type[question_type]) < required:
             raise InputFormatError(
-                f"A-RAG HotpotQA smoke split needs at least {required} "
+                f"HotpotQA split needs at least {required} "
                 f"{question_type} questions; found {len(by_type[question_type])}"
             )
         by_type[question_type].sort(key=lambda item: _rank(item.id, seed))
@@ -632,12 +743,81 @@ def _select_splits(
         bridge_offset += SMOKE_BRIDGE_PER_SPLIT
         comparison_offset += SMOKE_COMPARISON_PER_SPLIT
 
+    if requested_train_counts != {
+        "bridge": SMOKE_BRIDGE_PER_SPLIT,
+        "comparison": SMOKE_COMPARISON_PER_SPLIT,
+    }:
+        train_items = list(result["train"])
+        reserved_by_type = {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT * len(SMOKE_SPLIT_ORDER),
+            "comparison": (
+                SMOKE_COMPARISON_PER_SPLIT * len(SMOKE_SPLIT_ORDER)
+            ),
+        }
+        for question_type in ("bridge", "comparison"):
+            base_count = (
+                SMOKE_BRIDGE_PER_SPLIT
+                if question_type == "bridge"
+                else SMOKE_COMPARISON_PER_SPLIT
+            )
+            extra_count = requested_train_counts[question_type] - base_count
+            start = reserved_by_type[question_type]
+            train_items.extend(
+                by_type[question_type][start : start + extra_count]
+            )
+        result["train"] = tuple(
+            sorted(train_items, key=lambda item: _rank(item.id, seed))
+        )
+
     selected_ids = [item.id for split in result.values() for item in split]
     if len(selected_ids) != len(set(selected_ids)):
         raise InputFormatError(
             "Deterministic smoke split unexpectedly selected duplicate IDs"
         )
     return result
+
+
+def _train_type_counts(train_size: int) -> dict[str, int]:
+    if not isinstance(train_size, int) or isinstance(train_size, bool):
+        raise InputFormatError("train_size must be an integer")
+    if train_size < 6:
+        raise InputFormatError("train_size must be at least 6")
+    if train_size == 6:
+        return {
+            "bridge": SMOKE_BRIDGE_PER_SPLIT,
+            "comparison": SMOKE_COMPARISON_PER_SPLIT,
+        }
+
+    reference_counts = dict(_HOTPOTQA_PROFILE.reference_task_type_counts)
+    total = sum(reference_counts.values())
+    exact = {
+        question_type: train_size * count / total
+        for question_type, count in reference_counts.items()
+    }
+    counts = {
+        question_type: int(value)
+        for question_type, value in exact.items()
+    }
+    remaining = train_size - sum(counts.values())
+    for question_type in sorted(
+        counts,
+        key=lambda value: (
+            -(exact[value] - counts[value]),
+            -reference_counts[value],
+            value,
+        ),
+    )[:remaining]:
+        counts[question_type] += 1
+    minimums = {
+        "bridge": SMOKE_BRIDGE_PER_SPLIT,
+        "comparison": SMOKE_COMPARISON_PER_SPLIT,
+    }
+    if any(counts[key] < minimum for key, minimum in minimums.items()):
+        raise InputFormatError(
+            "extended train_size must preserve at least 4 bridge and 2 "
+            "comparison questions"
+        )
+    return {key: counts[key] for key in ("bridge", "comparison")}
 
 
 def _rank(question_id: str, seed: int) -> tuple[str, str]:
@@ -658,6 +838,6 @@ def _require_sha256(path: Path, *, expected: str, role: str) -> None:
     actual = _sha256(path)
     if actual != expected:
         raise InputFormatError(
-            f"A-RAG HotpotQA {role} SHA-256 {actual} does not match "
-            f"pinned revision {ARAG_DATASET_REVISION} ({expected})"
+            f"HotpotQA {role} SHA-256 {actual} does not match "
+            f"pinned revision {HOTPOTQA_DATASET_REVISION} ({expected})"
         )

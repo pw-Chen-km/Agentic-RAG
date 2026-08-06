@@ -203,8 +203,8 @@ def _build_rollout_result(
         fail_reason = episode.error_code
     elif evaluation.hard == 0:
         # SkillOpt's shared reflector reads this compact header plus the
-        # conversation trajectory; the final Answer Generator output is not
-        # part of conversation.json.  Include it here so train reflection can
+        # conversation trajectory. Include the final Policy answer here so
+        # train reflection can
         # compare the actual failure with its hidden reference_text.
         prediction = (episode.answer or "<empty answer>").strip()
         fail_reason = (

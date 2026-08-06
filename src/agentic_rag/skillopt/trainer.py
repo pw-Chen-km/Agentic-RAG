@@ -147,7 +147,7 @@ def run_skillopt_training(
         "final_metrics": final_metrics,
         "target_and_judge_usage": target_and_judge_usage,
         # SkillOpt's native token tracker records reflection/merge/update
-        # stages.  Preserve it here beside our Policy/Answer/Judge counters
+        # stages. Preserve it here beside our Policy/Judge counters
         # so one file contains the complete stage-level cost ledger.
         "optimizer_usage": optimizer_usage,
     }
@@ -168,12 +168,7 @@ def summarize_rollout_usage(out_root: str | Path) -> dict[str, Any]:
             "input_tokens": 0,
             "output_tokens": 0,
             "reasoning_tokens": 0,
-        },
-        "answer": {
-            "calls": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "reasoning_tokens": 0,
+            "total_tokens": 0,
         },
         "judge": {
             "calls": 0,
@@ -197,23 +192,16 @@ def summarize_rollout_usage(out_root: str | Path) -> dict[str, Any]:
         totals["episodes"] += 1
         totals["policy"]["calls"] += int(usage.get("policy_calls", 0))
         totals["policy"]["input_tokens"] += int(
-            usage.get("policy_input_tokens", 0)
+            usage.get("input_tokens", 0)
         )
         totals["policy"]["output_tokens"] += int(
-            usage.get("policy_output_tokens", 0)
+            usage.get("output_tokens", 0)
         )
         totals["policy"]["reasoning_tokens"] += int(
-            usage.get("policy_reasoning_tokens", 0)
+            usage.get("reasoning_tokens", 0)
         )
-        totals["answer"]["calls"] += int(usage.get("answer_calls", 0))
-        totals["answer"]["input_tokens"] += int(
-            usage.get("answer_input_tokens", 0)
-        )
-        totals["answer"]["output_tokens"] += int(
-            usage.get("answer_output_tokens", 0)
-        )
-        totals["answer"]["reasoning_tokens"] += int(
-            usage.get("answer_reasoning_tokens", 0)
+        totals["policy"]["total_tokens"] += int(
+            usage.get("total_tokens", 0)
         )
         totals["retrieved_tokens"] += int(usage.get("retrieved_tokens", 0))
         for key in (

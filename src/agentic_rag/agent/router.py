@@ -7,19 +7,18 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from agentic_rag.agent.expansion import ExpansionEngine
-from agentic_rag.agent.handle_resolution import resolve_action
 from agentic_rag.agent.models import (
-    AgentAction,
-    ControllerState,
-    ExpandAction,
+    EpisodeState,
     Observation,
     ObservationStatus,
-    ReadAction,
+    ResolvedAction,
+    ResolvedExpandAction,
+    ResolvedReadAction,
     SearchAction,
 )
 from agentic_rag.errors import NodeNotFoundError
-from agentic_rag.retrieval import Retriever
-from agentic_rag.storage import Substrate
+from agentic_rag.substrate.retrieval import Retriever
+from agentic_rag.substrate.storage import Substrate
 
 _TOKEN_RE = re.compile(r"(?u)\b\w+\b|[^\w\s]")
 _TEXT_KEYS = frozenset(
@@ -47,17 +46,13 @@ class ActionRouter:
 
     def execute(
         self,
-        action: AgentAction,
-        state: ControllerState,
+        action: ResolvedAction,
+        state: EpisodeState,
         *,
         question: str,
         scope_id: str,
         action_id: str,
     ) -> Observation:
-        # Controller validation normally supplies an already-resolved action.
-        # Resolve defensively here as well so direct Router callers cannot pass
-        # policy handles into the stable-ID substrate APIs.
-        action = resolve_action(action, state, self.substrate)
         if isinstance(action, SearchAction):
             hits = self.retriever.search(
                 query=action.query,
@@ -74,7 +69,7 @@ class ActionRouter:
                 "target": action.target.value,
                 "query_used": action.query,
             }
-        elif isinstance(action, ExpandAction):
+        elif isinstance(action, ResolvedExpandAction):
             expanded = self.expansion_engine.expand(
                 action, question, scope_id
             )
@@ -88,7 +83,7 @@ class ActionRouter:
                 ),
                 "internal_request": _json_value(expanded.internal_request),
             }
-        elif isinstance(action, ReadAction):
+        elif isinstance(action, ResolvedReadAction):
             self.substrate.require_scope(scope_id)
             if action.chunk_id not in self.substrate.chunk_ids_by_scope[scope_id]:
                 raise NodeNotFoundError(
@@ -323,7 +318,7 @@ def _collect_visibility(
 
 def _novelty(
     delta: Mapping[str, list[str]],
-    state: ControllerState,
+    state: EpisodeState,
 ) -> tuple[list[str], list[str]]:
     previously_visible = (
         state.visible_entity_ids

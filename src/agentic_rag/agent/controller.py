@@ -1,27 +1,19 @@
-"""The provider-neutral one-decision-per-step agent controller."""
+"""Stateless orchestration for the one-decision-per-turn agent loop."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from uuid import uuid4
 
-from agentic_rag.agent.answer import (
-    AnswerGenerationError,
-    AnswerGenerator,
-)
-from agentic_rag.agent.context import (
-    PolicyContextBuilder,
-    project_observation_for_policy,
-)
+from agentic_rag.agent.context import PolicyContextBuilder
 from agentic_rag.agent.evidence import EvidenceResolver
 from agentic_rag.agent.models import (
-    ControllerState,
     EpisodeResult,
-    FinishAction,
+    EpisodeState,
+    Message,
     Observation,
     ObservationStatus,
-    PolicyView,
-    StepRecord,
+    ResolvedFinishAction,
     TerminationReason,
     Usage,
     ValidationStatus,
@@ -32,38 +24,53 @@ from agentic_rag.agent.policy import (
     PolicyResponseError,
     PolicyTransportError,
 )
+from agentic_rag.agent.references import ReferenceResolutionError, resolve_decision
 from agentic_rag.agent.router import ActionRouter
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.agent.state import StateUpdater
+from agentic_rag.agent.state_management import (
+    AttemptEvent,
+    EpisodeStateManager,
+    EpisodeStateManagerFactory,
+)
 from agentic_rag.agent.validator import DecisionValidator
-from agentic_rag.errors import AgenticRAGError
+
+
+BUDGET_FINALIZE_INSTRUCTION = (
+    "Retrieval is closed because its budget is exhausted. Return FINISH using "
+    "only currently visible eligible evidence. Do not SEARCH, EXPAND, or READ."
+)
 
 
 class AgentController:
+    """Coordinate collaborators without owning episode state or history."""
+
     def __init__(
         self,
         *,
         policy: PolicyClient,
-        answer_generator: AnswerGenerator,
         context_builder: PolicyContextBuilder,
         validator: DecisionValidator,
         router: ActionRouter,
         evidence_resolver: EvidenceResolver,
         skill: SkillDocument,
         max_steps: int = 10,
+        max_policy_attempts: int = 12,
         max_retrieved_tokens: int = 12_000,
         state_updater: StateUpdater | None = None,
     ) -> None:
         self.policy = policy
-        self.answer_generator = answer_generator
         self.context_builder = context_builder
         self.validator = validator
         self.router = router
         self.evidence_resolver = evidence_resolver
         self.skill = skill
         self.max_steps = max_steps
+        self.max_policy_attempts = max_policy_attempts
         self.max_retrieved_tokens = max_retrieved_tokens
-        self.state_updater = state_updater or StateUpdater(router.substrate)
+        self.state_manager_factory = EpisodeStateManagerFactory(
+            state_updater or StateUpdater(router.substrate)
+        )
 
     def run_episode(
         self,
@@ -75,354 +82,200 @@ class AgentController:
         if not question.strip():
             raise ValueError("question must not be blank")
         self.router.substrate.require_scope(scope_id)
-        episode_id = episode_id or f"{scope_id}-{uuid4().hex}"
-        state = ControllerState.initial(
+        manager = self.state_manager_factory.create(
+            episode_id=episode_id or f"{scope_id}-{uuid4().hex}",
+            question=question,
+            scope_id=scope_id,
             max_steps=self.max_steps,
+            max_policy_attempts=self.max_policy_attempts,
             max_retrieved_tokens=self.max_retrieved_tokens,
         )
-        trajectory: list[StepRecord] = []
-        total_usage = Usage()
 
-        while (
-            state.remaining_step_budget > 0
-            and state.remaining_retrieved_token_budget > 0
-        ):
-            state_before = state.model_copy(deep=True)
-            built_context = self.context_builder.build(
+        while manager.can_continue:
+            state = manager.snapshot()
+            built = self.context_builder.build(
                 question,
                 self.skill,
                 state,
-                trajectory,
+                manager.trajectory_snapshot(),
                 scope_id=scope_id,
             )
-            messages = built_context.messages
-            policy_view = built_context.policy_view
             try:
-                decision = self.policy.decide(messages)
+                decision = self.policy.decide(
+                    built.messages,
+                    decision_format=built.decision_format,
+                )
             except PolicyResponseError as exc:
-                policy_usage = self._policy_usage()
-                total_usage = total_usage + policy_usage
+                usage = self._policy_usage()
                 observation = Observation(
-                    action_id=f"step-{state.step + 1}",
+                    action_id=manager.next_action_id,
                     status=ObservationStatus.INVALID_ACTION,
                     error_code="invalid_policy_response",
                     message=str(exc),
                 )
-                state = self.state_updater.apply(
-                    state,
-                    assessment=None,
-                    observation=observation,
-                    action_signature=None,
-                    commit_assessment=False,
-                )
-                trajectory.append(
-                    StepRecord(
-                        step=state.step,
+                manager.record_attempt(
+                    AttemptEvent(
                         decision=None,
+                        resolved_decision=None,
                         validation_status=ValidationStatus.INVALID,
                         validation_error=str(exc),
                         observation=observation,
-                        agent_visible_observation=(
-                            project_observation_for_policy(
-                                observation, state
-                            )
-                        ),
-                        state_before=state_before,
-                        state_after=state.model_copy(deep=True),
-                        usage=policy_usage,
-                        policy_view=policy_view,
+                        assessment=None,
+                        action_signature=None,
+                        usage=usage,
+                        policy_view=built.policy_view,
+                        context_reference_map=built.reference_map,
+                        commit_assessment=False,
+                        consume_step=False,
+                        invalid_attempt=True,
                     )
                 )
                 continue
             except (PolicyConfigurationError, PolicyTransportError) as exc:
-                total_usage = total_usage + self._policy_usage()
-                return self._result(
-                    episode_id=episode_id,
-                    question=question,
-                    scope_id=scope_id,
+                manager.add_usage(self._policy_usage())
+                return manager.result(
                     reason=TerminationReason.POLICY_ERROR,
-                    state=state,
-                    trajectory=trajectory,
-                    usage=total_usage,
                     error_code="policy_error",
                     error_message=str(exc),
                 )
-            except Exception as exc:  # defensive provider boundary
-                total_usage = total_usage + self._policy_usage()
-                return self._result(
-                    episode_id=episode_id,
-                    question=question,
-                    scope_id=scope_id,
+            except Exception as exc:
+                manager.add_usage(self._policy_usage())
+                return manager.result(
                     reason=TerminationReason.POLICY_ERROR,
-                    state=state,
-                    trajectory=trajectory,
-                    usage=total_usage,
                     error_code="policy_error",
                     error_message=str(exc),
                 )
 
-            policy_usage = self._policy_usage()
-            total_usage = total_usage + policy_usage
-            validation = self.validator.validate(decision, state, scope_id)
-            resolved_decision = validation.resolved_decision
-            if not validation.ok:
-                status = (
-                    ObservationStatus.DUPLICATE_ACTION
-                    if validation.code == "duplicate_action"
-                    else ObservationStatus.INVALID_ACTION
-                )
+            usage = self._policy_usage()
+            try:
+                resolved = resolve_decision(decision, built.reference_map)
+            except ReferenceResolutionError as exc:
                 observation = Observation(
-                    action_id=f"step-{state.step + 1}",
-                    status=status,
-                    action=(
-                        resolved_decision.action
-                        if resolved_decision is not None
-                        else decision.action
-                    ),
-                    error_code=validation.code,
-                    message=validation.message,
+                    action_id=manager.next_action_id,
+                    status=ObservationStatus.INVALID_ACTION,
+                    error_code=exc.code,
+                    message=exc.message,
                 )
-                state = self.state_updater.apply(
-                    state,
-                    assessment=decision.assessment,
-                    observation=observation,
-                    # Only validated/executed actions participate in duplicate
-                    # suppression. A state-dependent invalid action (for
-                    # example READ before its Chunk becomes visible) must be
-                    # retryable after the missing prerequisite is satisfied.
-                    action_signature=None,
-                    commit_assessment=False,
-                )
-                trajectory.append(
-                    StepRecord(
-                        step=state.step,
+                manager.record_attempt(
+                    AttemptEvent(
                         decision=decision,
-                        resolved_decision=resolved_decision,
+                        resolved_decision=None,
                         validation_status=ValidationStatus.INVALID,
-                        validation_error=validation.message,
+                        validation_error=exc.message,
                         observation=observation,
-                        agent_visible_observation=(
-                            project_observation_for_policy(
-                                observation, state
-                            )
-                        ),
-                        state_before=state_before,
-                        state_after=state.model_copy(deep=True),
-                        usage=policy_usage,
-                        policy_view=policy_view,
+                        assessment=decision.assessment,
+                        action_signature=None,
+                        usage=usage,
+                        policy_view=built.policy_view,
+                        context_reference_map=built.reference_map,
+                        commit_assessment=False,
+                        consume_step=False,
+                        invalid_attempt=True,
                     )
                 )
                 continue
 
-            if resolved_decision is None:
-                raise RuntimeError(
-                    "valid decisions must include a resolved decision"
-                )
-
-            if isinstance(resolved_decision.action, FinishAction):
-                resolved = self.evidence_resolver.resolve(
-                    resolved_decision.action.evidence_refs, state, scope_id
-                )
+            validation = self.validator.validate(resolved, state, scope_id)
+            if not validation.ok:
                 observation = Observation(
-                    action_id=f"step-{state.step + 1}",
-                    status=ObservationStatus.OK,
-                    action=resolved_decision.action,
-                    results=[
-                        item.model_dump(mode="json") for item in resolved
-                    ],
-                    metadata={"finish": True},
-                )
-                state = self.state_updater.apply(
-                    state,
-                    assessment=resolved_decision.assessment,
-                    observation=observation,
-                    action_signature=validation.signature,
-                )
-                trajectory.append(
-                    StepRecord(
-                        step=state.step,
-                        decision=decision,
-                        resolved_decision=resolved_decision,
-                        validation_status=ValidationStatus.VALID,
-                        observation=observation,
-                        agent_visible_observation=(
-                            project_observation_for_policy(
-                                observation, state
-                            )
-                        ),
-                        state_before=state_before,
-                        state_after=state.model_copy(deep=True),
-                        usage=policy_usage,
-                        policy_view=policy_view,
-                    )
-                )
-                try:
-                    answer = self.answer_generator.generate(
-                        question, resolved
-                    )
-                except AnswerGenerationError as exc:
-                    answer_usage = self._answer_usage()
-                    total_usage = total_usage + answer_usage
-                    trajectory[-1].usage = (
-                        trajectory[-1].usage + answer_usage
-                    )
-                    return self._result(
-                        episode_id=episode_id,
-                        question=question,
-                        scope_id=scope_id,
-                        reason=TerminationReason.ANSWER_GENERATION_ERROR,
-                        state=state,
-                        trajectory=trajectory,
-                        usage=total_usage,
-                        selected_refs=list(
-                            resolved_decision.action.evidence_refs
-                        ),
-                        resolved_evidence=resolved,
-                        error_code="answer_generation_error",
-                        error_message=str(exc),
-                    )
-                except Exception as exc:  # defensive generator boundary
-                    answer_usage = self._answer_usage()
-                    total_usage = total_usage + answer_usage
-                    trajectory[-1].usage = (
-                        trajectory[-1].usage + answer_usage
-                    )
-                    return self._result(
-                        episode_id=episode_id,
-                        question=question,
-                        scope_id=scope_id,
-                        reason=TerminationReason.ANSWER_GENERATION_ERROR,
-                        state=state,
-                        trajectory=trajectory,
-                        usage=total_usage,
-                        selected_refs=list(
-                            resolved_decision.action.evidence_refs
-                        ),
-                        resolved_evidence=resolved,
-                        error_code="answer_generation_error",
-                        error_message=str(exc),
-                    )
-                answer_usage = self._answer_usage()
-                total_usage = total_usage + answer_usage
-                trajectory[-1].usage = trajectory[-1].usage + answer_usage
-                return self._result(
-                    episode_id=episode_id,
-                    question=question,
-                    scope_id=scope_id,
-                    reason=TerminationReason.FINISH,
-                    state=state,
-                    trajectory=trajectory,
-                    usage=total_usage,
-                    answer=answer,
-                    selected_refs=list(
-                        resolved_decision.action.evidence_refs
+                    action_id=manager.next_action_id,
+                    status=(
+                        ObservationStatus.DUPLICATE_ACTION
+                        if validation.code == "duplicate_action"
+                        else ObservationStatus.INVALID_ACTION
                     ),
-                    resolved_evidence=resolved,
+                    action=resolved.action,
+                    error_code=validation.code,
+                    message=validation.message,
+                )
+                manager.record_attempt(
+                    AttemptEvent(
+                        decision=decision,
+                        resolved_decision=resolved,
+                        validation_status=ValidationStatus.INVALID,
+                        validation_error=validation.message,
+                        observation=observation,
+                        assessment=resolved.assessment,
+                        action_signature=None,
+                        usage=usage,
+                        policy_view=built.policy_view,
+                        context_reference_map=built.reference_map,
+                        commit_assessment=False,
+                        consume_step=False,
+                        invalid_attempt=True,
+                    )
+                )
+                continue
+
+            if isinstance(resolved.action, ResolvedFinishAction):
+                return self._finish_result(
+                    manager=manager,
+                    state=state,
+                    decision=decision,
+                    resolved=resolved,
+                    signature=validation.signature,
+                    usage=usage,
+                    built=built,
                 )
 
             try:
                 observation = self.router.execute(
-                    resolved_decision.action,
+                    resolved.action,
                     state,
                     question=question,
                     scope_id=scope_id,
-                    action_id=f"step-{state.step + 1}",
-                )
-            except AgenticRAGError as exc:
-                state, trajectory = self._record_runtime_error(
-                    state=state,
-                    state_before=state_before,
-                    trajectory=trajectory,
-                    decision=decision,
-                    resolved_decision=resolved_decision,
-                    validation_signature=validation.signature,
-                    policy_usage=policy_usage,
-                    policy_view=policy_view,
-                    error_code=exc.code,
-                    error_message=exc.message,
-                )
-                return self._result(
-                    episode_id=episode_id,
-                    question=question,
-                    scope_id=scope_id,
-                    reason=TerminationReason.RUNTIME_ERROR,
-                    state=state,
-                    trajectory=trajectory,
-                    usage=total_usage,
-                    error_code=exc.code,
-                    error_message=exc.message,
+                    action_id=manager.next_action_id,
                 )
             except Exception as exc:
-                state, trajectory = self._record_runtime_error(
-                    state=state,
-                    state_before=state_before,
-                    trajectory=trajectory,
+                self._record_runtime_error(
+                    manager=manager,
                     decision=decision,
-                    resolved_decision=resolved_decision,
-                    validation_signature=validation.signature,
-                    policy_usage=policy_usage,
-                    policy_view=policy_view,
-                    error_code="runtime_error",
+                    resolved=resolved,
+                    signature=validation.signature,
+                    usage=usage,
+                    built=built,
+                    error_code=getattr(exc, "code", "runtime_error"),
                     error_message=str(exc),
                 )
-                return self._result(
-                    episode_id=episode_id,
-                    question=question,
-                    scope_id=scope_id,
+                return manager.result(
                     reason=TerminationReason.RUNTIME_ERROR,
-                    state=state,
-                    trajectory=trajectory,
-                    usage=total_usage,
-                    error_code="runtime_error",
+                    error_code=getattr(exc, "code", "runtime_error"),
                     error_message=str(exc),
                 )
 
-            step_usage = policy_usage + Usage(
-                retrieved_tokens=observation.retrieved_tokens
-            )
-            total_usage = total_usage + Usage(
-                retrieved_tokens=observation.retrieved_tokens
-            )
-            state = self.state_updater.apply(
-                state,
-                assessment=resolved_decision.assessment,
-                observation=observation,
-                action_signature=validation.signature,
-            )
-            trajectory.append(
-                StepRecord(
-                    step=state.step,
+            manager.record_attempt(
+                AttemptEvent(
                     decision=decision,
-                    resolved_decision=resolved_decision,
+                    resolved_decision=resolved,
                     validation_status=ValidationStatus.VALID,
+                    validation_error=None,
                     observation=observation,
-                    agent_visible_observation=(
-                        project_observation_for_policy(observation, state)
-                    ),
-                    state_before=state_before,
-                    state_after=state.model_copy(deep=True),
-                    usage=step_usage,
-                    policy_view=policy_view,
+                    assessment=resolved.assessment,
+                    action_signature=validation.signature,
+                    usage=usage + Usage(retrieved_tokens=observation.retrieved_tokens),
+                    policy_view=built.policy_view,
+                    context_reference_map=built.reference_map,
                 )
             )
 
-        return self._result(
-            episode_id=episode_id,
-            question=question,
-            scope_id=scope_id,
+        if manager.can_attempt_budget_finalize:
+            finalized = self._try_budget_finalize(manager)
+            if finalized is not None:
+                return finalized
+        return manager.result(
             reason=TerminationReason.BUDGET_EXHAUSTED,
-            state=state,
-            trajectory=trajectory,
-            usage=total_usage,
-            error_code="budget_exhausted",
-            error_message="The episode exhausted its step or retrieval budget",
+            error_code=(
+                "policy_attempt_budget_exhausted"
+                if manager.policy_attempt_budget_exhausted
+                else "budget_exhausted"
+            ),
+            error_message="The episode exhausted its configured budget",
         )
 
-    def initial_messages(
-        self, question: str, scope_id: str | None = None
-    ) -> Sequence:
-        state = ControllerState.initial(
+    def initial_messages(self, question: str, scope_id: str | None = None) -> Sequence[Message]:
+        state = EpisodeState.initial(
             max_steps=self.max_steps,
+            max_policy_attempts=self.max_policy_attempts,
             max_retrieved_tokens=self.max_retrieved_tokens,
         )
         return self.context_builder.build(
@@ -437,82 +290,118 @@ class AgentController:
         usage = getattr(self.policy, "last_usage", Usage())
         return usage if isinstance(usage, Usage) else Usage()
 
-    def _answer_usage(self) -> Usage:
-        usage = getattr(self.answer_generator, "last_usage", Usage())
-        return usage if isinstance(usage, Usage) else Usage()
+    def _try_budget_finalize(self, manager: EpisodeStateManager) -> EpisodeResult | None:
+        state = manager.snapshot()
+        built = self.context_builder.build(
+            manager.question,
+            self.skill,
+            state,
+            manager.trajectory_snapshot(),
+            scope_id=manager.scope_id,
+        )
+        messages = [*built.messages, Message(role="user", content=BUDGET_FINALIZE_INSTRUCTION)]
+        try:
+            decision = self.policy.decide(messages, decision_format=built.decision_format)
+            usage = self._policy_usage()
+            resolved = resolve_decision(decision, built.reference_map)
+            validation = self.validator.validate(resolved, state, manager.scope_id)
+        except Exception as exc:
+            manager.add_usage(self._policy_usage())
+            return manager.result(
+                reason=TerminationReason.BUDGET_EXHAUSTED,
+                error_code="budget_finalize_failed",
+                error_message=str(exc),
+            )
+        if validation.ok and isinstance(resolved.action, ResolvedFinishAction):
+            return self._finish_result(
+                manager=manager,
+                state=state,
+                decision=decision,
+                resolved=resolved,
+                signature=validation.signature,
+                usage=usage,
+                built=built,
+                consume_step=False,
+            )
+        manager.add_usage(usage)
+        return manager.result(
+            reason=TerminationReason.BUDGET_EXHAUSTED,
+            error_code="budget_finalize_requires_finish",
+            error_message=(validation.message or "Budget finalization requires FINISH"),
+        )
+
+    def _finish_result(
+        self,
+        *,
+        manager: EpisodeStateManager,
+        state: EpisodeState,
+        decision,
+        resolved,
+        signature: str | None,
+        usage: Usage,
+        built,
+        consume_step: bool = True,
+    ) -> EpisodeResult:
+        evidence_refs = list(resolved.action.evidence_refs)
+        evidence = self.evidence_resolver.resolve(evidence_refs, state, manager.scope_id)
+        observation = Observation(
+            action_id=manager.next_action_id,
+            status=ObservationStatus.OK,
+            action=resolved.action,
+            results=[item.model_dump(mode="json") for item in evidence],
+            metadata={"finish": True, "budget_finalize": not consume_step},
+        )
+        manager.record_attempt(
+            AttemptEvent(
+                decision=decision,
+                resolved_decision=resolved,
+                validation_status=ValidationStatus.VALID,
+                validation_error=None,
+                observation=observation,
+                assessment=resolved.assessment,
+                action_signature=signature,
+                usage=usage,
+                policy_view=built.policy_view,
+                context_reference_map=built.reference_map,
+                consume_step=consume_step,
+            )
+        )
+        return manager.result(
+            reason=TerminationReason.FINISH,
+            answer=resolved.action.answer,
+            evidence_refs=evidence_refs,
+            resolved_evidence=evidence,
+        )
 
     def _record_runtime_error(
         self,
         *,
-        state: ControllerState,
-        state_before: ControllerState,
-        trajectory: list[StepRecord],
+        manager: EpisodeStateManager,
         decision,
-        resolved_decision,
-        validation_signature: str | None,
-        policy_usage: Usage,
-        policy_view: PolicyView,
+        resolved,
+        signature: str | None,
+        usage: Usage,
+        built,
         error_code: str,
         error_message: str,
-    ) -> tuple[ControllerState, list[StepRecord]]:
-        observation = Observation(
-            action_id=f"step-{state.step + 1}",
-            status=ObservationStatus.ERROR,
-            action=resolved_decision.action,
-            error_code=error_code,
-            message=error_message,
-        )
-        updated = self.state_updater.apply(
-            state,
-            assessment=resolved_decision.assessment,
-            observation=observation,
-            action_signature=validation_signature,
-        )
-        trajectory.append(
-            StepRecord(
-                step=updated.step,
+    ) -> None:
+        manager.record_attempt(
+            AttemptEvent(
                 decision=decision,
-                resolved_decision=resolved_decision,
+                resolved_decision=resolved,
                 validation_status=ValidationStatus.VALID,
-                observation=observation,
-                agent_visible_observation=project_observation_for_policy(
-                    observation, updated
+                validation_error=None,
+                observation=Observation(
+                    action_id=manager.next_action_id,
+                    status=ObservationStatus.ERROR,
+                    action=resolved.action,
+                    error_code=error_code,
+                    message=error_message,
                 ),
-                state_before=state_before,
-                state_after=updated.model_copy(deep=True),
-                usage=policy_usage,
-                policy_view=policy_view,
+                assessment=resolved.assessment,
+                action_signature=signature,
+                usage=usage,
+                policy_view=built.policy_view,
+                context_reference_map=built.reference_map,
             )
-        )
-        return updated, trajectory
-
-    @staticmethod
-    def _result(
-        *,
-        episode_id: str,
-        question: str,
-        scope_id: str,
-        reason: TerminationReason,
-        state: ControllerState,
-        trajectory: list[StepRecord],
-        usage: Usage,
-        answer: str | None = None,
-        selected_refs: list | None = None,
-        resolved_evidence: list | None = None,
-        error_code: str | None = None,
-        error_message: str | None = None,
-    ) -> EpisodeResult:
-        return EpisodeResult(
-            episode_id=episode_id,
-            query=question,
-            scope_id=scope_id,
-            termination_reason=reason,
-            answer=answer,
-            selected_evidence_refs=selected_refs or [],
-            resolved_evidence=resolved_evidence or [],
-            trajectory=trajectory,
-            usage=usage,
-            final_state=state.model_copy(deep=True),
-            error_code=error_code,
-            error_message=error_message,
         )
