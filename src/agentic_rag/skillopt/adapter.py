@@ -23,9 +23,9 @@ except ImportError:  # pragma: no cover - fallback behavior is tested instead
 
 
 from agentic_rag.evaluation import EpisodeEvaluator
-from agentic_rag.benchmark_profiles import (
-    AragDatasetProfile,
-    get_arag_dataset_profile,
+from agentic_rag.evaluation.profiles import (
+    DatasetProfile,
+    get_dataset_profile,
 )
 from agentic_rag.skillopt.dataloader import (
     AgenticRAGSkillOptDataLoader,
@@ -40,7 +40,7 @@ from agentic_rag.skillopt.rollout import (
 
 
 class AgenticRAGSkillOptAdapter(_EnvAdapter):
-    """Wire one profiled A-RAG dataset to SkillOpt's rollout/reflection loop."""
+    """Wire HotpotQA to SkillOpt's rollout/reflection loop."""
 
     def __init__(
         self,
@@ -48,7 +48,7 @@ class AgenticRAGSkillOptAdapter(_EnvAdapter):
         split_dir: str | Path,
         harness_factory: HarnessFactory,
         evaluator: EpisodeEvaluator,
-        dataset: str | AragDatasetProfile = "hotpotqa",
+        dataset: str | DatasetProfile = "hotpotqa",
         workers: int = 1,
         analyst_workers: int = 1,
         failure_only: bool = False,
@@ -70,8 +70,8 @@ class AgenticRAGSkillOptAdapter(_EnvAdapter):
             raise ValueError("edit_budget must be positive")
         self.profile = (
             dataset
-            if isinstance(dataset, AragDatasetProfile)
-            else get_arag_dataset_profile(dataset)
+            if isinstance(dataset, DatasetProfile)
+            else get_dataset_profile(dataset)
         )
         if evaluator.profile.key != self.profile.key:
             raise ValueError(

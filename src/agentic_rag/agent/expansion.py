@@ -16,13 +16,13 @@ from typing import Any, Literal, TypeVar
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from agentic_rag.embedding import (
+from agentic_rag.substrate.embedding import (
     EmbeddingBackend,
     SentenceTransformerEmbeddingBackend,
     normalize_embeddings,
 )
 from agentic_rag.errors import AgenticRAGError, NodeNotFoundError
-from agentic_rag.storage import Substrate
+from agentic_rag.substrate.storage import Substrate
 
 
 ENTITY_MENTIONED_IN_SENTENCE = "ENTITY_MENTIONED_IN_SENTENCE"

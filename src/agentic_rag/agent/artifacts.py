@@ -37,7 +37,6 @@ _ARTIFACT_FILENAMES = frozenset(
         "effective_config.json",
     }
 )
-_V22_ARTIFACT_FILENAMES = _ARTIFACT_FILENAMES | {"skill_bundle.json"}
 _SECRET_KEY_PARTS = frozenset(
     {
         "apikey",
@@ -79,7 +78,6 @@ class ArtifactWriter:
         skill_content: str,
         effective_config: Any,
         trajectory: Sequence[Any] | None = None,
-        skill_bundle: Any | None = None,
     ) -> Path:
         """Persist all public artifacts for one episode and return its path."""
 
@@ -105,10 +103,6 @@ class ArtifactWriter:
             "skill.md": skill_content.encode("utf-8"),
             "effective_config.json": _json_bytes(config_value),
         }
-        if skill_bundle is not None:
-            payloads["skill_bundle.json"] = _json_bytes(
-                _to_jsonable(skill_bundle)
-            )
         return self._publish(episode_id, payloads)
 
     def path_for_episode(self, episode_id: str) -> Path:
@@ -127,7 +121,6 @@ class ArtifactWriter:
         skill_content: str,
         effective_config: Any,
         trajectory: Sequence[Any] | None = None,
-        skill_bundle: Any | None = None,
     ) -> Path:
         """Alias for :meth:`write_episode` for concise harness integration."""
 
@@ -139,14 +132,10 @@ class ArtifactWriter:
             skill_content=skill_content,
             effective_config=effective_config,
             trajectory=trajectory,
-            skill_bundle=skill_bundle,
         )
 
     def _publish(self, episode_id: str, payloads: Mapping[str, bytes]) -> Path:
-        if frozenset(payloads) not in {
-            _ARTIFACT_FILENAMES,
-            _V22_ARTIFACT_FILENAMES,
-        }:
+        if frozenset(payloads) != _ARTIFACT_FILENAMES:
             raise ValueError("artifact payload set does not match the public contract")
 
         self.runs_root.mkdir(parents=True, exist_ok=True)
@@ -201,61 +190,12 @@ def _skillopt_conversation(trajectory: Any) -> list[dict[str, Any]]:
 
         decision = step.get("decision")
         decision = decision if isinstance(decision, Mapping) else {}
-        outcome = step.get("outcome")
-        outcome = outcome if isinstance(outcome, Mapping) else {}
-
-        action = _first_not_none(
-            step.get("action"),
-            decision.get("action"),
-        )
-        assessment = _first_not_none(
-            step.get("assessment"),
-            decision.get("assessment"),
-            step.get("reasoning"),
-        )
-        agent_visible_observation = _first_not_none(
-            step.get("agent_visible_observation"),
-            step.get("policy_observation"),
-        )
-        observation = _first_not_none(
-            step.get("observation"),
-            outcome.get("observation"),
-        )
-        validation = _first_not_none(
-            step.get("validation"),
-            step.get("validation_error"),
-            outcome.get("validation"),
-            outcome.get("validation_error"),
-        )
-
-        # SkillOpt must learn from the same handle-safe semantic feedback that
-        # the target Policy saw.  The raw stable-ID Observation remains in
-        # episode.json/io_trace.json for replay and audit, but is only a legacy
-        # fallback for older trajectory records without this projection.
-        if agent_visible_observation is not None:
-            feedback = agent_visible_observation
-        elif observation is not None and validation is not None:
-            feedback: Any = {
-                "observation": observation,
-                "validation": validation,
-            }
-        elif observation is not None:
-            feedback = observation
-        elif validation is not None:
-            feedback = validation
-        else:
-            feedback = step.get("env_feedback")
-
         conversation.append(
             {
-                "step": _first_not_none(
-                    step.get("step"),
-                    step.get("step_index"),
-                    position,
-                ),
-                "action": action,
-                "reasoning": assessment,
-                "env_feedback": feedback,
+                "step": step.get("step", position),
+                "action": decision.get("action"),
+                "reasoning": decision.get("assessment"),
+                "env_feedback": step.get("agent_visible_observation"),
             }
         )
     return conversation

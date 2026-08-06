@@ -14,14 +14,6 @@ from agentic_rag.evaluation import contain_accuracy, normalize_answer
 
 
 _REFERENCE_ERROR_CODES = {
-    "unknown_handle",
-    "handle_type_mismatch",
-    "source_not_complete",
-    "selected_evidence_not_eligible",
-    "finish_evidence_not_selected",
-    "memory_index_out_of_range",
-    "citation_index_out_of_range",
-    "memory_node_type_mismatch",
     "chunk_not_readable",
     "expansion_not_valid_for_node",
     "reference_not_available",
@@ -66,14 +58,11 @@ def _sha256(path: Path) -> str:
 
 
 def _contract(args: argparse.Namespace, config: AgentConfig) -> dict[str, Any]:
-    providers = {config.policy.provider, config.answer.provider}
     return {
-        "workflow_mode": config.workflow_mode,
+        "architecture": "semantic_memory_typed_refs_compact",
         "policy_provider": config.policy.provider,
         "policy_model": config.policy.model,
-        "answer_provider": config.answer.provider,
-        "answer_model": config.answer.model,
-        "openai_used": "openai" in providers,
+        "openai_used": config.policy.provider == "openai",
         "split": args.split.as_posix(),
         "split_sha256": _sha256(args.split),
         "skill": args.skill.as_posix(),
@@ -102,7 +91,6 @@ def _summary(
         "normalized_exact_correct": sum(row["normalized_exact"] for row in rows),
         "contain_correct": sum(row["contain_acc"] for row in rows),
         "total_invalid_attempts": sum(row["invalid_attempts"] for row in rows),
-        "total_repairs": sum(len(row["repairs"]) for row in rows),
         "action_counts": {
             action_type: sum(row["action_counts"][action_type] for row in rows)
             for action_type in ("SEARCH", "EXPAND", "READ", "FINISH")
@@ -212,18 +200,15 @@ def main() -> None:
             "contain_acc": contain_accuracy(prediction, gold),
             "termination_reason": result.termination_reason.value,
             "error_code": result.error_code,
-            "environment_steps": result.final_state.step,
-            "policy_attempts": result.final_state.policy_attempts,
+            "environment_steps": result.final_state.step if result.final_state else 0,
+            "policy_attempts": (
+                result.final_state.policy_attempts if result.final_state else 0
+            ),
             "trajectory_records": len(result.trajectory),
             "invalid_attempts": sum(
                 step.validation_status.value == "invalid"
                 for step in result.trajectory
             ),
-            "repairs": [
-                step.repair_code
-                for step in result.trajectory
-                if step.repair_code is not None
-            ],
             "action_counts": action_counts,
             "search_after_observation": search_after_observation,
             "search_after_no_progress": search_after_no_progress,

@@ -8,9 +8,9 @@ from typing import Sequence
 import numpy as np
 import pytest
 
-from agentic_rag.builder import SubstrateBuilder
+from agentic_rag.substrate.builder import SubstrateBuilder
 from agentic_rag.config import BuildConfig
-from agentic_rag.models import (
+from agentic_rag.substrate.models import (
     AbbreviationLink,
     EntityMentionDraft,
     ProcessedDocument,

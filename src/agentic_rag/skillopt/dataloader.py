@@ -1,4 +1,4 @@
-"""SkillOpt-compatible batch planning for profile-driven A-RAG splits.
+"""SkillOpt-compatible batch planning for HotpotQA splits.
 
 The module keeps SkillOpt as an optional dependency.  When SkillOpt v0.2.0 is
 installed, :class:`AgenticRAGSkillOptDataLoader` is a real ``BaseDataLoader``
@@ -14,8 +14,8 @@ from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from agentic_rag.benchmark_profiles import AragDatasetProfile
-from agentic_rag.skillopt.benchmark import split_manifest_profile
+from agentic_rag.evaluation.profiles import DatasetProfile
+from agentic_rag.skillopt.data import split_manifest_profile
 from agentic_rag.skillopt.lineage import load_json
 
 try:  # pragma: no cover - exercised by the opt-in SkillOpt installation
@@ -73,7 +73,7 @@ class AgenticRAGSkillOptDataLoader(_BaseDataLoader):
         if self.limit < 0:
             raise ValueError("limit must be non-negative")
         self._splits: dict[str, list[dict[str, Any]]] = {}
-        self.profile: AragDatasetProfile | None = None
+        self.profile: DatasetProfile | None = None
         self._scope_id: str | None = None
 
     def setup(self, cfg: dict[str, Any]) -> None:
@@ -285,7 +285,7 @@ def _validate_item(
     *,
     path: Path,
     line: int,
-    profile: AragDatasetProfile | None,
+    profile: DatasetProfile | None,
     scope_id: str | None,
 ) -> dict[str, Any]:
     result = dict(item)
