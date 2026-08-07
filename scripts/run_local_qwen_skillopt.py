@@ -1,4 +1,4 @@
-"""Run the full HotpotQA SkillOpt workflow with local Ollama Qwen."""
+"""Run a benchmark SkillOpt workflow with local Ollama Qwen."""
 
 from __future__ import annotations
 
@@ -21,8 +21,11 @@ from agentic_rag.evaluation import (
 from agentic_rag.skillopt.adapter import AgenticRAGSkillOptAdapter
 from agentic_rag.skillopt.data import (
     HOTPOTQA_BENCHMARK_SCOPE_ID,
-    split_manifest_profile,
     validate_hotpotqa_smoke_lineage,
+)
+from agentic_rag.skillopt.benchmark import (
+    split_manifest_profile,
+    validate_benchmark_lineage,
 )
 from agentic_rag.skillopt.trainer import load_skillopt_config, run_skillopt_training
 from agentic_rag.substrate.storage import Substrate
@@ -99,9 +102,33 @@ class LocalQwenJudge:
 def main() -> None:
     args = arguments()
     substrate = Substrate.open(args.substrate)
-    substrate.require_scope(HOTPOTQA_BENCHMARK_SCOPE_ID)
     profile = split_manifest_profile(args.split_dir)
-    validate_hotpotqa_smoke_lineage(args.split_dir, substrate.manifest)
+    split_manifest = json.loads(
+        (args.split_dir / "split_manifest.json").read_text(encoding="utf-8")
+    )
+    split_metadata = split_manifest.get("splits")
+    if not isinstance(split_metadata, dict):
+        raise ValueError("split manifest has no splits mapping")
+
+    def split_count(name: str) -> int:
+        metadata = split_metadata.get(name)
+        value = metadata.get("count") if isinstance(metadata, dict) else None
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(f"split manifest {name} count must be positive")
+        return value
+    if split_manifest.get("schema_version") in {"1.0", "1.1"}:
+        if profile.key != "hotpotqa":
+            raise ValueError("schema 1.x splits support only HotpotQA")
+        scope_id = HOTPOTQA_BENCHMARK_SCOPE_ID
+        validate_hotpotqa_smoke_lineage(args.split_dir, substrate.manifest)
+    else:
+        lineage = validate_benchmark_lineage(
+            args.split_dir,
+            substrate.manifest,
+            dataset=profile,
+        )
+        scope_id = str(lineage["scope_id"])
+    substrate.require_scope(scope_id)
 
     agent_config = AgentConfig.from_yaml(args.agent_config)
     if not isinstance(agent_config.policy, OllamaPolicyConfig):
@@ -116,6 +143,9 @@ def main() -> None:
             "split_dir": str(args.split_dir.resolve()),
             "skill_init": str(args.skill.resolve()),
             "dataset": profile.key,
+            "train_size": split_count("train"),
+            "sel_env_num": split_count("validation"),
+            "test_env_num": split_count("test"),
         }
     )
 

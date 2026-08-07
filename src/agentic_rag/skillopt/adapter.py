@@ -40,7 +40,7 @@ from agentic_rag.skillopt.rollout import (
 
 
 class AgenticRAGSkillOptAdapter(_EnvAdapter):
-    """Wire HotpotQA to SkillOpt's rollout/reflection loop."""
+    """Wire one declared benchmark profile to SkillOpt's rollout loop."""
 
     def __init__(
         self,

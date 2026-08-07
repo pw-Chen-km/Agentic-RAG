@@ -1,0 +1,11 @@
+corpus_id: hotpotqa_benchmark_exact
+split: dev
+dataset: hotpotqa
+source_format: benchmark_exact
+validate_benchmark_profile: true
+max_chunk_tokens: 256
+spacy_model: en_core_web_sm
+enable_abbreviations: true
+embedding_model: sentence-transformers/all-MiniLM-L6-v2
+embedding_batch_size: 64
+embedding_device: cpu

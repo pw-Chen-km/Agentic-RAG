@@ -1,4 +1,4 @@
-"""Run a resumable HotpotQA evaluation split and persist full traces."""
+"""Run a resumable five-dataset benchmark split and persist full traces."""
 
 from __future__ import annotations
 
@@ -11,6 +11,10 @@ from typing import Any
 from agentic_rag.agent.config import AgentConfig
 from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.evaluation import contain_accuracy, normalize_answer
+from agentic_rag.evaluation.profiles import get_dataset_profile
+from agentic_rag.skillopt.benchmark import validate_benchmark_lineage
+from agentic_rag.skillopt.data import validate_hotpotqa_smoke_lineage
+from agentic_rag.substrate.storage import Substrate
 
 
 _REFERENCE_ERROR_CODES = {
@@ -30,6 +34,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--skill", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expected-count", type=int, required=True)
+    parser.add_argument("--dataset", default="hotpotqa")
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
@@ -58,6 +63,7 @@ def _sha256(path: Path) -> str:
 
 
 def _contract(args: argparse.Namespace, config: AgentConfig) -> dict[str, Any]:
+    profile = get_dataset_profile(args.dataset)
     return {
         "architecture": "semantic_memory_typed_refs_compact",
         "policy_provider": config.policy.provider,
@@ -70,7 +76,13 @@ def _contract(args: argparse.Namespace, config: AgentConfig) -> dict[str, Any]:
         "config": args.config.as_posix(),
         "config_sha256": _sha256(args.config),
         "substrate": args.substrate.as_posix(),
+        "substrate_manifest_sha256": _sha256(args.substrate / "manifest.json"),
         "expected_count": args.expected_count,
+        "dataset": profile.key,
+        "scope_id": profile.scope_id("dev"),
+        "reported_metrics": [
+            metric.value for metric in profile.reported_metrics
+        ],
     }
 
 
@@ -110,11 +122,46 @@ def _summary(
 def main() -> None:
     args = _arguments()
     config = AgentConfig.from_yaml(args.config)
+    profile = get_dataset_profile(args.dataset)
+    substrate = Substrate.open(args.substrate)
+    if substrate.manifest.dataset != profile.key:
+        raise ValueError(
+            f"substrate dataset is {substrate.manifest.dataset!r}; expected "
+            f"{profile.key!r}"
+        )
+    substrate.require_scope(profile.scope_id("dev"))
+    split_manifest_path = args.split.parent / "split_manifest.json"
+    if split_manifest_path.is_file():
+        split_manifest = json.loads(
+            split_manifest_path.read_text(encoding="utf-8")
+        )
+        if split_manifest.get("schema_version") in {"1.0", "1.1"}:
+            if profile.key != "hotpotqa":
+                raise ValueError("schema 1.x splits support only HotpotQA")
+            validate_hotpotqa_smoke_lineage(
+                args.split.parent, substrate.manifest
+            )
+        else:
+            validate_benchmark_lineage(
+                args.split.parent,
+                substrate.manifest,
+                dataset=profile,
+            )
     items = _load_jsonl(args.split)
     if len(items) != args.expected_count:
         raise ValueError(
             f"expected {args.expected_count} items, received {len(items)}"
         )
+    expected_scope = profile.scope_id("dev")
+    for item in items:
+        if item.get("scope_id") != expected_scope:
+            raise ValueError(
+                f"item {item.get('id')} scope does not match {expected_scope}"
+            )
+        if item.get("source") != profile.key:
+            raise ValueError(
+                f"item {item.get('id')} source does not match {profile.key}"
+            )
     contract = _contract(args, config)
     progress_path = args.output / "progress.json"
     if args.output.exists() and not args.resume:

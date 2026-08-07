@@ -1,4 +1,4 @@
-"""Post-episode HotpotQA answer evaluation.
+"""Post-episode benchmark answer evaluation.
 
 Gold answers enter the system only through :class:`EpisodeEvaluator`.  This
 module deliberately has no dependency on the retrieval substrate, policy

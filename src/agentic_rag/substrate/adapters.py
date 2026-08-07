@@ -1,14 +1,20 @@
-"""Source adapters and HotpotQA parsing."""
+"""Source adapters for the five benchmark datasets."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Literal, Protocol
 
-from agentic_rag.evaluation.profiles import HOTPOTQA_PROFILE
+from agentic_rag.evaluation.profiles import (
+    DatasetProfile,
+    DuplicateQuestionIdPolicy,
+    get_dataset_profile,
+    normalize_task_type,
+)
 from agentic_rag.errors import InputFormatError
 from agentic_rag.substrate.models import (
     BenchmarkQuestion,
@@ -248,28 +254,42 @@ def _benchmark_files(
     return chunks_path, questions_path
 
 
-class HotpotQABenchmarkExactAdapter:
-    """Load the pinned HotpotQA reduced benchmark as a global corpus.
+class BenchmarkExactAdapter:
+    """Load one benchmark dataset as a global retrieval corpus.
 
-    The upstream ``chunks.json`` boundaries and numeric source order are
-    preserved. Questions and answers are written only to the evaluation
-    sidecar and are never exposed to retrieval or the policy.
+    The collection uses a common ``chunks.json`` / ``questions.json``
+    shape. Source Chunk boundaries and numeric source order are preserved. Gold
+    questions and answers are emitted only through the evaluation sidecar.
     """
-
-    dataset_name = "hotpotqa"
 
     def __init__(
         self,
+        dataset: str | DatasetProfile,
         scope_id: str | None = None,
         *,
         validate_reference_counts: bool = False,
+        _legacy_question_ids: bool = False,
+        _document_title: str | None = None,
+        _validate_task_types: bool = True,
+        _reject_blank_answers: bool = True,
     ) -> None:
-        self.profile = HOTPOTQA_PROFILE
+        self.profile = (
+            dataset
+            if isinstance(dataset, DatasetProfile)
+            else get_dataset_profile(dataset)
+        )
+        self.dataset_name = self.profile.key
         self.scope_id = scope_id
         self.validate_reference_counts = validate_reference_counts
+        self._legacy_question_ids = _legacy_question_ids
+        self._document_title = _document_title
+        self._validate_task_types = _validate_task_types
+        self._reject_blank_answers = _reject_blank_answers
 
     def load(self, source_path: Path, split: str) -> AdapterOutput:
-        chunks_path, questions_path = _benchmark_files(source_path, subset="hotpotqa")
+        chunks_path, questions_path = _benchmark_files(
+            source_path, subset=self.profile.key
+        )
         scope_id = self.scope_id or self.profile.scope_id(split)
         document_id = self.profile.document_id(split)
 
@@ -322,45 +342,84 @@ class HotpotQABenchmarkExactAdapter:
         )
 
         rows = _load_json_or_jsonl(questions_path)
-        questions: list[BenchmarkQuestion] = []
-        seen_question_ids: set[str] = set()
+        source_question_ids: list[str] = []
         for row_index, row in enumerate(rows):
-            question_id = str(row.get("id") or row.get("_id") or "").strip()
-            if not question_id:
+            source_question_id = str(row.get("id") or row.get("_id") or "")
+            if not source_question_id.strip():
                 raise InputFormatError(
                     f"benchmark_exact question record {row_index} has no id"
                 )
-            if question_id in seen_question_ids:
-                raise InputFormatError(
-                    f"Duplicate HotpotQA benchmark question ID: {question_id}"
+            source_question_ids.append(source_question_id)
+
+        source_id_counts = Counter(source_question_ids)
+        duplicate_source_ids = sorted(
+            item for item, count in source_id_counts.items() if count > 1
+        )
+        if (
+            duplicate_source_ids
+            and self.profile.duplicate_question_id_policy
+            is DuplicateQuestionIdPolicy.REJECT
+        ):
+            raise InputFormatError(
+                f"Duplicate Benchmark {self.profile.key} question IDs: "
+                f"{duplicate_source_ids}"
+            )
+
+        questions: list[BenchmarkQuestion] = []
+        for row_index, row in enumerate(rows):
+            source_question_id = source_question_ids[row_index]
+            question_id = (
+                source_question_id
+                if self._legacy_question_ids
+                else (
+                    f"{self.profile.key}:benchmark_exact:q:{row_index:06d}"
                 )
-            seen_question_ids.add(question_id)
+            )
             question = row.get("question")
             answer = row.get("answer")
             if not isinstance(question, str) or not question.strip():
                 raise InputFormatError(
                     "benchmark_exact question "
-                    f"{question_id} has no question text"
+                    f"{source_question_id} has no question text"
                 )
-            if not isinstance(answer, str):
+            if not isinstance(answer, str) or (
+                self._reject_blank_answers and not answer.strip()
+            ):
                 raise InputFormatError(
-                    f"benchmark_exact question {question_id} has no string answer"
+                    "benchmark_exact question "
+                    f"{source_question_id} has no non-empty string answer"
                 )
             question_type = (
-                str(row["question_type"])
-                if row.get("question_type") is not None
-                else None
+                normalize_task_type(
+                    self.profile,
+                    row.get("question_type"),
+                    question_id=source_question_id,
+                )
+                if self._validate_task_types
+                else (
+                    str(row["question_type"])
+                    if row.get("question_type") is not None
+                    else None
+                )
             )
             questions.append(
                 BenchmarkQuestion(
                     question_id=question_id,
                     scope_id=scope_id,
-                    source=str(row.get("source") or "hotpotqa"),
+                    source=(
+                        str(row.get("source") or self.profile.key)
+                        if self._legacy_question_ids
+                        else self.profile.key
+                    ),
                     question=question,
                     answer=answer,
                     question_type=question_type,
-                    source_question_id=None,
-                    source_row_index=row_index,
+                    source_question_id=(
+                        None if self._legacy_question_ids else source_question_id
+                    ),
+                    source_row_index=(
+                        None if self._legacy_question_ids else row_index
+                    ),
                 )
             )
 
@@ -368,14 +427,14 @@ class HotpotQABenchmarkExactAdapter:
             self._validate_reference_shape(
                 chunk_count=len(chunks),
                 questions=questions,
-                unique_question_ids=len(seen_question_ids),
+                unique_source_question_ids=len(source_id_counts),
             )
 
         return AdapterOutput(
             documents=(
                 RawDocument(
                     doc_id=document_id,
-                    title="HotpotQA reduced benchmark corpus",
+                    title=self._document_title,
                     text="",
                 ),
             ),
@@ -398,7 +457,7 @@ class HotpotQABenchmarkExactAdapter:
         *,
         chunk_count: int,
         questions: list[BenchmarkQuestion],
-        unique_question_ids: int,
+        unique_source_question_ids: int,
     ) -> None:
         errors: list[str] = []
         if chunk_count != self.profile.reference_chunk_count:
@@ -411,21 +470,53 @@ class HotpotQABenchmarkExactAdapter:
                 f"questions expected {self.profile.reference_question_count}, "
                 f"found {len(questions)}"
             )
-        if unique_question_ids != self.profile.reference_unique_question_ids:
+        if unique_source_question_ids != self.profile.reference_unique_question_ids:
             errors.append(
                 "unique question IDs expected "
                 f"{self.profile.reference_unique_question_ids}, found "
-                f"{unique_question_ids}"
+                f"{unique_source_question_ids}"
+            )
+        actual_task_types = Counter(
+            item.question_type for item in questions if item.question_type is not None
+        )
+        expected_task_types = dict(self.profile.reference_task_type_counts)
+        if actual_task_types != expected_task_types:
+            errors.append(
+                f"task type counts expected {expected_task_types}, found "
+                f"{dict(sorted(actual_task_types.items()))}"
             )
         if errors:
             raise InputFormatError(
-                "HotpotQA reference profile mismatch: " + "; ".join(errors)
+                f"Benchmark {self.profile.key} reference profile mismatch: "
+                + "; ".join(errors)
             )
 
     def iter_documents(
         self, source_path: Path, split: str
     ) -> Iterator[RawDocument]:
         yield from self.load(source_path, split).documents
+
+
+class HotpotQABenchmarkExactAdapter(BenchmarkExactAdapter):
+    """Preserve the established HotpotQA sidecar ID contract."""
+
+    dataset_name = "hotpotqa"
+
+    def __init__(
+        self,
+        scope_id: str | None = None,
+        *,
+        validate_reference_counts: bool = False,
+    ) -> None:
+        super().__init__(
+            "hotpotqa",
+            scope_id,
+            validate_reference_counts=validate_reference_counts,
+            _legacy_question_ids=True,
+            _document_title="HotpotQA reduced benchmark corpus",
+            _validate_task_types=False,
+            _reject_blank_answers=False,
+        )
 
 
 def document_scope_map(scopes: Iterable[DocumentScope]) -> dict[str, set[str]]:

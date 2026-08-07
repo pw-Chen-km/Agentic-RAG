@@ -6,12 +6,17 @@ from pathlib import Path
 from agentic_rag.skillopt import split_manifest_profile, summarize_rollout_usage
 
 
-def test_split_manifest_is_hotpotqa_only(tmp_path: Path) -> None:
+def test_split_manifest_selects_declared_dataset_profile(tmp_path: Path) -> None:
     (tmp_path / "split_manifest.json").write_text(
         json.dumps({"dataset": {"subset": "hotpotqa"}}),
         encoding="utf-8",
     )
     assert split_manifest_profile(tmp_path).key == "hotpotqa"
+    (tmp_path / "split_manifest.json").write_text(
+        json.dumps({"dataset": {"subset": "medical"}}),
+        encoding="utf-8",
+    )
+    assert split_manifest_profile(tmp_path).key == "medical"
 
 
 def test_skillopt_usage_uses_single_policy_counter(tmp_path: Path) -> None:

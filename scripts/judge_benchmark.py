@@ -1,4 +1,4 @@
-"""Judge persisted HotpotQA predictions with the Luna judge."""
+"""Judge persisted benchmark predictions with the Luna judge."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from agentic_rag.evaluation import (
     JudgeUsage,
     OpenAIResponsesJudge,
 )
+from agentic_rag.evaluation.profiles import get_dataset_profile
 
 
 def _arguments() -> argparse.Namespace:
@@ -25,6 +26,7 @@ def _arguments() -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", default="gpt-5.6-luna")
+    parser.add_argument("--dataset", default="hotpotqa")
     return parser.parse_args()
 
 
@@ -72,6 +74,18 @@ def _judge_run(
     evaluator: EpisodeEvaluator,
 ) -> tuple[dict[str, Any], JudgeUsage]:
     source = _load_json(summary_path)
+    contract = source.get("run_contract")
+    declared_dataset = (
+        contract.get("dataset") if isinstance(contract, dict) else None
+    )
+    if (
+        declared_dataset is not None
+        and declared_dataset != evaluator.profile.key
+    ):
+        raise ValueError(
+            f"summary dataset is {declared_dataset!r}; expected "
+            f"{evaluator.profile.key!r}: {summary_path}"
+        )
     source_results = source.get("results")
     if not isinstance(source_results, list):
         raise ValueError(f"summary has no results list: {summary_path}")
@@ -133,6 +147,7 @@ def _judge_run(
 
 def main() -> None:
     args = _arguments()
+    profile = get_dataset_profile(args.dataset)
     runs = _parse_runs(args.run)
     if args.output.exists():
         raise FileExistsError(f"output already exists: {args.output}")
@@ -140,7 +155,7 @@ def main() -> None:
 
     evaluator = EpisodeEvaluator(
         OpenAIResponsesJudge(model=str(args.model)),
-        profile="hotpotqa",
+        profile=profile,
     )
     results: list[dict[str, Any]] = []
     total_usage = JudgeUsage()
@@ -164,7 +179,7 @@ def main() -> None:
         "judge_contract": {
             "model": str(args.model),
             "provider": "openai_responses",
-            "profile": "hotpotqa",
+            "profile": evaluator.profile.key,
             "comparison_input": "generated_answer_and_gold_answer",
             "blank_answers": "automatic_incorrect_without_provider_call",
             "supporting_evidence_visible_to_judge": False,

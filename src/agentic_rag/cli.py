@@ -28,10 +28,14 @@ from agentic_rag.evaluation import (
 from agentic_rag.substrate.retrieval import Retriever
 from agentic_rag.skillopt.adapter import AgenticRAGSkillOptAdapter
 from agentic_rag.substrate.storage import Substrate
+from agentic_rag.skillopt.benchmark import (
+    prepare_benchmark_splits,
+    split_manifest_profile,
+    validate_benchmark_lineage,
+)
 from agentic_rag.skillopt.data import (
     HOTPOTQA_BENCHMARK_SCOPE_ID,
     prepare_hotpotqa_smoke_splits,
-    split_manifest_profile,
     validate_hotpotqa_smoke_lineage,
 )
 from agentic_rag.skillopt.trainer import (
@@ -234,7 +238,7 @@ def build_command(
         bool,
         typer.Option(
             "--validate-benchmark-profile",
-            help="Require the pinned HotpotQA reference counts.",
+            help="Require the selected dataset profile's pinned counts.",
         ),
     ] = False,
 ) -> None:
@@ -445,7 +449,10 @@ def skillopt_prepare_command(
         str,
         typer.Option(
             "--dataset",
-            help="Dataset profile; only hotpotqa is supported.",
+            help=(
+                "Dataset profile: hotpotqa, musique, 2wikimultihop, "
+                "medical, or novel."
+            ),
         ),
     ] = "hotpotqa",
     seed: Annotated[int, typer.Option("--seed")] = 42,
@@ -471,25 +478,42 @@ def skillopt_prepare_command(
         ),
     ] = False,
 ) -> None:
-    """Prepare deterministic HotpotQA SkillOpt splits."""
+    """Prepare deterministic profile-stratified benchmark splits."""
 
     try:
         profile = get_dataset_profile(dataset)
-        if seed != 42 or split_size != 6:
-            raise ValueError("the canonical HotpotQA split uses seed 42 and size 6")
-        if train_size is not None and allow_subset:
+        if train_size is not None and not (
+            profile.key == "hotpotqa"
+            and seed == 42
+            and split_size == 6
+            and not allow_subset
+        ):
             raise ValueError(
-                "--train-size cannot be combined with --allow-subset"
+                "--train-size is supported only for the pinned HotpotQA "
+                "seed-42 split with --split-size 6"
             )
-        prepare_kwargs = {
-            "dataset_dir": dataset_dir,
-            "split_dir": split_dir,
-            "expected_question_count": None if allow_subset else profile.reference_question_count,
-            "expected_chunk_count": None if allow_subset else profile.reference_chunk_count,
-        }
-        if train_size is not None:
-            prepare_kwargs["train_size"] = train_size
-        manifest = prepare_hotpotqa_smoke_splits(**prepare_kwargs)
+        if (
+            profile.key == "hotpotqa"
+            and seed == 42
+            and split_size == 6
+            and not allow_subset
+        ):
+            prepare_kwargs = {
+                "dataset_dir": dataset_dir,
+                "split_dir": split_dir,
+            }
+            if train_size is not None:
+                prepare_kwargs["train_size"] = train_size
+            manifest = prepare_hotpotqa_smoke_splits(**prepare_kwargs)
+        else:
+            manifest = prepare_benchmark_splits(
+                dataset_dir=dataset_dir,
+                split_dir=split_dir,
+                dataset=profile,
+                seed=seed,
+                split_size=split_size,
+                validate_reference_counts=not allow_subset,
+            )
         _emit(manifest)
     except AgenticRAGError as exc:
         _fail(exc)
@@ -542,9 +566,9 @@ def skillopt_train_command(
     output: Annotated[
         Path,
         typer.Option("--output", file_okay=False),
-    ] = Path("runs/skillopt_hotpotqa"),
+    ] = Path("runs/skillopt_benchmark"),
 ) -> None:
-    """Run the native SkillOpt v0.2.0 workflow for HotpotQA."""
+    """Run the native SkillOpt workflow for one benchmark profile."""
 
     try:
         substrate = Substrate.open(substrate_path)
@@ -552,13 +576,30 @@ def skillopt_train_command(
         split_manifest = json.loads(
             (split_dir / "split_manifest.json").read_text(encoding="utf-8")
         )
-        scope_id = HOTPOTQA_BENCHMARK_SCOPE_ID
-        substrate.require_scope(scope_id)
-        if substrate.manifest.source_format != "hotpotqa_benchmark_exact":
-            raise ValueError(
-                "HotpotQA SkillOpt requires a hotpotqa_benchmark_exact substrate"
+        if split_manifest.get("schema_version") in {"1.0", "1.1"}:
+            if profile.key != "hotpotqa":
+                raise ValueError(
+                    "schema 1.x SkillOpt manifests support only HotpotQA"
+                )
+            scope_id = HOTPOTQA_BENCHMARK_SCOPE_ID
+            substrate.require_scope(scope_id)
+            if substrate.manifest.source_format not in {
+                "hotpotqa_benchmark_exact",
+                "benchmark_exact",
+                "arag_benchmark_exact",
+            }:
+                raise ValueError(
+                    "HotpotQA SkillOpt requires a benchmark_exact substrate"
+                )
+            validate_hotpotqa_smoke_lineage(split_dir, substrate.manifest)
+        else:
+            lineage_report = validate_benchmark_lineage(
+                split_dir,
+                substrate.manifest,
+                dataset=profile,
             )
-        validate_hotpotqa_smoke_lineage(split_dir, substrate.manifest)
+            scope_id = str(lineage_report["scope_id"])
+            substrate.require_scope(scope_id)
         split_metadata = split_manifest.get("splits")
         if not isinstance(split_metadata, dict):
             raise ValueError("split manifest has no splits mapping")
@@ -598,6 +639,11 @@ def skillopt_train_command(
                 "split_dir": str(split_dir.resolve()),
                 "skill_init": str(skill_file.resolve()),
                 "dataset": profile.key,
+                # The signed split manifest, not a reusable provider config,
+                # owns dataset cardinality.
+                "train_size": workflow_train_size,
+                "sel_env_num": workflow_validation_size,
+                "test_env_num": workflow_test_size,
             }
         )
         required = (

@@ -175,6 +175,8 @@ class BuildManifest(ManifestModel):
     source_format: Literal[
         "hotpotqa_scoped",
         "hotpotqa_benchmark_exact",
+        "benchmark_exact",
+        "arag_benchmark_exact",
     ] = "hotpotqa_scoped"
     source_artifacts: list[SourceArtifact] = Field(default_factory=list)
     scope_mode: Literal["question", "global"] = "question"

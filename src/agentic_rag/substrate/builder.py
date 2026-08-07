@@ -18,6 +18,7 @@ from scipy import sparse
 from agentic_rag import __version__
 from agentic_rag.substrate.adapters import (
     AdapterOutput,
+    BenchmarkExactAdapter,
     HotpotQAAdapter,
     HotpotQABenchmarkExactAdapter,
     SourceAdapter,
@@ -117,7 +118,14 @@ class SubstrateBuilder:
             self.adapter = adapter
         elif config.source_format == "hotpotqa_benchmark_exact":
             self.adapter = HotpotQABenchmarkExactAdapter(
-                scope_id=config.benchmark_scope_id
+                scope_id=config.benchmark_scope_id,
+                validate_reference_counts=config.validate_benchmark_profile,
+            )
+        elif config.source_format == "benchmark_exact":
+            self.adapter = BenchmarkExactAdapter(
+                config.dataset,
+                scope_id=config.benchmark_scope_id,
+                validate_reference_counts=config.validate_benchmark_profile,
             )
         else:
             self.adapter = HotpotQAAdapter()

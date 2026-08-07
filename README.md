@@ -1,6 +1,7 @@
 # Agentic RAG
 
-A single-agent, multi-substrate retrieval system for HotpotQA. The repository
+A single-agent, multi-substrate retrieval system for 2WikiMultiHopQA,
+HotpotQA, Medical and Novel from GraphRAG-Bench, and MuSiQue. The repository
 contains one production architecture: Semantic Memory, episode-local typed
 references, centralized State Management, and a stateless Controller.
 
@@ -38,8 +39,8 @@ a retrieval step.
 
 See [architecture.md](docs/architecture.md),
 [action-contract.md](docs/action-contract.md), and
-[evaluation.md](docs/evaluation.md). For a clean-machine setup, pinned HotpotQA
-data, local Qwen SkillOpt, and the A-RAG baseline procedure, use the
+[evaluation.md](docs/evaluation.md). For a clean-machine setup, the pinned
+five-dataset collection, local Qwen SkillOpt, and the A-RAG baseline procedure, use the
 [reproduction and A-RAG baseline guide](docs/reproduction-and-arag-baseline.md).
 
 ## Install
@@ -61,9 +62,26 @@ pip install -e ".[dev,skillopt]"
 Secrets belong in an untracked `.env` or the process environment. Never put an
 API key in YAML, a trajectory, or a commit.
 
-## Build a HotpotQA substrate
+## Build benchmark substrates
 
-Query-scoped HotpotQA input:
+The canonical `benchmark_exact` adapter supports these dataset keys:
+`2wikimultihop`, `hotpotqa`, `medical`, `musique`, and `novel`. Each checked-in
+build config pins its dataset profile and validates the official row counts.
+
+```powershell
+agentic-rag build data\rag_test artifacts\medical_benchmark_exact `
+  --config configs\datasets\medical.yaml
+agentic-rag validate artifacts\medical_benchmark_exact
+```
+
+Use the corresponding file under `configs\datasets\` for the other four
+datasets. Gold questions and answers are written only to the evaluation
+sidecar; they never enter retrieval or Policy context.
+
+### Query-scoped HotpotQA input
+
+The separate `hotpotqa_scoped` input format remains available for custom
+Hotpot-style records whose context is attached to each question:
 
 ```powershell
 agentic-rag build data\hotpotqa.json artifacts\hotpotqa `
@@ -72,21 +90,12 @@ agentic-rag build data\hotpotqa.json artifacts\hotpotqa `
 agentic-rag validate artifacts\hotpotqa
 ```
 
-Pinned reduced benchmark input (`chunks.json` plus `questions.json`):
-
-```powershell
-agentic-rag build data\hotpotqa artifacts\hotpotqa-benchmark `
-  --corpus-id hotpotqa-benchmark `
-  --source-format hotpotqa_benchmark_exact `
-  --validate-benchmark-profile
-```
-
 ## Run one episode
 
 Ollama Qwen:
 
 ```powershell
-agentic-rag run artifacts\hotpotqa-benchmark `
+agentic-rag run artifacts\hotpotqa_benchmark_exact `
   "Which person was born earlier?" `
   --scope-id hotpotqa:benchmark_exact:dev `
   --skill-file skills\baseline.md `
@@ -94,6 +103,7 @@ agentic-rag run artifacts\hotpotqa-benchmark `
   --output runs\qwen
 ```
 
+The Policy configs are dataset-independent despite their historical filenames.
 OpenAI Luna uses `configs/hotpotqa_luna.yaml` and reads `OPENAI_API_KEY` from
 the environment.
 
@@ -112,11 +122,27 @@ substrate IDs remain audit-only and never enter Policy context.
 ## Evaluation and SkillOpt
 
 ```powershell
-python scripts\run_hotpotqa_eval.py --help
-python scripts\judge_hotpotqa.py --help
+python scripts\run_benchmark_eval.py --help
+python scripts\judge_benchmark.py --help
+python scripts\run_benchmark_matrix.py --help
 agentic-rag skillopt-prepare --help
 agentic-rag skillopt-train --help
 ```
+
+With the five standard substrates and deterministic smoke splits in place,
+one command runs the same V3.2 Policy and Skill over every test split:
+
+```powershell
+python scripts\run_benchmark_matrix.py `
+  --config configs\hotpotqa_qwen.yaml `
+  --skill skills\guarded_procedure.md `
+  --output runs\qwen_all_datasets
+```
+
+The matrix runner writes one complete result directory per dataset and a
+`matrix_summary.json`. Use `judge_benchmark.py --dataset <dataset>` for semantic
+accuracy. Medical and Novel intentionally report LLM accuracy rather than
+contain accuracy because their answers are long-form.
 
 The standard metrics are exact match, contain accuracy, Luna-as-judge,
 invalid attempts, Policy calls/tokens, retrieved tokens, and action counts.

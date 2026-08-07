@@ -1,4 +1,4 @@
-"""SkillOpt-compatible batch planning for HotpotQA splits.
+"""SkillOpt-compatible batch planning for profile-bound benchmark splits.
 
 The module keeps SkillOpt as an optional dependency.  When SkillOpt v0.2.0 is
 installed, :class:`AgenticRAGSkillOptDataLoader` is a real ``BaseDataLoader``
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from agentic_rag.evaluation.profiles import DatasetProfile
-from agentic_rag.skillopt.data import split_manifest_profile
+from agentic_rag.skillopt.benchmark import split_manifest_profile
 from agentic_rag.skillopt.lineage import load_json
 
 try:  # pragma: no cover - exercised by the opt-in SkillOpt installation
