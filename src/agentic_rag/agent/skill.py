@@ -9,6 +9,9 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field
 
 
+FIXED_ANSWER_CONTRACT_HEADING = "## Fixed answer contract"
+
+
 class SkillDocument(BaseModel):
     """Exact Markdown content plus a content-addressed identifier."""
 
@@ -45,6 +48,36 @@ class SkillDocument(BaseModel):
     @property
     def version(self) -> str:
         return self.sha256
+
+    @property
+    def fixed_answer_contract(self) -> str | None:
+        """Return the canonical fixed block when the Markdown declares one."""
+
+        index = self.content.find(FIXED_ANSWER_CONTRACT_HEADING)
+        if index < 0:
+            return None
+        return self.content[index:].strip()
+
+    @staticmethod
+    def freeze_answer_contract(
+        candidate_content: str,
+        fixed_answer_contract: str | None,
+    ) -> str:
+        """Replace a candidate's fixed block with the seed's canonical block."""
+
+        if fixed_answer_contract is None:
+            return candidate_content
+        if not fixed_answer_contract.startswith(FIXED_ANSWER_CONTRACT_HEADING):
+            raise ValueError("fixed answer contract has an invalid heading")
+        index = candidate_content.find(FIXED_ANSWER_CONTRACT_HEADING)
+        if index < 0:
+            raise ValueError(
+                "SkillOpt candidate removed the fixed answer contract heading"
+            )
+        workflow = candidate_content[:index].rstrip()
+        if not workflow:
+            raise ValueError("SkillOpt candidate removed the retrieval workflow")
+        return f"{workflow}\n\n{fixed_answer_contract}\n"
 
     def write_snapshot(self, path: str | Path) -> Path:
         destination = Path(path)

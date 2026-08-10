@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - fallback behavior is tested instead
 
 
 from agentic_rag.evaluation import EpisodeEvaluator
+from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.evaluation.profiles import (
     DatasetProfile,
     get_dataset_profile,
@@ -57,6 +58,7 @@ class AgenticRAGSkillOptAdapter(_EnvAdapter):
         seed: int = 42,
         limit: int = 0,
         resume: bool = True,
+        fixed_answer_contract: str | None = None,
     ) -> None:
         if workers != 1:
             raise ValueError(
@@ -86,6 +88,7 @@ class AgenticRAGSkillOptAdapter(_EnvAdapter):
         self.minibatch_size = int(minibatch_size)
         self.edit_budget = int(edit_budget)
         self.resume = bool(resume)
+        self.fixed_answer_contract = fixed_answer_contract
         self.dataloader = AgenticRAGSkillOptDataLoader(
             split_dir,
             dataset=self.profile.key,
@@ -172,10 +175,14 @@ class AgenticRAGSkillOptAdapter(_EnvAdapter):
         out_dir: str,
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
+        effective_skill = SkillDocument.freeze_answer_contract(
+            skill_content,
+            self.fixed_answer_contract,
+        )
         return run_rollout_batch(
             batch=env_manager,
             out_root=out_dir,
-            skill_content=skill_content,
+            skill_content=effective_skill,
             harness_factory=self.harness_factory,
             evaluator=self.evaluator,
             workers=self.workers,

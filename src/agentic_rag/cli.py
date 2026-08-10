@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from agentic_rag.agent.config import AgentConfig
 from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.agent.policy import PolicyError
+from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.substrate.bridge import SubstrateBridge
 from agentic_rag.substrate.builder import SubstrateBuilder
 from agentic_rag.evaluation.profiles import get_dataset_profile
@@ -629,8 +630,7 @@ def skillopt_train_command(
             raise ValueError(
                 "SkillOpt workflow requires OpenAI gpt-5.6-luna Policy"
             )
-        if not skill_file.read_text(encoding="utf-8").strip():
-            raise ValueError("initial SkillOpt Markdown must not be blank")
+        initial_skill = SkillDocument.load(skill_file)
         skillopt_config = load_skillopt_config(skillopt_config_path)
         output = output.resolve()
         skillopt_config.update(
@@ -739,6 +739,7 @@ def skillopt_train_command(
             ),
             edit_budget=int(skillopt_config["edit_budget"]),
             seed=int(skillopt_config["seed"]),
+            fixed_answer_contract=initial_skill.fixed_answer_contract,
         )
         endpoint = str(
             skillopt_config.get("azure_openai_endpoint")

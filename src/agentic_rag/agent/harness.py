@@ -42,6 +42,7 @@ class AgentHarness:
         self.context_builder = PolicyContextBuilder(
             substrate,
             config.enabled_expansions,
+            show_available_action_options=config.show_available_action_options,
         )
         self.controller = AgentController(
             policy=policy,
@@ -188,9 +189,17 @@ class AgentHarness:
             "agent": self.config.effective_dict(),
             "policy_context": {
                 "node_reference_scheme": "episode_local_typed_refs_with_frozen_visibility",
+                "show_available_action_options": (
+                    self.config.show_available_action_options
+                ),
                 "visible_sections": [
                     "question",
                     "action_protocol",
+                    *(
+                        ["available_action_options"]
+                        if self.config.show_available_action_options
+                        else []
+                    ),
                     "skill",
                     "last_assessment",
                     "semantic_memory",

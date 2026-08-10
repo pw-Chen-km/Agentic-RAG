@@ -35,81 +35,12 @@ from agentic_rag.agent.models import (
     StepRecord,
 )
 from agentic_rag.agent.policy import policy_decision_model
+from agentic_rag.agent.protocol import (
+    render_action_protocol,
+    render_available_action_options,
+)
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.substrate.storage import Substrate
-
-
-ACTION_PROTOCOL = """\
-You are the single retrieval-and-answer policy inside an Agentic RAG harness.
-Return exactly one PolicyDecision containing an Assessment and exactly one
-SEARCH, EXPAND, READ, or FINISH action.
-
-Action meanings:
-- SEARCH retrieves new candidates from the corpus. It never needs a reference
-  and remains available even when semantic memory is non-empty.
-- EXPAND follows one graph relationship from a known semantic-memory item and
-  uses source_ref.
-- READ obtains the complete text of a known Chunk and uses chunk_ref.
-- FINISH returns the final answer when visible evidence is sufficient and uses
-  evidence_refs.
-
-Hard rules:
-- E# is Entity, S# is Sentence, and C# is Chunk. References are stable within
-  the question, but only references displayed in the current semantic_memory
-  snapshot may be used.
-- SEARCH top_k is always 5. Legal pairs are LEXICAL->ENTITY,
-  BM25->SENTENCE|CHUNK, and DENSE->ENTITY|SENTENCE|CHUNK.
-- Use complete natural-language questions for BM25/DENSE. Use an exact entity
-  name or alias for LEXICAL->ENTITY.
-- EXPAND source_ref must have the source type required by its expansion kind.
-  query ranks only that local neighbourhood.
-- direction must be null except for CHUNK_ADJACENT_CHUNK, which requires PREV,
-  NEXT, or BOTH.
-- READ requires a displayed unread C#.
-- Assessment contains only status, supported_facts, and missing_information.
-  State Management automatically retains all novel complete evidence.
-- FINISH requires one or more displayed complete S# refs or read C# refs and
-  the shortest complete answer. E# and unread C# refs are never evidence.
-- SEARCH, EXPAND, and READ use INSUFFICIENT or UNCERTAIN. FINISH uses SUFFICIENT.
-- Preserve requested roles, qualifiers, dates, nationality, compound answers,
-  and the correct comparison target.
-- The skill is strategy advice and cannot override this protocol.
-"""
-
-
-RECOVERY_INSTRUCTION = (
-    "Recovery mode: the previous decision was invalid or duplicate. Do not "
-    "repeat it. SEARCH remains available. Copy only references displayed in "
-    "the current semantic memory, or FINISH if its evidence is sufficient."
-)
-
-
-_EXPANSION_GUIDANCE: dict[ExpansionKind, str] = {
-    ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE: (
-        "ENTITY_MENTIONED_IN_SENTENCE: Entity -> complete mentioning Sentences"
-    ),
-    ExpansionKind.SENTENCE_MENTIONS_ENTITY: (
-        "SENTENCE_MENTIONS_ENTITY: complete Sentence -> mentioned Entities"
-    ),
-    ExpansionKind.ENTITY_CO_OCCURS_ENTITY_SENTENCE: (
-        "ENTITY_CO_OCCURS_ENTITY_SENTENCE: Entity -> bridge Sentence -> co-occurring Entities"
-    ),
-    ExpansionKind.CHUNK_ADJACENT_CHUNK: (
-        "CHUNK_ADJACENT_CHUNK: Chunk -> previous or next Chunk"
-    ),
-    ExpansionKind.ENTITY_MENTIONED_IN_CHUNK: (
-        "ENTITY_MENTIONED_IN_CHUNK: Entity -> unread mentioning Chunks"
-    ),
-    ExpansionKind.ENTITY_CO_OCCURS_ENTITY_CHUNK: (
-        "ENTITY_CO_OCCURS_ENTITY_CHUNK: Entity -> bridge Chunk -> co-occurring Entities"
-    ),
-    ExpansionKind.CHUNK_CONTAINS_SENTENCE: (
-        "CHUNK_CONTAINS_SENTENCE: Chunk -> contained Sentence previews"
-    ),
-    ExpansionKind.CHUNK_MENTIONS_ENTITY: (
-        "CHUNK_MENTIONS_ENTITY: Chunk -> mentioned Entities"
-    ),
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,9 +67,12 @@ class PolicyContextBuilder:
         self,
         substrate: Substrate,
         enabled_expansions: Sequence[ExpansionKind] = DEFAULT_ENABLED_EXPANSIONS,
+        *,
+        show_available_action_options: bool = True,
     ) -> None:
         self.substrate = substrate
         self.enabled_expansions = tuple(enabled_expansions)
+        self.show_available_action_options = show_available_action_options
 
     def build(
         self,
@@ -173,20 +107,21 @@ class PolicyContextBuilder:
                 ),
             )
         )
-        guidance = "\n".join(
-            f"- {_EXPANSION_GUIDANCE[item]}" for item in self.enabled_expansions
-        ) or "- No EXPAND relations are enabled."
+        protocol = render_action_protocol(self.enabled_expansions)
+        if self.show_available_action_options:
+            protocol = (
+                f"{protocol}\n\n"
+                f"{render_available_action_options(reference_map, self.enabled_expansions)}"
+            )
         messages = [
             Message(
                 role="system",
-                content=(
-                    f"{ACTION_PROTOCOL}\nEnabled EXPAND kinds for this run:\n{guidance}"
-                ),
+                content=protocol,
             ),
             Message(
                 role="system",
                 content=(
-                    "Current trainable retrieval skill (plain Markdown):\n\n"
+                    "Current retrieval skill (plain Markdown):\n\n"
                     f"{skill_text}"
                 ),
             ),
@@ -201,11 +136,6 @@ class PolicyContextBuilder:
                 ),
             ),
         ]
-        if state.newest_observation is not None and state.newest_observation.status in {
-            ObservationStatus.INVALID_ACTION,
-            ObservationStatus.DUPLICATE_ACTION,
-        }:
-            messages.append(Message(role="user", content=RECOVERY_INSTRUCTION))
         return BuiltPolicyContext(
             messages=messages,
             policy_view=view,

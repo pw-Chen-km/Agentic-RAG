@@ -11,6 +11,7 @@ from ollama import Client
 
 from agentic_rag.agent.config import AgentConfig, OllamaPolicyConfig
 from agentic_rag.agent.harness import AgentHarness
+from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.evaluation import (
     EpisodeEvaluator,
     JudgeMessage,
@@ -135,6 +136,7 @@ def main() -> None:
         raise ValueError("local Qwen SkillOpt requires an Ollama Policy config")
     if not agent_config.policy.think:
         raise ValueError("local Qwen SkillOpt requires thinking mode")
+    initial_skill = SkillDocument.load(args.skill)
 
     config = load_skillopt_config(args.skillopt_config)
     config.update(
@@ -171,6 +173,7 @@ def main() -> None:
         edit_budget=int(config["edit_budget"]),
         seed=int(config["seed"]),
         resume=True,
+        fixed_answer_contract=initial_skill.fixed_answer_contract,
     )
     summary = run_skillopt_training(config, adapter)
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
