@@ -4,6 +4,9 @@ import json
 from types import SimpleNamespace
 
 from agentic_rag.agent.models import Message
+from agentic_rag.agent.action_schema import ActionSchemaBuilder
+from agentic_rag.agent.action_space import AvailableActionSpaceBuilder
+from agentic_rag.agent.models import ContextReferenceMap, EpisodeState
 from agentic_rag.agent.providers.ollama import OllamaChatPolicy
 from agentic_rag.agent.providers.openai import OpenAIResponsesPolicy
 
@@ -67,3 +70,24 @@ def test_openai_and_ollama_use_the_same_action_contract() -> None:
     serialized = json.dumps(ollama_schema)
     for action in ("SEARCH", "EXPAND", "READ", "FINISH"):
         assert action in serialized
+
+
+def test_ollama_receives_the_exact_state_conditioned_schema() -> None:
+    client = FakeOllamaClient()
+    policy = OllamaChatPolicy(
+        model="qwen3.5:9b", client=client, max_retries=0
+    )
+    action_space = AvailableActionSpaceBuilder(()).build(
+        EpisodeState.initial(), ContextReferenceMap()
+    )
+    decision_format = ActionSchemaBuilder().build(action_space)
+
+    policy.decide(
+        [Message(role="user", content="question")],
+        decision_format=decision_format,
+    )
+
+    assert client.kwargs["format"] == decision_format.model_json_schema()
+    serialized = json.dumps(client.kwargs["format"])
+    assert "SEARCH" in serialized
+    assert all(item not in serialized for item in ("EXPAND", "READ", "FINISH"))

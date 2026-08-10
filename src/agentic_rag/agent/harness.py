@@ -10,7 +10,7 @@ from agentic_rag.agent.context import PolicyContextBuilder
 from agentic_rag.agent.controller import BUDGET_FINALIZE_INSTRUCTION, AgentController
 from agentic_rag.agent.evidence import EvidenceResolver
 from agentic_rag.agent.expansion import ExpansionEngine
-from agentic_rag.agent.models import EpisodeResult, Message
+from agentic_rag.agent.models import ActionSpaceMode, EpisodeResult, Message
 from agentic_rag.agent.policy import PolicyClient
 from agentic_rag.agent.router import ActionRouter
 from agentic_rag.agent.skill import SkillDocument
@@ -43,6 +43,7 @@ class AgentHarness:
             substrate,
             config.enabled_expansions,
             show_available_action_options=config.show_available_action_options,
+            use_state_conditioned_schema=config.use_state_conditioned_schema,
         )
         self.controller = AgentController(
             policy=policy,
@@ -129,12 +130,19 @@ class AgentHarness:
         prior_steps = []
         policy_calls: list[dict] = []
         for step in result.trajectory:
+            action_space_mode = (
+                ActionSpaceMode.BUDGET_FINALIZE
+                if step.observation is not None
+                and step.observation.metadata.get("budget_finalize") is True
+                else ActionSpaceMode.NORMAL
+            )
             built = self.context_builder.build(
                 result.query,
                 self.skill,
                 step.state_before,
                 prior_steps,
                 scope_id=result.scope_id,
+                action_space_mode=action_space_mode,
             )
             messages = list(built.messages)
             if step.observation is not None and step.observation.metadata.get("budget_finalize") is True:
@@ -157,6 +165,12 @@ class AgentHarness:
                         if step.context_reference_map is not None
                         else None
                     ),
+                    "available_action_space": (
+                        step.available_action_space.model_dump(mode="json")
+                        if step.available_action_space is not None
+                        else None
+                    ),
+                    "decision_schema_sha256": step.decision_schema_sha256,
                     "validation_status": step.validation_status.value,
                     "validation_error": step.validation_error,
                     "observation": (
@@ -191,6 +205,9 @@ class AgentHarness:
                 "node_reference_scheme": "episode_local_typed_refs_with_frozen_visibility",
                 "show_available_action_options": (
                     self.config.show_available_action_options
+                ),
+                "use_state_conditioned_schema": (
+                    self.config.use_state_conditioned_schema
                 ),
                 "visible_sections": [
                     "question",

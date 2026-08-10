@@ -9,8 +9,15 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from agentic_rag.agent.action_schema import (
+    ActionSchemaBuilder,
+    decision_schema_sha256,
+)
+from agentic_rag.agent.action_space import AvailableActionSpaceBuilder
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
+    ActionSpaceMode,
+    AvailableActionSpace,
     ChunkMemoryItem,
     ContextNodeReference,
     ContextReferenceMap,
@@ -47,7 +54,9 @@ class BuiltPolicyContext:
     messages: list[Message]
     policy_view: PolicyView
     reference_map: ContextReferenceMap
+    available_action_space: AvailableActionSpace
     decision_format: type[BaseModel]
+    decision_schema_sha256: str
 
     def __iter__(self):
         return iter(self.messages)
@@ -68,10 +77,16 @@ class PolicyContextBuilder:
         enabled_expansions: Sequence[ExpansionKind] = DEFAULT_ENABLED_EXPANSIONS,
         *,
         show_available_action_options: bool = True,
+        use_state_conditioned_schema: bool = True,
     ) -> None:
         self.substrate = substrate
         self.enabled_expansions = tuple(enabled_expansions)
         self.show_available_action_options = show_available_action_options
+        self.use_state_conditioned_schema = use_state_conditioned_schema
+        self.action_space_builder = AvailableActionSpaceBuilder(
+            self.enabled_expansions
+        )
+        self.action_schema_builder = ActionSchemaBuilder()
 
     def build(
         self,
@@ -81,12 +96,23 @@ class PolicyContextBuilder:
         trajectory: Sequence[StepRecord],
         *,
         scope_id: str | None = None,
+        action_space_mode: ActionSpaceMode = ActionSpaceMode.NORMAL,
     ) -> BuiltPolicyContext:
         if scope_id is not None:
             self.substrate.require_scope(scope_id)
         skill_text = skill.content if isinstance(skill, SkillDocument) else skill
         display_ids = self._display_ids(state)
         reference_map = self._reference_map(display_ids, state)
+        available_action_space = self.action_space_builder.build(
+            state,
+            reference_map,
+            mode=action_space_mode,
+        )
+        decision_format = (
+            self.action_schema_builder.build(available_action_space)
+            if self.use_state_conditioned_schema
+            else policy_decision_model(self.enabled_expansions)
+        )
         memory = self._semantic_memory(display_ids, state)
         attempted_actions = [self._attempt_summary(item) for item in trajectory]
         view = PolicyView(
@@ -116,7 +142,7 @@ class PolicyContextBuilder:
         if self.show_available_action_options:
             protocol = (
                 f"{protocol}\n\n"
-                f"{render_available_action_options(reference_map, self.enabled_expansions)}"
+                f"{render_available_action_options(available_action_space)}"
             )
         messages = [
             Message(
@@ -145,7 +171,9 @@ class PolicyContextBuilder:
             messages=messages,
             policy_view=view,
             reference_map=reference_map,
-            decision_format=policy_decision_model(self.enabled_expansions),
+            available_action_space=available_action_space,
+            decision_format=decision_format,
+            decision_schema_sha256=decision_schema_sha256(decision_format),
         )
 
     def _display_ids(self, state: EpisodeState) -> list[str]:

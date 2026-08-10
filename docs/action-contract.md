@@ -1,14 +1,17 @@
 # Action contract
 
-The provider exposes all four action families on every Policy call. Existing
-memory never removes SEARCH from the schema.
+Every Policy turn derives one immutable `AvailableActionSpace` from the
+current state and frozen typed-reference map. The same action space is rendered
+as optional prompt guidance and compiled into the provider response schema.
+Action families with no legal structural variant are omitted from that turn's
+schema. Set `agent.use_state_conditioned_schema: false` to retain the legacy
+static schema for ablations.
 
 ## SEARCH
 
 ```json
 {
   "assessment": {
-    "status": "INSUFFICIENT",
     "supported_facts": [],
     "missing_information": ["Peter Daou's relationship to Verrit"]
   },
@@ -22,16 +25,15 @@ memory never removes SEARCH from the schema.
 }
 ```
 
-SEARCH is unrestricted by existing refs. Legal methods are BM25, DENSE, and
-LEXICAL where supported by the target; legal targets are ENTITY, SENTENCE, and
-CHUNK according to the retriever contract.
+SEARCH remains available while retrieval budgets are open. Its six legal
+method/target pairs are separate schema variants. Query text stays free-form,
+so exact duplicate SEARCH remains a post-generation Validator rule.
 
 ## EXPAND
 
 ```json
 {
   "assessment": {
-    "status": "INSUFFICIENT",
     "supported_facts": ["Peter Daou created Verrit."],
     "missing_information": ["The requested property of Verrit"]
   },
@@ -46,7 +48,9 @@ CHUNK according to the retriever contract.
 }
 ```
 
-The resolver trims whitespace and normalizes case only. It never guesses a
+Only enabled relationships with a compatible visible source are emitted.
+`source_ref` is an enum of the compatible refs for that relationship. The
+resolver still trims whitespace and normalizes case only; it never guesses a
 number, fuzzy-matches text, or repairs a graph handle.
 
 ## READ
@@ -54,7 +58,6 @@ number, fuzzy-matches text, or repairs a graph handle.
 ```json
 {
   "assessment": {
-    "status": "INSUFFICIENT",
     "supported_facts": [],
     "missing_information": ["The sentence's missing qualifier"]
   },
@@ -62,14 +65,14 @@ number, fuzzy-matches text, or repairs a graph handle.
 }
 ```
 
-The chunk must be visible, in scope, and unread.
+`chunk_ref` is an enum of visible, in-scope, unread Chunks. READ is omitted when
+that enum would be empty.
 
 ## FINISH
 
 ```json
 {
   "assessment": {
-    "status": "SUFFICIENT",
     "supported_facts": ["Peter Daou created Verrit."],
     "missing_information": []
   },
@@ -81,12 +84,14 @@ The chunk must be visible, in scope, and unread.
 }
 ```
 
-Only visible complete S# items and visible read C# items are evidence. E# and
-unread C# are navigation only.
+Only visible complete S# items and visible read C# items are emitted as allowed
+evidence values. E# and unread C# are navigation only. When retrieval closes,
+budget finalization uses a FINISH-only action space and schema.
 
 ## Invalid attempts
 
-Interface errors include `reference_not_available`,
+The schema prevents most structural interface errors before parsing. The
+Resolver and Validator remain defense-in-depth. Their errors include `reference_not_available`,
 `reference_type_mismatch`, `reference_not_evidence`, `chunk_not_readable`,
 `expansion_not_valid_for_node`, and `duplicate_action`. An invalid attempt is
 recorded with the raw decision and frozen map. It consumes one Policy attempt

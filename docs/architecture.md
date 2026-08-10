@@ -4,10 +4,14 @@
 
 ```mermaid
 flowchart TD
-    Q["Question + scope"] --> CB["Context Builder"]
+    Q["Question + scope"] --> CB["Context projection"]
     S["Episode snapshot"] --> CB
     K["Skill document"] --> CB
-    CB -->|"messages + frozen typed-ref map"| P["LLM Policy"]
+    CB --> AS["Available Action Space"]
+    AS -->|"optional text"| PR["Prompt renderer"]
+    AS -->|"dynamic response model"| SB["Schema builder"]
+    PR -->|"messages"| P["LLM Policy"]
+    SB -->|"format / text_format"| P
     P -->|"assessment + one action"| C["Stateless Controller"]
     C --> R["Reference Resolver"]
     R --> V["Validator"]
@@ -26,7 +30,9 @@ method, target, graph relation, source node, or stopping point for it.
 | Module | High-level responsibility | Input | Output |
 |---|---|---|---|
 | State Management | Own the complete episode state and all counters | Observation or invalid-attempt record | Immutable snapshot for the next turn |
-| Context Builder | Serialize state without recommending a next action | Question, Skill, snapshot, history | Policy messages and frozen visible-ref map |
+| Action Space Builder | Derive structural affordances without choosing a strategy | Snapshot, enabled expansions, frozen visible-ref map | Immutable per-turn action space |
+| Context Builder | Serialize state without recommending a next action | Question, Skill, snapshot, history, action space | Policy messages and frozen visible-ref map |
+| Schema Builder | Compile the same affordances into provider constraints | Available action space | Per-turn Pydantic response model |
 | LLM Policy | Decide what information to obtain next | Structured context and action schema | Assessment plus one action |
 | Controller | Orchestrate one loop without retaining data | Policy decision and same-turn frozen map | Invalid record, Observation, or final answer |
 | Reference Resolver | Map visible `E#/S#/C#` to stable internal IDs | Raw action and frozen map | Resolved action or typed interface error |
@@ -44,7 +50,11 @@ Every turn contains exactly these sections:
 5. Semantic Memory
 6. Attempted actions
 7. Remaining budget
-8. Structured action schema supplied by the provider
+8. Optional available-action text derived from the action space
+
+The same action space is separately compiled into the structured response
+schema and supplied through Ollama `format` or OpenAI `text_format`; the raw
+schema is not pasted into the messages.
 
 There is no separate latest-event block and no action catalog. The budget is a
 single line such as `Budget: 4 steps, 5 attempts, 3200 retrieval tokens left`.
@@ -66,9 +76,9 @@ Preview: Verrit was a political website...
 ```
 
 Refs are stable for the episode, but the Controller accepts only refs visible
-in the exact frozen map sent with the decision. After C1 is read, sentences
-fully contained by it remain in audit state but are folded out of the next
-Policy view.
+in the exact frozen map sent with the decision. After C1 is read, it disappears
+from READ choices and becomes eligible FINISH evidence. Complete eligible
+Sentence evidence remains visible.
 
 ## Concrete turn
 

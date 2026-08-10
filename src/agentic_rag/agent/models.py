@@ -424,6 +424,47 @@ class ContextReferenceMap(AgentModel):
     typed_refs: dict[str, ContextNodeReference] = Field(default_factory=dict)
 
 
+class ActionSpaceMode(StrEnum):
+    NORMAL = "NORMAL"
+    BUDGET_FINALIZE = "BUDGET_FINALIZE"
+
+
+class SearchActionOption(AgentModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=False)
+
+    method: SearchMethod
+    target: SearchTarget
+
+
+class ExpandActionOption(AgentModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=False)
+
+    kind: ExpansionKind
+    source_refs: tuple[TypedReference, ...]
+    directions: tuple[ExpansionDirection, ...] = ()
+
+
+class AvailableActionSpace(AgentModel):
+    """Immutable structural action affordances for one exact Policy turn."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=False)
+
+    mode: ActionSpaceMode = ActionSpaceMode.NORMAL
+    search_options: tuple[SearchActionOption, ...] = ()
+    expand_options: tuple[ExpandActionOption, ...] = ()
+    read_refs: tuple[TypedReference, ...] = ()
+    finish_evidence_refs: tuple[TypedReference, ...] = ()
+
+    @property
+    def has_actions(self) -> bool:
+        return bool(
+            self.search_options
+            or self.expand_options
+            or self.read_refs
+            or self.finish_evidence_refs
+        )
+
+
 class EntityMemoryItem(AgentModel):
     ref: str = Field(min_length=2, pattern=r"^E[1-9][0-9]*$")
     node_type: Literal["ENTITY"] = "ENTITY"
@@ -500,6 +541,11 @@ class StepRecord(AgentModel):
     usage: Usage = Field(default_factory=Usage)
     policy_view: PolicyView | None = None
     context_reference_map: ContextReferenceMap | None = None
+    available_action_space: AvailableActionSpace | None = None
+    decision_schema_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 class TerminationReason(StrEnum):

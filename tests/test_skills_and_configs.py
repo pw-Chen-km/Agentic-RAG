@@ -69,6 +69,7 @@ def test_luna_qwen_and_smoke_configs_load_without_architecture_switch() -> None:
         assert config.max_policy_attempts == 12
         assert config.max_retrieved_tokens == 12_000
         assert config.show_available_action_options is True
+        assert config.use_state_conditioned_schema is True
 
 
 def test_action_option_ablation_configs_differ_only_by_prompt_flag() -> None:
@@ -85,3 +86,24 @@ def test_action_option_ablation_configs_differ_only_by_prompt_flag() -> None:
     enabled_payload.pop("show_available_action_options")
     disabled_payload.pop("show_available_action_options")
     assert enabled_payload == disabled_payload
+
+
+def test_prompt_and_schema_ablation_configs_cover_all_four_combinations() -> None:
+    names = {
+        (True, True): "hotpotqa_qwen36_amd_nothink_options_on.yaml",
+        (False, True): "hotpotqa_qwen36_amd_nothink_options_off.yaml",
+        (True, False): "hotpotqa_qwen36_amd_nothink_options_on_schema_off.yaml",
+        (False, False): "hotpotqa_qwen36_amd_nothink_options_off_schema_off.yaml",
+    }
+    normalized = []
+    for expected, name in names.items():
+        config = AgentConfig.from_yaml(ROOT / "configs" / name)
+        assert (
+            config.show_available_action_options,
+            config.use_state_conditioned_schema,
+        ) == expected
+        payload = config.model_dump(mode="json")
+        payload.pop("show_available_action_options")
+        payload.pop("use_state_conditioned_schema")
+        normalized.append(payload)
+    assert all(payload == normalized[0] for payload in normalized[1:])

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from agentic_rag.agent.context import project_observation_for_audit
 from agentic_rag.agent.models import (
     Assessment,
+    AvailableActionSpace,
     ContextReferenceMap,
     EpisodeResult,
     EpisodeState,
@@ -36,6 +37,8 @@ class AttemptEvent:
     usage: Usage
     policy_view: PolicyView
     context_reference_map: ContextReferenceMap
+    available_action_space: AvailableActionSpace
+    decision_schema_sha256: str
     commit_assessment: bool = True
     consume_step: bool = True
     invalid_attempt: bool = False
@@ -126,6 +129,8 @@ class EpisodeStateManager:
             usage=event.usage,
             policy_view=event.policy_view,
             context_reference_map=event.context_reference_map,
+            available_action_space=event.available_action_space,
+            decision_schema_sha256=event.decision_schema_sha256,
         )
         self._state = updated
         self._trajectory.append(record)

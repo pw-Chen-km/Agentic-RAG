@@ -101,6 +101,7 @@ class AgentConfig(ConfigModel):
     max_retrieved_tokens: int = Field(default=12_000, ge=1)
     enabled_expansions: tuple[ExpansionKind, ...] = DEFAULT_ENABLED_EXPANSIONS
     show_available_action_options: bool = True
+    use_state_conditioned_schema: bool = True
     policy: PolicyProviderConfig = Field(default_factory=OpenAIPolicyConfig)
 
     @field_validator("policy", mode="before")

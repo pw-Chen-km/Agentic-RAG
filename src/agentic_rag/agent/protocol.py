@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 
-from agentic_rag.agent.models import ContextReferenceMap, ExpansionKind
-from agentic_rag.agent.references import expected_expansion_source
+from agentic_rag.agent.models import AvailableActionSpace, ExpansionKind
 
 
 ACTION_PROTOCOL = """\
@@ -58,16 +57,6 @@ Invalid examples:
 """
 
 
-_SEARCH_OPTIONS = (
-    "LEXICAL -> ENTITY",
-    "BM25 -> SENTENCE",
-    "BM25 -> CHUNK",
-    "DENSE -> ENTITY",
-    "DENSE -> SENTENCE",
-    "DENSE -> CHUNK",
-)
-
-
 def render_action_protocol(enabled_expansions: Sequence[ExpansionKind]) -> str:
     """Render the stable protocol plus this run's enabled expansion enums."""
 
@@ -81,64 +70,53 @@ def render_action_protocol(enabled_expansions: Sequence[ExpansionKind]) -> str:
 
 
 def render_available_action_options(
-    references: ContextReferenceMap,
-    enabled_expansions: Sequence[ExpansionKind],
+    action_space: AvailableActionSpace,
 ) -> str:
     """List currently reference-valid action templates without choosing one."""
 
-    typed_refs = references.typed_refs
     sections = [
         "Currently available action options (structurally/reference-valid; "
         "query choices may still duplicate history):",
-        "",
-        "SEARCH:",
-        *(f"- {item}" for item in _SEARCH_OPTIONS),
     ]
+    if action_space.search_options:
+        sections.extend(
+            [
+                "",
+                "SEARCH:",
+                *(
+                    f"- {item.method.value} -> {item.target.value}"
+                    for item in action_space.search_options
+                ),
+            ]
+        )
 
     expansion_lines: list[str] = []
-    for kind in enabled_expansions:
-        expected_type = expected_expansion_source(kind)
-        candidates = _sorted_refs(
-            ref
-            for ref, item in typed_refs.items()
-            if item.node_type == expected_type
-        )
-        if not candidates:
-            continue
-        source_pool = ", ".join(candidates)
-        if kind is ExpansionKind.CHUNK_ADJACENT_CHUNK:
-            suffix = "direction in [PREV, NEXT, BOTH]"
+    for option in action_space.expand_options:
+        source_pool = ", ".join(option.source_refs)
+        if option.directions:
+            suffix = "direction in [" + ", ".join(
+                item.value for item in option.directions
+            ) + "]"
         else:
             suffix = "direction=null"
         expansion_lines.append(
-            f"- {kind.value}: source_ref in [{source_pool}], {suffix}"
+            f"- {option.kind.value}: source_ref in [{source_pool}], {suffix}"
         )
     if expansion_lines:
         sections.extend(["", "EXPAND:", *expansion_lines])
 
-    readable = _sorted_refs(
-        ref for ref, item in typed_refs.items() if item.can_read
-    )
-    if readable:
-        sections.extend(["", "READ:", f"- chunk_ref in [{', '.join(readable)}]"])
+    if action_space.read_refs:
+        sections.extend(
+            ["", "READ:", f"- chunk_ref in [{', '.join(action_space.read_refs)}]"]
+        )
 
-    evidence = _sorted_refs(
-        ref for ref, item in typed_refs.items() if item.can_use_as_evidence
-    )
-    if evidence:
+    if action_space.finish_evidence_refs:
         sections.extend(
             [
                 "",
                 "FINISH:",
                 "- evidence_refs may use any non-empty subset of "
-                f"[{', '.join(evidence)}]",
+                f"[{', '.join(action_space.finish_evidence_refs)}]",
             ]
         )
     return "\n".join(sections)
-
-
-def _sorted_refs(values: Iterable[str]) -> list[str]:
-    return sorted(
-        values,
-        key=lambda ref: ({"E": 0, "S": 1, "C": 2}[ref[0]], int(ref[1:])),
-    )

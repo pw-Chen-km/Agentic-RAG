@@ -54,10 +54,12 @@ def _harness(
     fake_embedder: FakeEmbeddingBackend,
     tmp_path: Path,
     policy: ScriptedPolicy,
+    *,
+    config: AgentConfig | None = None,
 ) -> AgentHarness:
     return AgentHarness(
         substrate=Substrate.open(built_substrate),
-        config=AgentConfig(),
+        config=config or AgentConfig(),
         skill=SkillDocument.from_text("Find explicit evidence, then answer."),
         policy=policy,
         output_root=tmp_path / "runs",
@@ -89,6 +91,9 @@ def test_search_observation_updates_memory_then_policy_finishes(
     assert "Latest event" not in second_prompt
     assert "Action Catalog" not in second_prompt
     assert result.evidence_refs[0].id not in second_prompt
+    assert result.trajectory[0].available_action_space is not None
+    assert result.trajectory[0].available_action_space.mode.value == "NORMAL"
+    assert len(result.trajectory[0].decision_schema_sha256 or "") == 64
 
 
 def test_invalid_ref_costs_attempt_but_not_retrieval_step(
@@ -104,7 +109,11 @@ def test_invalid_ref_costs_attempt_but_not_retrieval_step(
     )
     policy = ScriptedPolicy([invalid_read, _search(), _finish()])
     result = _harness(
-        built_substrate, fake_embedder, tmp_path, policy
+        built_substrate,
+        fake_embedder,
+        tmp_path,
+        policy,
+        config=AgentConfig(use_state_conditioned_schema=False),
     ).run("Where was Marie Curie born?", "q1", episode_id="invalid-ref")
 
     assert result.termination_reason is TerminationReason.FINISH
@@ -166,3 +175,28 @@ def test_read_keeps_sentence_evidence_visible_and_latest_ref_explicit(
         line for line in options.splitlines() if line.startswith("- evidence_refs")
     )
     assert "S1" in finish_line and "C1" in finish_line
+
+
+def test_budget_finalize_uses_finish_only_state_conditioned_schema(
+    built_substrate: Path,
+    fake_embedder: FakeEmbeddingBackend,
+    tmp_path: Path,
+) -> None:
+    policy = ScriptedPolicy([_search(), _finish()])
+    result = _harness(
+        built_substrate,
+        fake_embedder,
+        tmp_path,
+        policy,
+        config=AgentConfig(max_steps=1, max_policy_attempts=3),
+    ).run("Where was Marie Curie born?", "q1", episode_id="budget-finalize")
+
+    assert result.termination_reason is TerminationReason.FINISH
+    assert len(result.trajectory) == 2
+    final_step = result.trajectory[-1]
+    assert final_step.observation.metadata["budget_finalize"] is True
+    assert final_step.available_action_space.mode.value == "BUDGET_FINALIZE"
+    assert not final_step.available_action_space.search_options
+    assert not final_step.available_action_space.expand_options
+    assert not final_step.available_action_space.read_refs
+    assert "S1" in final_step.available_action_space.finish_evidence_refs

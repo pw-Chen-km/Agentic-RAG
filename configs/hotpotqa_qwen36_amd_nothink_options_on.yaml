@@ -3,6 +3,7 @@ agent:
   max_policy_attempts: 12
   max_retrieved_tokens: 12000
   show_available_action_options: true
+  use_state_conditioned_schema: true
   enabled_expansions:
     - ENTITY_MENTIONED_IN_SENTENCE
     - SENTENCE_MENTIONS_ENTITY

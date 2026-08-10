@@ -8,6 +8,7 @@ from uuid import uuid4
 from agentic_rag.agent.context import PolicyContextBuilder
 from agentic_rag.agent.evidence import EvidenceResolver
 from agentic_rag.agent.models import (
+    ActionSpaceMode,
     EpisodeResult,
     EpisodeState,
     Message,
@@ -125,6 +126,8 @@ class AgentController:
                         usage=usage,
                         policy_view=built.policy_view,
                         context_reference_map=built.reference_map,
+                        available_action_space=built.available_action_space,
+                        decision_schema_sha256=built.decision_schema_sha256,
                         commit_assessment=False,
                         consume_step=False,
                         invalid_attempt=True,
@@ -168,6 +171,8 @@ class AgentController:
                         usage=usage,
                         policy_view=built.policy_view,
                         context_reference_map=built.reference_map,
+                        available_action_space=built.available_action_space,
+                        decision_schema_sha256=built.decision_schema_sha256,
                         commit_assessment=False,
                         consume_step=False,
                         invalid_attempt=True,
@@ -200,6 +205,8 @@ class AgentController:
                         usage=usage,
                         policy_view=built.policy_view,
                         context_reference_map=built.reference_map,
+                        available_action_space=built.available_action_space,
+                        decision_schema_sha256=built.decision_schema_sha256,
                         commit_assessment=False,
                         consume_step=False,
                         invalid_attempt=True,
@@ -255,6 +262,8 @@ class AgentController:
                     usage=usage + Usage(retrieved_tokens=observation.retrieved_tokens),
                     policy_view=built.policy_view,
                     context_reference_map=built.reference_map,
+                    available_action_space=built.available_action_space,
+                    decision_schema_sha256=built.decision_schema_sha256,
                 )
             )
 
@@ -298,6 +307,7 @@ class AgentController:
             state,
             manager.trajectory_snapshot(),
             scope_id=manager.scope_id,
+            action_space_mode=ActionSpaceMode.BUDGET_FINALIZE,
         )
         messages = [*built.messages, Message(role="user", content=BUDGET_FINALIZE_INSTRUCTION)]
         try:
@@ -363,6 +373,8 @@ class AgentController:
                 usage=usage,
                 policy_view=built.policy_view,
                 context_reference_map=built.reference_map,
+                available_action_space=built.available_action_space,
+                decision_schema_sha256=built.decision_schema_sha256,
                 consume_step=consume_step,
             )
         )
@@ -403,5 +415,7 @@ class AgentController:
                 usage=usage,
                 policy_view=built.policy_view,
                 context_reference_map=built.reference_map,
+                available_action_space=built.available_action_space,
+                decision_schema_sha256=built.decision_schema_sha256,
             )
         )
