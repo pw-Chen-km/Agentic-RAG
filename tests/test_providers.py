@@ -10,7 +10,6 @@ from agentic_rag.agent.providers.openai import OpenAIResponsesPolicy
 
 PAYLOAD = {
     "assessment": {
-        "status": "INSUFFICIENT",
         "supported_facts": [],
         "missing_information": ["birthplace"],
     },

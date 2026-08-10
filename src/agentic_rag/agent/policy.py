@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field, ValidationError, create_model
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
     AgentModel,
-    AssessmentStatus,
     ExpansionDirection,
     ExpansionKind,
     Message,
@@ -58,7 +57,6 @@ class PolicyClient(Protocol):
 
 
 class _WireAssessment(AgentModel):
-    status: AssessmentStatus
     supported_facts: list[str] = Field(max_length=5)
     missing_information: list[str] = Field(max_length=3)
 

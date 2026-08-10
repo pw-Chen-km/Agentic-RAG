@@ -16,12 +16,6 @@ class AgentModel(BaseModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=False)
 
 
-class AssessmentStatus(StrEnum):
-    INSUFFICIENT = "INSUFFICIENT"
-    SUFFICIENT = "SUFFICIENT"
-    UNCERTAIN = "UNCERTAIN"
-
-
 class SearchMethod(StrEnum):
     LEXICAL = "LEXICAL"
     BM25 = "BM25"
@@ -74,7 +68,6 @@ class ExpansionDirection(StrEnum):
 class Assessment(AgentModel):
     """The Policy's semantic judgment, deliberately free of references."""
 
-    status: AssessmentStatus
     supported_facts: list[str] = Field(default_factory=list, max_length=5)
     missing_information: list[str] = Field(default_factory=list, max_length=3)
 
@@ -475,6 +468,7 @@ class PolicyStateView(AgentModel):
     policy_attempts: int = Field(ge=0)
     last_assessment: Assessment | None = None
     semantic_memory: list[SemanticMemoryItem] = Field(default_factory=list)
+    latest_attempt: dict[str, Any] | None = None
     attempted_actions: list[dict[str, Any]] = Field(default_factory=list)
     budget: str
 

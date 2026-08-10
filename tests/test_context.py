@@ -35,6 +35,7 @@ def test_empty_context_is_neutral_and_has_compact_budget(built_substrate: Path) 
     assert "\nFINISH:\n" not in options
     assert '"last_assessment"' in prompt
     assert '"semantic_memory"' in prompt
+    assert '"latest_attempt":null' in prompt
     assert '"attempted_actions"' in prompt
     assert "Budget: 10 steps, 12 attempts, 12000 retrieval tokens left" in prompt
     assert "Latest event" not in prompt

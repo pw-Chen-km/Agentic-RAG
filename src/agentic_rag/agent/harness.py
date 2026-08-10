@@ -203,6 +203,7 @@ class AgentHarness:
                     "skill",
                     "last_assessment",
                     "semantic_memory",
+                    "latest_attempt",
                     "attempted_actions",
                     "remaining_budget",
                 ],

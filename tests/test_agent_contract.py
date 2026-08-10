@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from agentic_rag.agent.config import AgentConfig
 from agentic_rag.agent.models import (
     Assessment,
-    AssessmentStatus,
     ContextNodeReference,
     ContextReferenceMap,
     ExpandAction,
@@ -30,6 +29,9 @@ def test_schema_exposes_all_four_action_families() -> None:
     assert "evidence_refs" in serialized
     assert "source_id" not in serialized
     assert "chunk_context_index" not in serialized
+    assert "INSUFFICIENT" not in serialized
+    assert "SUFFICIENT" not in serialized
+    assert "UNCERTAIN" not in serialized
 
 
 def test_config_has_one_architecture_and_rejects_removed_fields(tmp_path: Path) -> None:
@@ -67,7 +69,6 @@ def test_refs_normalize_case_but_never_fuzzy_match() -> None:
         }
     )
     assessment = Assessment(
-        status=AssessmentStatus.INSUFFICIENT,
         missing_information=["next fact"],
     )
     expanded = resolve_decision(
@@ -95,7 +96,7 @@ def test_refs_normalize_case_but_never_fuzzy_match() -> None:
 
     finish = resolve_decision(
         PolicyDecision(
-            assessment=Assessment(status=AssessmentStatus.SUFFICIENT),
+            assessment=Assessment(supported_facts=["answer is supported"]),
             action=FinishAction(answer="answer", evidence_refs=["s1"]),
         ),
         references,
@@ -113,7 +114,6 @@ def test_reference_namespaces_are_type_checked() -> None:
     )
     decision = PolicyDecision(
         assessment=Assessment(
-            status=AssessmentStatus.INSUFFICIENT,
             missing_information=["context"],
         ),
         action=ReadAction(chunk_ref="E1"),

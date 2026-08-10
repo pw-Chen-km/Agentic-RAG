@@ -7,7 +7,6 @@ from typing import Literal
 
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
-    AssessmentStatus,
     ChunkRef,
     EpisodeState,
     ExpansionKind,
@@ -25,7 +24,6 @@ from agentic_rag.substrate.storage import Substrate
 
 ValidationCode = Literal[
     "duplicate_action",
-    "assessment_action_mismatch",
     "expansion_not_enabled",
     "expansion_not_valid_for_node",
     "source_not_visible",
@@ -63,20 +61,6 @@ class DecisionValidator:
     ) -> ValidationResult:
         self.substrate.require_scope(scope_id)
         action = decision.action
-        if isinstance(action, ResolvedFinishAction):
-            if decision.assessment.status is not AssessmentStatus.SUFFICIENT:
-                return self._invalid(
-                    "assessment_action_mismatch",
-                    "FINISH requires assessment.status=SUFFICIENT",
-                    decision,
-                )
-        elif decision.assessment.status is AssessmentStatus.SUFFICIENT:
-            return self._invalid(
-                "assessment_action_mismatch",
-                "SEARCH, EXPAND, and READ cannot use assessment.status=SUFFICIENT",
-                decision,
-            )
-
         if isinstance(action, ResolvedExpandAction):
             invalid = self._validate_expand(action, state, scope_id)
             if invalid is not None:

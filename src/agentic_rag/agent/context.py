@@ -11,19 +11,18 @@ from pydantic import BaseModel
 
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
-    Assessment,
     ChunkMemoryItem,
     ContextNodeReference,
     ContextReferenceMap,
     EntityMemoryItem,
     EpisodeState,
+    ExpandAction,
     ExpansionKind,
     FinishAction,
     Message,
     Observation,
     ObservationOutcome,
     ObservationStatus,
-    PolicyDecision,
     PolicyStateView,
     PolicyView,
     ReadAction,
@@ -89,6 +88,7 @@ class PolicyContextBuilder:
         display_ids = self._display_ids(state)
         reference_map = self._reference_map(display_ids, state)
         memory = self._semantic_memory(display_ids, state)
+        attempted_actions = [self._attempt_summary(item) for item in trajectory]
         view = PolicyView(
             policy_state=PolicyStateView(
                 step=state.step,
@@ -99,7 +99,12 @@ class PolicyContextBuilder:
                     else None
                 ),
                 semantic_memory=memory,
-                attempted_actions=[self._attempt_summary(item) for item in trajectory],
+                latest_attempt=(
+                    self._latest_attempt_summary(attempted_actions[-1])
+                    if attempted_actions
+                    else None
+                ),
+                attempted_actions=attempted_actions,
                 budget=(
                     f"Budget: {state.remaining_step_budget} steps, "
                     f"{state.remaining_policy_attempt_budget} attempts, "
@@ -152,20 +157,12 @@ class PolicyContextBuilder:
         ordered = [item for item in state.semantic_memory_node_ids if item in visible]
         seen = set(ordered)
         ordered.extend(sorted(visible - seen, key=self._node_sort_key))
-        covered_sentences = {
-            sentence.sentence_id
-            for chunk_id in state.read_chunk_ids
-            for sentence in self.substrate.sentences_by_chunk.get(chunk_id, [])
-        }
         return [
             node_id
             for node_id in ordered
             if not (
                 node_id in state.visible_sentence_ids
-                and (
-                    node_id not in state.eligible_sentence_ids
-                    or node_id in covered_sentences
-                )
+                and node_id not in state.eligible_sentence_ids
             )
         ]
 
@@ -244,9 +241,13 @@ class PolicyContextBuilder:
 
     def _attempt_summary(self, record: StepRecord) -> dict[str, Any]:
         action: Any = (
-            record.resolved_decision.action
-            if record.resolved_decision is not None
-            else (record.decision.action if record.decision is not None else None)
+            record.decision.action
+            if record.decision is not None
+            else (
+                record.resolved_decision.action
+                if record.resolved_decision is not None
+                else None
+            )
         )
         return {
             "policy_attempt": record.policy_attempt,
@@ -259,6 +260,19 @@ class PolicyContextBuilder:
             "error_code": (
                 record.observation.error_code if record.observation is not None else None
             ),
+            "message": (
+                record.observation.message if record.observation is not None else None
+            ),
+        }
+
+    @staticmethod
+    def _latest_attempt_summary(attempt: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "policy_attempt": attempt["policy_attempt"],
+            "submitted_action": attempt["action"],
+            "outcome": attempt["outcome"],
+            "error_code": attempt["error_code"],
+            "message": attempt["message"],
         }
 
     def _action_summary(self, action: Any) -> dict[str, Any] | None:
@@ -271,6 +285,14 @@ class PolicyContextBuilder:
                 "target": action.target.value,
                 "query": action.query,
             }
+        if isinstance(action, ExpandAction):
+            return {
+                "type": "EXPAND",
+                "kind": action.kind.value,
+                "source_ref": action.source_ref,
+                "query": action.query,
+                "direction": action.direction.value if action.direction is not None else None,
+            }
         if isinstance(action, ResolvedExpandAction):
             return {
                 "type": "EXPAND",
@@ -279,17 +301,10 @@ class PolicyContextBuilder:
                 "query": action.query,
                 "direction": action.direction.value if action.direction is not None else None,
             }
-        if getattr(action, "type", None) == "EXPAND":
-            return {
-                "type": "EXPAND",
-                "kind": action.kind.value,
-                "query": action.query,
-                "direction": action.direction.value if action.direction is not None else None,
-            }
         if isinstance(action, ResolvedReadAction):
             return {"type": "READ", "chunk": self._node_label(action.chunk_id)}
         if isinstance(action, ReadAction):
-            return {"type": "READ"}
+            return {"type": "READ", "chunk_ref": action.chunk_ref}
         if isinstance(action, ResolvedFinishAction):
             return {
                 "type": "FINISH",
@@ -300,7 +315,7 @@ class PolicyContextBuilder:
             return {
                 "type": "FINISH",
                 "answer": action.answer,
-                "evidence_count": len(action.evidence_refs),
+                "evidence_refs": list(action.evidence_refs),
             }
         return {"type": str(getattr(action, "type", type(action).__name__))}
 

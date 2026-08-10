@@ -34,6 +34,11 @@ def test_baseline_has_a_fixed_answer_contract() -> None:
     )
     frozen = SkillDocument.freeze_answer_contract(candidate, fixed)
     assert "Return a long speculative answer" not in frozen
+    assert "query must contain that name alone" in skill.content
+    assert "Eric A. Sykes nationality country" in skill.content
+    assert "preview appears to contain the answer" in skill.content
+    assert "inspect `latest_attempt`" in skill.content
+    assert "choosing FINISH is itself the decision to answer" in skill.content
     assert frozen.endswith(f"{fixed}\n")
 
 

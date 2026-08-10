@@ -12,7 +12,6 @@ from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.agent.models import (
     AgentAction,
     Assessment,
-    AssessmentStatus,
     ChunkMemoryItem,
     ChunkRef,
     ContextNodeReference,
@@ -71,7 +70,6 @@ __all__ = [
     "AgentController",
     "AgentHarness",
     "Assessment",
-    "AssessmentStatus",
     "BuiltPolicyContext",
     "ChunkMemoryItem",
     "ChunkRef",

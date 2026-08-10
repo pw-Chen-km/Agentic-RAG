@@ -23,11 +23,18 @@ Use SEARCH when the missing fact is not yet connected to a useful visible
 reference. Write the query for that one missing relation rather than blindly
 repeating the original question:
 
-- LEXICAL -> ENTITY for a known exact entity name or alias.
-- BM25 -> SENTENCE for names and likely corpus wording.
+- LEXICAL -> ENTITY only for a known exact entity surface name or alias. The
+  query must contain that name alone, without question words or relation terms.
+  Valid: `Eric A. Sykes`. Invalid: `Eric A. Sykes nationality country`.
+- BM25 -> SENTENCE for short name-and-relation keywords likely to occur in the
+  corpus, such as `Eric A. Sykes nationality`.
 - BM25 -> CHUNK when broader local context is likely necessary.
-- DENSE -> ENTITY or SENTENCE for paraphrases and semantic matches.
+- DENSE -> ENTITY or SENTENCE for a concise semantic relation or paraphrase.
 - DENSE -> CHUNK for broader semantic context when lexical wording is unclear.
+
+If `Currently available action options` is shown, copy READ, EXPAND, and
+FINISH references only from that current list. If it is absent, derive legal
+references from Semantic Memory.
 
 Use EXPAND when a visible item provides a concrete graph path to the missing
 fact. The expansion kinds expose these neighbourhoods:
@@ -43,20 +50,24 @@ fact. The expansion kinds expose these neighbourhoods:
 - `CHUNK_CONTAINS_SENTENCE`: Chunk -> its contained Sentence previews.
 - `CHUNK_MENTIONS_ENTITY`: Chunk -> its mentioned Entities.
 
-Use READ when a currently visible unread C# looks likely to contain necessary
-context that its title or previews do not expose. Never READ a Chunk that has
-already been read.
+An unread Chunk preview is navigation only, not answer evidence. Use READ when
+a currently visible unread C# looks likely to contain necessary context. If a
+preview appears to contain the answer, a bridge identity, or a comparison
+value, READ that Chunk before FINISH. Never READ a Chunk whose
+`has_been_read` value is true.
 
-Use FINISH as soon as visible eligible evidence covers every obligation in the
-question. `evidence_refs` may contain only currently displayed complete S#
-items or already-read C# items. E# and unread C# items are navigation, not
-answer evidence.
+Choose FINISH when visible eligible evidence covers every obligation in the
+question; choosing FINISH is itself the decision to answer. `evidence_refs`
+may contain only currently displayed complete S# items or already-read C#
+items. E# and unread C# items are navigation, not answer evidence.
 
 ### Preserve progress
 
-Before acting, compare the proposed action with `attempted_actions`. Do not
-repeat the same method, target, source, direction, query, and information goal.
-Cosmetic rewording of the same unsuccessful search is not progress.
+Before acting, inspect `latest_attempt` for the immediately preceding submitted
+action and its outcome, then compare the proposal with all `attempted_actions`.
+Do not repeat the same method, target, source, direction, query, and information
+goal. Do not READ the same Chunk twice. Cosmetic rewording of the same
+unsuccessful search is not progress.
 
 After an invalid, duplicate, or empty result, use the recorded outcome to
 change one meaningful axis: pursue a different unresolved relation, use a new

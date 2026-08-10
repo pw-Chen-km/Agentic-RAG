@@ -14,7 +14,6 @@ Return exactly one PolicyDecision containing one Assessment and exactly one
 SEARCH, EXPAND, READ, or FINISH action.
 
 Assessment fields:
-- status: INSUFFICIENT, UNCERTAIN, or SUFFICIENT.
 - supported_facts: up to five evidence-supported facts.
 - missing_information: up to three unresolved facts.
 
@@ -33,8 +32,8 @@ Action interface:
   and one or more evidence_refs.
 
 Hard rules:
-- SEARCH, EXPAND, and READ use assessment status INSUFFICIENT or UNCERTAIN.
-  FINISH uses assessment status SUFFICIENT.
+- The action is authoritative: FINISH means answer now; SEARCH, EXPAND, or
+  READ means continue retrieving. Assessment does not control termination.
 - References must be copied from the current visible state. READ accepts only
   a visible unread Chunk. FINISH evidence accepts only a visible complete
   Sentence or a visible Chunk whose complete text has already been READ.
