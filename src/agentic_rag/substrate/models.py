@@ -50,6 +50,23 @@ class SourceArtifact:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceSentenceProvenance:
+    """Evaluation-only mapping from a raw source sentence to the substrate.
+
+    ``original_*`` fields are preserved exactly as supplied by HotpotQA.  A
+    blank source sentence has no runtime node and therefore uses a null
+    ``sentence_id``.
+    """
+
+    scope_id: str
+    doc_id: str
+    sentence_id: str | None
+    original_title: str
+    original_sentence_id: int
+    original_sentence_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class Document:
     doc_id: str
     title: str | None
@@ -113,6 +130,8 @@ class GoldSupport:
     source_sentence_pos: int
     source_sentence_text: str
     sentence_id: str | None = None
+    question_id: str | None = None
+    fact_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +194,7 @@ class BuildManifest(ManifestModel):
     source_format: Literal[
         "hotpotqa_scoped",
         "hotpotqa_benchmark_exact",
+        "hotpotqa_global_provenance",
         "benchmark_exact",
         "arag_benchmark_exact",
     ] = "hotpotqa_scoped"

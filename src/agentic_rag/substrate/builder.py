@@ -21,6 +21,7 @@ from agentic_rag.substrate.adapters import (
     BenchmarkExactAdapter,
     HotpotQAAdapter,
     HotpotQABenchmarkExactAdapter,
+    HotpotQAGlobalProvenanceAdapter,
     SourceAdapter,
 )
 from agentic_rag.config import BuildConfig
@@ -42,6 +43,7 @@ from agentic_rag.substrate.models import (
     Mention,
     ModelVersion,
     Sentence,
+    SourceSentenceProvenance,
 )
 from agentic_rag.substrate.storage import write_records
 from agentic_rag.substrate.text import (
@@ -127,6 +129,11 @@ class SubstrateBuilder:
                 scope_id=config.benchmark_scope_id,
                 validate_reference_counts=config.validate_benchmark_profile,
             )
+        elif config.source_format == "hotpotqa_global_provenance":
+            self.adapter = HotpotQAGlobalProvenanceAdapter(
+                scope_id=config.benchmark_scope_id,
+                validate_reference_counts=config.validate_benchmark_profile,
+            )
         else:
             self.adapter = HotpotQAAdapter()
         self.processor = processor
@@ -163,7 +170,15 @@ class SubstrateBuilder:
         )
         warnings: list[BuildWarning] = []
 
-        if adapter_output.source_chunks:
+        if adapter_output.source_sentence_provenance:
+            (
+                documents,
+                chunks,
+                sentences,
+                raw_mentions,
+                abbreviations,
+            ) = self._construct_provenance_records(adapter_output, processor, warnings)
+        elif adapter_output.source_chunks:
             (
                 documents,
                 chunks,
@@ -199,9 +214,7 @@ class SubstrateBuilder:
             adapter_output,
             gold_support,
         )
-        matrix_shapes = self._write_sparse_mappings(
-            root, entities, sentences, mentions
-        )
+        matrix_shapes = self._write_sparse_mappings(root, entities, sentences, mentions)
         self._write_alias_index(root, aliases)
 
         from agentic_rag.substrate.bm25_index import build_bm25_index
@@ -212,9 +225,7 @@ class SubstrateBuilder:
         for alias in aliases:
             aliases_by_entity[alias.entity_id].append(alias.alias)
         sentence_texts = [
-            self._retrieval_text_for_sentence(
-                item, chunk_by_id, document_by_id
-            )
+            self._retrieval_text_for_sentence(item, chunk_by_id, document_by_id)
             for item in sentences
         ]
         chunk_texts = [
@@ -277,6 +288,15 @@ class SubstrateBuilder:
                 "document_scopes": len(adapter_output.scopes),
                 "gold_support": len(gold_support),
                 "benchmark_questions": len(adapter_output.benchmark_questions),
+                **(
+                    {
+                        "source_sentence_provenance": len(
+                            adapter_output.source_sentence_provenance
+                        )
+                    }
+                    if adapter_output.source_sentence_provenance
+                    else {}
+                ),
             },
             matrix_shapes=matrix_shapes,
             warnings=warnings,
@@ -290,6 +310,239 @@ class SubstrateBuilder:
                 sort_keys=True,
             )
         return manifest
+
+    def _construct_provenance_records(
+        self,
+        adapter_output: AdapterOutput,
+        processor: DocumentProcessor,
+        warnings: list[BuildWarning],
+    ) -> tuple[
+        list[Document],
+        list[Chunk],
+        list[Sentence],
+        list[_RawMention],
+        list[_AbbreviationDraft],
+    ]:
+        """Preserve one runtime Sentence per non-blank raw source sentence."""
+
+        documents = sorted(
+            [
+                Document(doc_id=item.doc_id, title=item.title)
+                for item in adapter_output.documents
+            ],
+            key=lambda item: item.doc_id,
+        )
+        document_by_id = {item.doc_id: item for item in documents}
+        provenance_by_doc: dict[str, list[SourceSentenceProvenance]] = defaultdict(list)
+        for item in adapter_output.source_sentence_provenance:
+            document = document_by_id.get(item.doc_id)
+            if document is None:
+                raise BuildError(
+                    "Source-sentence provenance references unknown Document "
+                    f"{item.doc_id}"
+                )
+            if document.title != item.original_title:
+                raise BuildError(
+                    f"Source title {item.original_title!r} does not match Document "
+                    f"title {document.title!r} for {item.doc_id}"
+                )
+            provenance_by_doc[item.doc_id].append(item)
+
+        chunks: list[Chunk] = []
+        sentences: list[Sentence] = []
+        raw_mentions: list[_RawMention] = []
+        abbreviations: list[_AbbreviationDraft] = []
+        seen_sentence_ids: set[str] = set()
+
+        for document in documents:
+            source_rows = sorted(
+                provenance_by_doc.get(document.doc_id, []),
+                key=lambda item: item.original_sentence_id,
+            )
+            source_positions = [item.original_sentence_id for item in source_rows]
+            if source_positions != list(range(len(source_rows))):
+                raise BuildError(
+                    f"Document {document.doc_id} has non-contiguous original "
+                    "sentence IDs"
+                )
+
+            prepared: list[tuple[SourceSentenceProvenance, str, int]] = []
+            for source in source_rows:
+                normalized_text = normalize_document_text(source.original_sentence_text)
+                if source.sentence_id is None:
+                    if normalized_text:
+                        raise BuildError(
+                            "Non-blank source sentence is missing a substrate "
+                            f"Sentence ID: {source.original_title!r}"
+                            f"[{source.original_sentence_id}]"
+                        )
+                    warnings.append(
+                        BuildWarning(
+                            code="blank_source_sentence",
+                            message=(
+                                "Blank original source sentence was retained only "
+                                "in evaluation provenance"
+                            ),
+                            doc_id=document.doc_id,
+                        )
+                    )
+                    continue
+                if not normalized_text:
+                    raise BuildError(f"Source Sentence {source.sentence_id} is blank")
+                if source.sentence_id in seen_sentence_ids:
+                    raise BuildError(
+                        f"Duplicate source Sentence ID: {source.sentence_id}"
+                    )
+                seen_sentence_ids.add(source.sentence_id)
+
+                processed = processor.process(normalized_text)
+                if not processed.sentences:
+                    raise BuildError(
+                        f"Source Sentence {source.sentence_id} produced no NLP "
+                        "sentence segments"
+                    )
+
+                segment_offsets: list[int] = []
+                cursor = 0
+                token_count = 0
+                for segment in processed.sentences:
+                    if not segment.text:
+                        raise BuildError(
+                            f"Source Sentence {source.sentence_id} produced an "
+                            "empty NLP segment"
+                        )
+                    segment_start = normalized_text.find(segment.text, cursor)
+                    if segment_start < 0:
+                        raise BuildError(
+                            f"Could not align NLP segment {segment.text!r} inside "
+                            f"source Sentence {source.sentence_id}"
+                        )
+                    segment_offsets.append(segment_start)
+                    cursor = segment_start + len(segment.text)
+                    token_count += max(1, segment.token_count)
+                    for mention in segment.mentions:
+                        if (
+                            mention.start < 0
+                            or mention.end > len(segment.text)
+                            or segment.text[mention.start : mention.end]
+                            != mention.surface_form
+                        ):
+                            raise BuildError(
+                                f"Invalid mention span in {source.sentence_id}: "
+                                f"{mention.start}:{mention.end} "
+                                f"{mention.surface_form!r}"
+                            )
+                        start = segment_start + mention.start
+                        end = segment_start + mention.end
+                        normalized_name = normalize_entity_name(mention.surface_form)
+                        if normalized_name:
+                            raw_mentions.append(
+                                _RawMention(
+                                    doc_id=document.doc_id,
+                                    sentence_id=source.sentence_id,
+                                    surface_form=mention.surface_form,
+                                    start=start,
+                                    end=end,
+                                    entity_type=mention.entity_type,
+                                    key=(normalized_name, mention.entity_type),
+                                )
+                            )
+                for abbreviation in processed.abbreviations:
+                    if abbreviation.source_sentence_index >= len(segment_offsets):
+                        raise BuildError(
+                            f"Abbreviation in {source.sentence_id} references an "
+                            "unknown NLP segment"
+                        )
+                    abbreviations.append(
+                        _AbbreviationDraft(
+                            doc_id=document.doc_id,
+                            short_form=abbreviation.short_form,
+                            long_form=abbreviation.long_form,
+                            source_sentence_id=source.sentence_id,
+                        )
+                    )
+                prepared.append((source, normalized_text, token_count))
+
+            groups: list[list[tuple[SourceSentenceProvenance, str, int]]] = []
+            current: list[tuple[SourceSentenceProvenance, str, int]] = []
+            current_tokens = 0
+            for item in prepared:
+                source, _, token_count = item
+                if token_count > self.config.max_chunk_tokens:
+                    if current:
+                        groups.append(current)
+                        current = []
+                        current_tokens = 0
+                    groups.append([item])
+                    warnings.append(
+                        BuildWarning(
+                            code="long_source_sentence_chunk",
+                            message=(
+                                f"Original sentence {source.original_sentence_id} "
+                                f"has {token_count} tokens and was placed in its "
+                                "own chunk"
+                            ),
+                            doc_id=document.doc_id,
+                        )
+                    )
+                    continue
+                if (
+                    current
+                    and current_tokens + token_count > self.config.max_chunk_tokens
+                ):
+                    groups.append(current)
+                    current = []
+                    current_tokens = 0
+                current.append(item)
+                current_tokens += token_count
+            if current:
+                groups.append(current)
+
+            for chunk_pos, group in enumerate(groups):
+                chunk_id = f"{document.doc_id}:c:{chunk_pos:04d}"
+                chunks.append(
+                    Chunk(
+                        chunk_id=chunk_id,
+                        doc_id=document.doc_id,
+                        chunk_pos=chunk_pos,
+                        text=" ".join(text for _, text, _ in group),
+                    )
+                )
+                for source, text, _ in group:
+                    if source.sentence_id is None:
+                        raise BuildError("Internal provenance grouping error")
+                    sentences.append(
+                        Sentence(
+                            sentence_id=source.sentence_id,
+                            chunk_id=chunk_id,
+                            sentence_pos=source.original_sentence_id,
+                            text=text,
+                        )
+                    )
+
+        return (
+            documents,
+            sorted(chunks, key=lambda item: item.chunk_id),
+            sorted(sentences, key=lambda item: item.sentence_id),
+            sorted(
+                raw_mentions,
+                key=lambda item: (
+                    item.sentence_id,
+                    item.start,
+                    item.end,
+                    item.surface_form,
+                ),
+            ),
+            sorted(
+                abbreviations,
+                key=lambda item: (
+                    item.doc_id,
+                    item.source_sentence_id,
+                    item.short_form,
+                    item.long_form,
+                ),
+            ),
+        )
 
     def _construct_preserved_chunk_records(
         self,
@@ -306,7 +559,10 @@ class SubstrateBuilder:
         """Process source Chunks without changing their text or boundaries."""
 
         documents = sorted(
-            [Document(doc_id=item.doc_id, title=item.title) for item in adapter_output.documents],
+            [
+                Document(doc_id=item.doc_id, title=item.title)
+                for item in adapter_output.documents
+            ],
             key=lambda item: item.doc_id,
         )
         document_ids = {item.doc_id for item in documents}
@@ -450,7 +706,9 @@ class SubstrateBuilder:
         raw_mentions: list[_RawMention] = []
         abbreviations: list[_AbbreviationDraft] = []
 
-        for raw_document in sorted(adapter_output.documents, key=lambda item: item.doc_id):
+        for raw_document in sorted(
+            adapter_output.documents, key=lambda item: item.doc_id
+        ):
             normalized_text = normalize_document_text(raw_document.text)
             if not normalized_text:
                 warnings.append(
@@ -491,7 +749,10 @@ class SubstrateBuilder:
                         )
                     )
                     continue
-                if current and current_tokens + token_count > self.config.max_chunk_tokens:
+                if (
+                    current
+                    and current_tokens + token_count > self.config.max_chunk_tokens
+                ):
                     groups.append(current)
                     current = []
                     current_tokens = 0
@@ -641,15 +902,14 @@ class SubstrateBuilder:
         for mention in raw_mentions:
             mentions_by_root[union_find.find(mention.key)].append(mention)
 
-        abbreviation_roots: dict[
-            tuple[str, str | None], list[_AbbreviationDraft]
-        ] = defaultdict(list)
+        abbreviation_roots: dict[tuple[str, str | None], list[_AbbreviationDraft]] = (
+            defaultdict(list)
+        )
         for abbreviation in abbreviations:
             doc_names = keys_by_doc_name.get(abbreviation.doc_id, {})
-            candidates = (
-                doc_names.get(normalize_entity_name(abbreviation.long_form), set())
-                | doc_names.get(normalize_entity_name(abbreviation.short_form), set())
-            )
+            candidates = doc_names.get(
+                normalize_entity_name(abbreviation.long_form), set()
+            ) | doc_names.get(normalize_entity_name(abbreviation.short_form), set())
             roots = {union_find.find(key) for key in candidates}
             if len(roots) == 1:
                 abbreviation_roots[next(iter(roots))].append(abbreviation)
@@ -694,9 +954,7 @@ class SubstrateBuilder:
         seen_mention_ids: set[str] = set()
         for draft in raw_mentions:
             root = union_find.find(draft.key)
-            mention_id = (
-                f"{draft.sentence_id}:m:{draft.start}-{draft.end}"
-            )
+            mention_id = f"{draft.sentence_id}:m:{draft.start}-{draft.end}"
             if mention_id in seen_mention_ids:
                 raise BuildError(f"Duplicate Mention ID: {mention_id}")
             seen_mention_ids.add(mention_id)
@@ -766,11 +1024,32 @@ class SubstrateBuilder:
             by_doc[chunk_by_id[sentence.chunk_id].doc_id].append(sentence)
         for values in by_doc.values():
             values.sort(key=lambda item: item.sentence_pos)
+        sentence_by_id = {item.sentence_id: item for item in sentences}
 
         resolved: list[GoldSupport] = []
         for item in support:
             candidates = by_doc.get(item.doc_id, [])
             expected = normalize_document_text(item.source_sentence_text)
+            if item.sentence_id is not None:
+                sentence = sentence_by_id.get(item.sentence_id)
+                if sentence is None:
+                    raise BuildError(
+                        f"Gold support {item.question_id or item.scope_id}/"
+                        f"{item.fact_id or item.source_sentence_pos} references "
+                        f"unknown Sentence {item.sentence_id}"
+                    )
+                chunk = chunk_by_id[sentence.chunk_id]
+                if chunk.doc_id != item.doc_id:
+                    raise BuildError(
+                        f"Gold support Sentence {item.sentence_id} belongs to "
+                        f"Document {chunk.doc_id}, not {item.doc_id}"
+                    )
+                if normalize_document_text(sentence.text) != expected:
+                    raise BuildError(
+                        f"Gold support text does not match Sentence {item.sentence_id}"
+                    )
+                resolved.append(item)
+                continue
             sentence_id: str | None = None
             if item.source_sentence_pos < len(candidates):
                 positional = candidates[item.source_sentence_pos]
@@ -800,6 +1079,8 @@ class SubstrateBuilder:
             resolved,
             key=lambda item: (
                 item.scope_id,
+                item.question_id or "",
+                item.fact_id or "",
                 item.doc_id,
                 item.source_sentence_pos,
             ),
@@ -821,9 +1102,7 @@ class SubstrateBuilder:
         write_records(root / "nodes" / "chunks.parquet", chunks, "chunks")
         write_records(root / "nodes" / "sentences.parquet", sentences, "sentences")
         write_records(root / "nodes" / "entities.parquet", entities, "entities")
-        write_records(
-            root / "relations" / "mentions.parquet", mentions, "mentions"
-        )
+        write_records(root / "relations" / "mentions.parquet", mentions, "mentions")
         write_records(
             root / "relations" / "entity_aliases.parquet",
             aliases,
@@ -846,6 +1125,12 @@ class SubstrateBuilder:
             adapter_output.benchmark_questions,
             "benchmark_questions",
         )
+        if adapter_output.source_sentence_provenance:
+            write_records(
+                root / "evaluation" / "source_sentence_provenance.parquet",
+                adapter_output.source_sentence_provenance,
+                "source_sentence_provenance",
+            )
 
     def _write_sparse_mappings(
         self,
@@ -924,16 +1209,14 @@ class SubstrateBuilder:
         return f"{title} {sentence.text}".strip() if title else sentence.text
 
     @staticmethod
-    def _retrieval_text_for_chunk(
-        chunk: Chunk, documents: dict[str, Document]
-    ) -> str:
+    def _retrieval_text_for_chunk(chunk: Chunk, documents: dict[str, Document]) -> str:
         document = documents[chunk.doc_id]
-        return f"{document.title} {chunk.text}".strip() if document.title else chunk.text
+        return (
+            f"{document.title} {chunk.text}".strip() if document.title else chunk.text
+        )
 
     @staticmethod
-    def _retrieval_text_for_entity(
-        entity: Entity, aliases: list[str]
-    ) -> str:
+    def _retrieval_text_for_entity(entity: Entity, aliases: list[str]) -> str:
         parts = [entity.canonical_name, *aliases]
         if entity.entity_type:
             parts.append(entity.entity_type)
@@ -956,6 +1239,11 @@ class SubstrateBuilder:
         except importlib.metadata.PackageNotFoundError:
             bm25_version = None
         return BuildManifest(
+            schema_version=(
+                "2.1"
+                if self.config.source_format == "hotpotqa_global_provenance"
+                else "2.0"
+            ),
             constructor_version=__version__,
             corpus_id=self.config.corpus_id,
             dataset=self.adapter.dataset_name,
@@ -997,6 +1285,11 @@ class SubstrateBuilder:
                 "dense_sentence": "1",
                 "dense_chunk": "1",
                 "entity_sentence_sparse": "1",
+                **(
+                    {"source_sentence_provenance": "1"}
+                    if adapter_output.source_sentence_provenance
+                    else {}
+                ),
             },
             warnings=warnings,
         )

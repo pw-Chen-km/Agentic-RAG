@@ -200,3 +200,32 @@ def test_budget_finalize_uses_finish_only_state_conditioned_schema(
     assert not final_step.available_action_space.expand_options
     assert not final_step.available_action_space.read_refs
     assert "S1" in final_step.available_action_space.finish_evidence_refs
+
+
+def test_last_policy_attempt_is_reserved_for_finish_when_evidence_exists(
+    built_substrate: Path,
+    fake_embedder: FakeEmbeddingBackend,
+    tmp_path: Path,
+) -> None:
+    policy = ScriptedPolicy([_search(), _finish()])
+    result = _harness(
+        built_substrate,
+        fake_embedder,
+        tmp_path,
+        policy,
+        config=AgentConfig(max_steps=10, max_policy_attempts=2),
+    ).run("Where was Marie Curie born?", "q1", episode_id="reserved-finalize")
+
+    assert result.termination_reason is TerminationReason.FINISH
+    assert result.answer == "Warsaw"
+    assert result.final_state is not None
+    assert result.final_state.policy_attempts == 2
+    assert result.final_state.step == 1
+    assert len(result.trajectory) == 2
+    final_step = result.trajectory[-1]
+    assert final_step.observation.metadata["budget_finalize"] is True
+    assert final_step.available_action_space.mode.value == "BUDGET_FINALIZE"
+    assert not final_step.available_action_space.search_options
+    assert not final_step.available_action_space.expand_options
+    assert not final_step.available_action_space.read_refs
+    assert "S1" in final_step.available_action_space.finish_evidence_refs

@@ -1,0 +1,44 @@
+{
+  "version": "agentic-rag-skillopt-input-ranking-v1",
+  "date": "2026-09-02",
+  "target_repository": "/home/jj/PW/Agentic-RAG",
+  "backup_directory": "/home/jj/PW/skillopt-four-fixes-20260902.oYeJ1e/original_files",
+  "reflection_schema_version": "agentic-rag-skillopt-reflection-v3",
+  "ranking_compat_version": "agentic-rag-skillopt-ranking-v1",
+  "changed_file_sha256": {
+    "src/agentic_rag/skillopt/trajectory.py": "cc2b6c95199da4aa4061ab5766a93d2e0263526f23302ddee0890d77abd433f9",
+    "src/agentic_rag/skillopt/adapter.py": "63737e6d4f5b03c197c6d78b93a0cfbbff0cec466148ecdd2415d6ef3a28e014",
+    "src/agentic_rag/skillopt/trainer.py": "981db3e12beda941201387699ce6eea3fc5357fe2f5e89df8254c43beb2ce3db",
+    "src/agentic_rag/skillopt/ranking_compat.py": "1b6b15f6a67cd2200a495e63318e1797203b2a1aa37f2661608e793147f9d75e",
+    "tests/test_skillopt_trajectory.py": "e856181dfa1508f67c14300cff207000115a70db1b16c00b2cc5b44085732589",
+    "tests/test_skillopt_ranking_compat.py": "effdb89c3ed0f8d3e4eef09349104be353ba8d99fa482956cac14bcc382ba246",
+    "docs/skillopt-input-ranking-fixes.md": "3ee3e17d500dddba82fda5c3464f4a2fcc6a349e5aefb3328241ff5e9c4d93d4"
+  },
+  "unchanged_prompt_sha256": {
+    "SOURCE.md": "7bc535f89f9fe5b0f3d35ff3060a36f585d226c0d54697e5341b8d02648fc0b5",
+    "analyst_error.md": "63bb023762c6ad16061d8721c7aa0e0b22309f57696cb163564f12a35aaaea1b",
+    "analyst_success.md": "bf6a1a73abfc7d0cd7eb70a6d26aa4d19067c64da2a50b17f832dacf0b2925b6",
+    "merge_failure.md": "054b54f2c86539270a115474656d5d9f432fd5df15aa905ba41f8ff91c0d3dbf",
+    "merge_final.md": "f675cde1183b4ec3cd6e928599ec69200011cec9b31a556818f24c340e7387b6",
+    "merge_success.md": "bf1986e0829dc12a6a9da2cc3f50396af317d2279b22355ee4ce4130da9a9f80",
+    "ranking.md": "0aa9afb1f37b610ba15b733f4f24a61be6add1b05148fbf3d24e7f75060d9bcb"
+  },
+  "unchanged_controls": {
+    "batch_size": 20,
+    "minibatch_size": 5,
+    "accumulation": 1,
+    "config_sha256": "7ff2986fb4728c9326b733bd92dde3d555f6fc916797c383297c087fdde3f8c4",
+    "initial_skill_sha256": "2a4c3132ce9f95b1103494ca0c69910e1ef930b998a8fa6c8a38ba2f087a7d41",
+    "installed_native_ranker_sha256": "0c1060799884eb32e131000299ae78af094ee375d9c81c3dd1e1e2c78bd3c728"
+  },
+  "verification": {
+    "original_tests": 117,
+    "new_tests": 151,
+    "real_episodes_checked_read_only": 400,
+    "abstract_final_evidence_text_episodes_before": 99,
+    "abstract_final_evidence_text_episodes_after": 0
+  },
+  "model_calls": 0,
+  "new_training_started": false,
+  "pushed": false
+}

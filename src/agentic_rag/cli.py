@@ -213,7 +213,14 @@ def build_command(
     split: Annotated[str | None, typer.Option("--split")] = None,
     dataset: Annotated[str | None, typer.Option("--dataset")] = None,
     source_format: Annotated[
-        str | None, typer.Option("--source-format")
+        str | None,
+        typer.Option(
+            "--source-format",
+            help=(
+                "Input adapter: hotpotqa_scoped, hotpotqa_benchmark_exact, "
+                "hotpotqa_global_provenance, or benchmark_exact."
+            ),
+        ),
     ] = None,
     benchmark_scope_id: Annotated[
         str | None, typer.Option("--benchmark-scope-id")

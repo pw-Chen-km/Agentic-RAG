@@ -16,14 +16,20 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from agentic_rag.skillopt.adapter import AgenticRAGSkillOptAdapter
+from agentic_rag.skillopt.patch_compat import use_skillopt_patch_compatibility
+from agentic_rag.skillopt.ranking_compat import (
+    RANKING_COMPAT_VERSION,
+    use_skillopt_ranking_compatibility,
+)
 from agentic_rag.skillopt.rollout import _write_json_once
+from agentic_rag.skillopt.trajectory import REFLECTION_SCHEMA_VERSION
 
 
 class SkillOptUnavailableError(RuntimeError):
     """The optional pinned SkillOpt runtime is not installed."""
 
 
-_PINNED_PROMPT_NAMES = (
+_PROMPT_NAMES = (
     "analyst_error",
     "analyst_success",
     "merge_failure",
@@ -32,6 +38,49 @@ _PINNED_PROMPT_NAMES = (
     "ranking",
 )
 _SKILLOPT_SOURCE_COMMIT = "e4ea6a6771e797ef820cdd8bfea64c57e0481065"
+_PROMPT_BUNDLE_ID = "full-agent-policy-v1"
+_CUSTOMIZED_PROMPT_FILES = (
+    "analyst_error.md",
+    "analyst_success.md",
+    "ranking.md",
+)
+_INTEGRATION_VERSION = "agentic-rag-skillopt-input-ranking-v1"
+
+
+def _ensure_integration_contract(out_root: Path) -> None:
+    """Fail before touching old runs; record code and unchanged core prompts."""
+    contract = out_root / "skillopt_integration.json"
+    if not contract.exists() and any(
+        (out_root / name).exists()
+        for name in (
+            "config.json", "history.json", "runtime_state.json", "steps",
+            "skills", "best_skill.md", "baseline_selection", "selection_baseline",
+        )
+    ):
+        raise FileExistsError(
+            "This output contains an older SkillOpt run without the current "
+            f"input/ranking contract. Use a new output directory: {out_root}"
+        )
+    source = Path(__file__).parent
+    metadata = {
+        "version": _INTEGRATION_VERSION,
+        "reflection_schema_version": REFLECTION_SCHEMA_VERSION,
+        "ranking_compat_version": RANKING_COMPAT_VERSION,
+        "code_sha256": {
+            name: _sha256_file(source / name)
+            for name in (
+                "trajectory.py", "adapter.py", "trainer.py", "rollout.py",
+                "ranking_compat.py", "patch_compat.py",
+            )
+        },
+        "prompt_bundle_id": _PROMPT_BUNDLE_ID,
+        "prompt_sha256": {
+            f"{name}.md": _sha256_file(source / "prompts" / f"{name}.md")
+            for name in _PROMPT_NAMES
+        },
+    }
+    out_root.mkdir(parents=True, exist_ok=True)
+    _write_json_once(contract, metadata)
 
 
 def load_skillopt_config(path: str | Path) -> dict[str, Any]:
@@ -81,15 +130,53 @@ def run_skillopt_training(
     if not isinstance(out_root_value, str) or not out_root_value.strip():
         raise ValueError("flattened SkillOpt config requires a non-empty out_root")
     out_root = Path(out_root_value)
-    out_root.mkdir(parents=True, exist_ok=True)
+    _ensure_integration_contract(out_root)
+    cfg.update({
+        "skillopt_integration_version": _INTEGRATION_VERSION,
+        "reflection_schema_version": REFLECTION_SCHEMA_VERSION,
+        "ranking_compat_version": RANKING_COMPAT_VERSION,
+    })
     _copy_split_manifest(adapter, out_root)
+    fixed_contract = adapter.fixed_answer_contract
+    _write_json_once(
+        out_root / "skillopt_patch_compatibility.json",
+        {
+            "schema_version": "agentic-rag-skillopt-patch-compat-v1",
+            "skillopt_version": "0.2.0",
+            "normalized_target_resolution": {
+                "operations": ["replace", "delete", "insert_after"],
+                "whitespace_normalization": "collapse_runs_and_strip",
+                "required_match_count": 1,
+                "zero_or_ambiguous_matches": "preserve_native_behavior",
+            },
+            "fixed_answer_contract": {
+                "enabled": fixed_contract is not None,
+                "restored_after_each_native_edit": fixed_contract is not None,
+                "sha256": (
+                    hashlib.sha256(fixed_contract.encode("utf-8")).hexdigest()
+                    if fixed_contract is not None
+                    else None
+                ),
+            },
+            "monkeypatch_targets": [
+                "skillopt.optimizer.skill.apply_patch_with_report",
+                "skillopt.engine.trainer.apply_patch_with_report",
+            ],
+        },
+    )
 
     trainer = create_skillopt_trainer(
         cfg,
         adapter,
         trainer_cls=trainer_cls,
     )
-    with _use_pinned_skillopt_prompts(out_root):
+    with (
+        _use_skillopt_prompt_bundle(out_root),
+        use_skillopt_patch_compatibility(
+            fixed_answer_contract=fixed_contract,
+        ),
+        use_skillopt_ranking_compatibility(),
+    ):
         raw_summary = trainer.train()
     if not isinstance(raw_summary, Mapping):
         raise TypeError("SkillOpt trainer.train() must return a summary mapping")
@@ -232,12 +319,12 @@ def _copy_split_manifest(
 
 
 @contextmanager
-def _use_pinned_skillopt_prompts(out_root: Path) -> Iterator[None]:
-    """Work around prompt files omitted from the SkillOpt 0.2.0 wheel.
+def _use_skillopt_prompt_bundle(out_root: Path) -> Iterator[None]:
+    """Use the auditable Agentic RAG prompt bundle with SkillOpt v0.2.0.
 
     The native prompt loader and all native reflection/update stages remain in
-    use. Only its generic prompt directory is temporarily redirected to the
-    verbatim Markdown bundle from the matching Microsoft release tag.
+    use. Only its prompt directory is redirected because the PyPI wheel omits
+    the Markdown package data.
     """
 
     try:
@@ -250,7 +337,7 @@ def _use_pinned_skillopt_prompts(out_root: Path) -> Iterator[None]:
 
     prompt_dir = Path(__file__).with_name("prompts")
     prompt_files = {
-        name: prompt_dir / f"{name}.md" for name in _PINNED_PROMPT_NAMES
+        name: prompt_dir / f"{name}.md" for name in _PROMPT_NAMES
     }
     missing = [str(path) for path in prompt_files.values() if not path.is_file()]
     if missing:
@@ -258,10 +345,23 @@ def _use_pinned_skillopt_prompts(out_root: Path) -> Iterator[None]:
             "Pinned SkillOpt prompt bundle is incomplete: " + ", ".join(missing)
         )
     prompt_metadata = {
-        "source": "microsoft/SkillOpt",
-        "tag": "v0.2.0",
-        "commit": _SKILLOPT_SOURCE_COMMIT,
-        "reason": "PyPI wheel omits Markdown package data",
+        "schema_version": "agentic-rag-skillopt-prompt-bundle-v2",
+        "bundle_id": _PROMPT_BUNDLE_ID,
+        "source": "Agentic-RAG local customization",
+        "based_on": {
+            "source": "microsoft/SkillOpt",
+            "tag": "v0.2.0",
+            "commit": _SKILLOPT_SOURCE_COMMIT,
+        },
+        "customized_files": list(_CUSTOMIZED_PROMPT_FILES),
+        "upstream_unmodified_files": sorted(
+            set(path.name for path in prompt_files.values())
+            - set(_CUSTOMIZED_PROMPT_FILES)
+        ),
+        "reason": (
+            "Full Agent action-and-answer optimization; the PyPI wheel "
+            "also omits Markdown package data"
+        ),
         "files": {
             path.name: _sha256_file(path)
             for path in prompt_files.values()

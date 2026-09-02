@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 from scipy import sparse
 
-from agentic_rag.substrate.storage import Substrate
+from agentic_rag.substrate.storage import EvaluationSidecars, Substrate
+from agentic_rag.substrate.text import normalize_document_text
 
 
 class ValidationReport(BaseModel):
@@ -153,6 +154,180 @@ def validate_substrate(path: str | Path) -> ValidationReport:
     if not substrate.doc_ids_by_scope:
         warnings.append("Substrate contains no retrieval scopes")
 
+    provenance_count = 0
+    gold_support_count = 0
+    benchmark_question_count = 0
+    if substrate.manifest.source_format == "hotpotqa_global_provenance":
+        if substrate.manifest.schema_version != "2.1":
+            errors.append(
+                "hotpotqa_global_provenance requires manifest schema version 2.1"
+            )
+        if substrate.manifest.index_versions.get("source_sentence_provenance") != "1":
+            errors.append(
+                "Source-sentence provenance version is missing from the manifest"
+            )
+
+        evaluation = EvaluationSidecars.open(substrate.root)
+        provenance = evaluation.source_sentence_provenance
+        gold_support = evaluation.gold_support
+        questions = evaluation.benchmark_questions
+        provenance_count = len(provenance)
+        gold_support_count = len(gold_support)
+        benchmark_question_count = len(questions)
+
+        evaluation_counts = {
+            "source_sentence_provenance": provenance_count,
+            "gold_support": gold_support_count,
+            "benchmark_questions": benchmark_question_count,
+        }
+        for label, count in evaluation_counts.items():
+            if manifest_counts.get(label) != count:
+                errors.append(
+                    f"Manifest count for {label} is {manifest_counts.get(label)}, "
+                    f"actual is {count}"
+                )
+
+        question_ids = [item.question_id for item in questions]
+        check_unique(question_ids, "BenchmarkQuestion")
+        question_by_id = {item.question_id: item for item in questions}
+        scope_ids = set(substrate.doc_ids_by_scope)
+        if len(scope_ids) != 1:
+            errors.append(
+                "HotpotQA global provenance must contain exactly one retrieval scope"
+            )
+        for question in questions:
+            if question.scope_id not in scope_ids:
+                errors.append(
+                    f"Question {question.question_id} references unknown scope "
+                    f"{question.scope_id}"
+                )
+
+        provenance_sentence_ids = [
+            item.sentence_id for item in provenance if item.sentence_id is not None
+        ]
+        check_unique(provenance_sentence_ids, "SourceSentenceProvenance Sentence")
+        provenance_keys = [
+            (item.original_title, item.original_sentence_id) for item in provenance
+        ]
+        if len(provenance_keys) != len(set(provenance_keys)):
+            errors.append(
+                "SourceSentenceProvenance original title/sentence IDs are not unique"
+            )
+        provenance_by_sentence = {
+            item.sentence_id: item
+            for item in provenance
+            if item.sentence_id is not None
+        }
+        for item in provenance:
+            document = substrate.document_by_id.get(item.doc_id)
+            if document is None:
+                errors.append(
+                    f"Source provenance references missing Document {item.doc_id}"
+                )
+                continue
+            if document.title != item.original_title:
+                errors.append(
+                    f"Source provenance title for {item.doc_id} does not match "
+                    "the runtime Document title"
+                )
+            if item.scope_id not in substrate.scope_ids_by_doc.get(item.doc_id, set()):
+                errors.append(
+                    f"Source provenance for {item.doc_id} references unknown scope "
+                    f"{item.scope_id}"
+                )
+            if item.sentence_id is None:
+                if normalize_document_text(item.original_sentence_text):
+                    errors.append(
+                        f"Non-blank source sentence {item.original_title!r}"
+                        f"[{item.original_sentence_id}] has no runtime Sentence ID"
+                    )
+                continue
+            sentence = substrate.sentence_by_id.get(item.sentence_id)
+            if sentence is None:
+                errors.append(
+                    f"Source provenance references missing Sentence {item.sentence_id}"
+                )
+                continue
+            chunk = substrate.chunk_by_id[sentence.chunk_id]
+            if chunk.doc_id != item.doc_id:
+                errors.append(
+                    f"Source Sentence {item.sentence_id} belongs to Document "
+                    f"{chunk.doc_id}, not {item.doc_id}"
+                )
+            if sentence.sentence_pos != item.original_sentence_id:
+                errors.append(
+                    f"Source Sentence {item.sentence_id} has position "
+                    f"{sentence.sentence_pos}, expected {item.original_sentence_id}"
+                )
+            if normalize_document_text(item.original_sentence_text) != sentence.text:
+                errors.append(
+                    f"Source Sentence {item.sentence_id} text does not match exact "
+                    "source provenance after normalization"
+                )
+
+        if set(provenance_sentence_ids) != sentence_ids:
+            missing = sorted(sentence_ids - set(provenance_sentence_ids))
+            extra = sorted(set(provenance_sentence_ids) - sentence_ids)
+            errors.append(
+                "Runtime/provenance Sentence IDs disagree: "
+                f"runtime-only={missing[:5]}, provenance-only={extra[:5]}"
+            )
+
+        fact_keys = [(item.question_id, item.fact_id) for item in gold_support]
+        if len(fact_keys) != len(set(fact_keys)):
+            errors.append("Gold support question/fact keys are not unique")
+        facts_by_question: dict[str, list[str]] = defaultdict(list)
+        for item in gold_support:
+            if item.question_id is None or item.fact_id is None:
+                errors.append(
+                    "HotpotQA global-provenance gold support is missing "
+                    "question_id or fact_id"
+                )
+                continue
+            question = question_by_id.get(item.question_id)
+            if question is None:
+                errors.append(
+                    f"Gold support references unknown question {item.question_id}"
+                )
+            elif question.scope_id != item.scope_id:
+                errors.append(
+                    f"Gold support {item.question_id}/{item.fact_id} scope does "
+                    "not match its question"
+                )
+            facts_by_question[item.question_id].append(item.fact_id)
+            if item.sentence_id is None:
+                errors.append(
+                    f"Gold support {item.question_id}/{item.fact_id} has no "
+                    "runtime Sentence ID"
+                )
+                continue
+            source = provenance_by_sentence.get(item.sentence_id)
+            if source is None:
+                errors.append(
+                    f"Gold support {item.question_id}/{item.fact_id} references "
+                    f"Sentence {item.sentence_id} without source provenance"
+                )
+                continue
+            if (
+                source.doc_id != item.doc_id
+                or source.original_title != item.title
+                or source.original_sentence_id != item.source_sentence_pos
+                or source.original_sentence_text != item.source_sentence_text
+            ):
+                errors.append(
+                    f"Gold support {item.question_id}/{item.fact_id} does not "
+                    "exactly match its source provenance"
+                )
+
+        for question_id in question_ids:
+            fact_ids = sorted(facts_by_question.get(question_id, []))
+            expected_fact_ids = [f"sf:{index:04d}" for index in range(len(fact_ids))]
+            if fact_ids != expected_fact_ids:
+                errors.append(
+                    f"Question {question_id} has non-contiguous gold fact IDs: "
+                    f"{fact_ids}"
+                )
+
     return ValidationReport(
         valid=not errors,
         errors=errors,
@@ -165,5 +340,8 @@ def validate_substrate(path: str | Path) -> ValidationReport:
             "mentions": len(substrate.mentions),
             "incidence_nonzero": int(entity_to_sentence.nnz),
             "matrix_transpose": transpose_difference.nnz == 0,
+            "source_sentence_provenance": provenance_count,
+            "gold_support": gold_support_count,
+            "benchmark_questions": benchmark_question_count,
         },
     )

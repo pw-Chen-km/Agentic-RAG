@@ -89,6 +89,15 @@ class EpisodeStateManager:
         )
 
     @property
+    def should_reserve_policy_attempt_for_finalize(self) -> bool:
+        """Keep the last policy call for FINISH once eligible evidence exists."""
+
+        return (
+            self._state.remaining_policy_attempt_budget == 1
+            and bool(self._state.eligible_sentence_ids or self._state.read_chunk_ids)
+        )
+
+    @property
     def can_attempt_budget_finalize(self) -> bool:
         return (
             self._state.remaining_policy_attempt_budget > 0

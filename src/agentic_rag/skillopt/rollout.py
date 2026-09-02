@@ -15,6 +15,12 @@ from agentic_rag.agent.models import EpisodeResult
 from agentic_rag.evaluation import EpisodeEvaluator, EvaluationResult
 from agentic_rag.paths import portable_path_component
 from agentic_rag.skillopt.dataloader import item_to_dict
+from agentic_rag.skillopt.trajectory import (
+    TrajectoryRepresentation,
+    build_reflection_input,
+    build_training_reference_text,
+    normalize_trajectory_representation,
+)
 
 
 class EpisodeHarness(Protocol):
@@ -57,6 +63,8 @@ def run_rollout_batch(
     evaluator: EpisodeEvaluator,
     workers: int = 1,
     resume: bool = True,
+    trajectory_representation: str | TrajectoryRepresentation = "raw",
+    sentence_provenance: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Run and score a batch, persisting SkillOpt's per-task contract.
 
@@ -71,6 +79,9 @@ def run_rollout_batch(
         )
     if not skill_content.strip():
         raise ValueError("skill_content must not be blank")
+    representation = normalize_trajectory_representation(
+        trajectory_representation
+    )
 
     if isinstance(batch, RolloutBatch):
         phase = batch.phase
@@ -103,6 +114,19 @@ def run_rollout_batch(
             loaded = json.loads(persisted_result.read_text(encoding="utf-8"))
             if not isinstance(loaded, dict):
                 raise ValueError(f"invalid persisted rollout: {persisted_result}")
+            _ensure_resumed_reflection_artifacts(
+                task_dir=task_dir,
+                item=item,
+                skill_content=skill_content,
+                phase=phase,
+                split=split,
+                trajectory_representation=representation,
+                sentence_provenance=sentence_provenance,
+            )
+            if phase == "train":
+                loaded["reference_text"] = build_training_reference_text(item)
+            else:
+                loaded.pop("reference_text", None)
             results.append(loaded)
             continue
 
@@ -186,8 +210,100 @@ def run_rollout_batch(
             actual_task_dir / "rollout_result.json",
             rollout_result,
         )
+        _write_reflection_artifacts(
+            task_dir=actual_task_dir,
+            item=item,
+            episode=episode,
+            evaluation=evaluation,
+            skill_content=skill_content,
+            phase=phase,
+            split=split,
+            trajectory_representation=representation,
+            sentence_provenance=sentence_provenance,
+        )
         results.append(rollout_result)
     return results
+
+
+def _ensure_resumed_reflection_artifacts(
+    *,
+    task_dir: Path,
+    item: Mapping[str, Any],
+    skill_content: str,
+    phase: str,
+    split: str,
+    trajectory_representation: TrajectoryRepresentation,
+    sentence_provenance: Mapping[str, Mapping[str, Any]] | None,
+) -> None:
+    episode_path = task_dir / "episode.json"
+    evaluation_path = task_dir / "evaluation.json"
+    if not episode_path.is_file() or not evaluation_path.is_file():
+        raise FileNotFoundError(
+            "resumed rollout cannot build reflection artifacts without "
+            f"episode.json and evaluation.json: {task_dir}"
+        )
+    episode = EpisodeResult.model_validate_json(
+        episode_path.read_text(encoding="utf-8")
+    )
+    evaluation = EvaluationResult.model_validate_json(
+        evaluation_path.read_text(encoding="utf-8")
+    )
+    _write_reflection_artifacts(
+        task_dir=task_dir,
+        item=item,
+        episode=episode,
+        evaluation=evaluation,
+        skill_content=skill_content,
+        phase=phase,
+        split=split,
+        trajectory_representation=trajectory_representation,
+        sentence_provenance=sentence_provenance,
+    )
+
+
+def _write_reflection_artifacts(
+    *,
+    task_dir: Path,
+    item: Mapping[str, Any],
+    episode: EpisodeResult,
+    evaluation: EvaluationResult,
+    skill_content: str,
+    phase: str,
+    split: str,
+    trajectory_representation: TrajectoryRepresentation,
+    sentence_provenance: Mapping[str, Mapping[str, Any]] | None,
+) -> None:
+    target_prompt_path = task_dir / "target_system_prompt.txt"
+    config_path = task_dir / "effective_config.json"
+    target_system_prompt = (
+        target_prompt_path.read_text(encoding="utf-8")
+        if target_prompt_path.is_file()
+        else None
+    )
+    effective_config: Mapping[str, Any] | None = None
+    if config_path.is_file():
+        loaded = json.loads(config_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, Mapping):
+            raise ValueError(f"invalid effective config: {config_path}")
+        effective_config = loaded
+    reflection_input, manifest = build_reflection_input(
+        episode=episode,
+        item=item,
+        skill_content=skill_content,
+        rollout_phase=phase,
+        rollout_split=split,
+        trajectory_representation=trajectory_representation,
+        evaluation=evaluation,
+        target_system_prompt=target_system_prompt,
+        effective_config=effective_config,
+        sentence_provenance=sentence_provenance,
+    )
+    _write_json_once(
+        task_dir / "reflection_conversation.json", reflection_input
+    )
+    _write_json_once(
+        task_dir / "reflection_input_manifest.json", manifest
+    )
 
 
 def _build_rollout_result(
@@ -247,7 +363,7 @@ def _build_rollout_result(
         "judge_usage": evaluation.judge_usage.model_dump(mode="json"),
     }
     if phase == "train":
-        result["reference_text"] = str(item["answer"])
+        result["reference_text"] = build_training_reference_text(item)
     return result
 
 

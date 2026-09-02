@@ -20,6 +20,11 @@ from agentic_rag.skillopt.benchmark import (
 )
 from agentic_rag.skillopt.dataloader import AgenticRAGSkillOptDataLoader
 from agentic_rag.skillopt.rollout import RolloutBatch, run_rollout_batch
+from agentic_rag.skillopt.trajectory import (
+    TRAJECTORY_REPRESENTATIONS,
+    TrajectoryRepresentation,
+    build_reflection_input,
+)
 from agentic_rag.skillopt.trainer import (
     SkillOptUnavailableError,
     create_skillopt_trainer,
@@ -36,6 +41,9 @@ __all__ = [
     "RolloutBatch",
     "SkillOptUnavailableError",
     "SmokeBenchmarkItem",
+    "TRAJECTORY_REPRESENTATIONS",
+    "TrajectoryRepresentation",
+    "build_reflection_input",
     "create_skillopt_trainer",
     "load_skillopt_config",
     "load_smoke_split",

@@ -23,7 +23,9 @@ from agentic_rag.substrate.models import (
     RawChunk,
     RawDocument,
     SourceArtifact,
+    SourceSentenceProvenance,
 )
+from agentic_rag.substrate.text import normalize_document_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,7 @@ class AdapterOutput:
     documents: tuple[RawDocument, ...]
     scopes: tuple[DocumentScope, ...]
     gold_support: tuple[GoldSupport, ...]
+    source_sentence_provenance: tuple[SourceSentenceProvenance, ...] = ()
     source_chunks: tuple[RawChunk, ...] = ()
     benchmark_questions: tuple[BenchmarkQuestion, ...] = ()
     source_artifacts: tuple[SourceArtifact, ...] = ()
@@ -41,13 +44,11 @@ class AdapterOutput:
 class SourceAdapter(Protocol):
     dataset_name: str
 
-    def load(self, source_path: Path, split: str) -> AdapterOutput:
-        ...
+    def load(self, source_path: Path, split: str) -> AdapterOutput: ...
 
     def iter_documents(
         self, source_path: Path, split: str
-    ) -> Iterator[RawDocument]:
-        ...
+    ) -> Iterator[RawDocument]: ...
 
 
 def _load_json_or_jsonl(path: Path) -> list[dict]:
@@ -105,9 +106,7 @@ def _normalize_context(raw_context: object) -> list[tuple[str, list[str]]]:
                 raise InputFormatError(
                     f"Context entry {index} must be [title, [sentences...]]"
                 )
-            contexts.append(
-                (str(entry[0]), [str(sentence) for sentence in entry[1]])
-            )
+            contexts.append((str(entry[0]), [str(sentence) for sentence in entry[1]]))
         return contexts
     raise InputFormatError("HotpotQA record is missing a supported context field")
 
@@ -194,9 +193,225 @@ class HotpotQAAdapter:
             gold_support=tuple(gold_support),
         )
 
-    def iter_documents(
-        self, source_path: Path, split: str
-    ) -> Iterator[RawDocument]:
+    def iter_documents(self, source_path: Path, split: str) -> Iterator[RawDocument]:
+        yield from self.load(source_path, split).documents
+
+
+class HotpotQAGlobalProvenanceAdapter:
+    """Build a global, title-deduplicated HotpotQA corpus with exact lineage.
+
+    Unlike :class:`HotpotQAAdapter`, this adapter does not duplicate the same
+    Wikipedia document once per question.  Every unique title becomes one
+    document in a single benchmark scope, while raw title and sentence-index
+    provenance is emitted only through evaluation sidecars.
+    """
+
+    dataset_name = "hotpotqa"
+
+    def __init__(
+        self,
+        scope_id: str | None = None,
+        *,
+        validate_reference_counts: bool = False,
+    ) -> None:
+        self.profile = get_dataset_profile("hotpotqa")
+        self.scope_id = scope_id
+        self.validate_reference_counts = validate_reference_counts
+
+    def load(self, source_path: Path, split: str) -> AdapterOutput:
+        rows = _load_json_or_jsonl(source_path)
+        scope_id = self.scope_id or self.profile.scope_id(split)
+        title_sentences: dict[str, tuple[str, ...]] = {}
+        parsed_rows: list[
+            tuple[
+                int,
+                str,
+                dict[str, tuple[str, ...]],
+                list[tuple[str, int]],
+                dict,
+            ]
+        ] = []
+        seen_question_ids: set[str] = set()
+
+        for row_index, row in enumerate(rows):
+            question_id = str(row.get("_id") or row.get("id") or row.get("qid") or "")
+            if not question_id:
+                raise InputFormatError(f"Record {row_index} has no _id/id/qid")
+            if question_id in seen_question_ids:
+                raise InputFormatError(f"Duplicate HotpotQA question ID: {question_id}")
+            seen_question_ids.add(question_id)
+
+            contexts = _normalize_context(row.get("context"))
+            question_context: dict[str, tuple[str, ...]] = {}
+            for title, source_sentences in contexts:
+                if not title:
+                    raise InputFormatError(
+                        f"HotpotQA question {question_id} contains a blank title"
+                    )
+                sentence_tuple = tuple(source_sentences)
+                local_existing = question_context.get(title)
+                if local_existing is not None and local_existing != sentence_tuple:
+                    raise InputFormatError(
+                        f"HotpotQA question {question_id} repeats title {title!r} "
+                        "with inconsistent text"
+                    )
+                question_context[title] = sentence_tuple
+                global_existing = title_sentences.get(title)
+                if global_existing is not None and global_existing != sentence_tuple:
+                    raise InputFormatError(
+                        f"HotpotQA title {title!r} has inconsistent sentence text "
+                        "across questions"
+                    )
+                title_sentences[title] = sentence_tuple
+
+            supports = _normalize_supporting_facts(row.get("supporting_facts"))
+            for title, source_pos in supports:
+                source_sentences = question_context.get(title)
+                if source_sentences is None:
+                    raise InputFormatError(
+                        f"Supporting-fact title {title!r} is absent from question "
+                        f"{question_id}"
+                    )
+                if source_pos < 0 or source_pos >= len(source_sentences):
+                    raise InputFormatError(
+                        f"Supporting-fact sentence index {source_pos} is invalid "
+                        f"for {title!r} in question {question_id}"
+                    )
+                if not normalize_document_text(source_sentences[source_pos]):
+                    raise InputFormatError(
+                        f"Supporting fact {title!r}[{source_pos}] in question "
+                        f"{question_id} is blank"
+                    )
+            parsed_rows.append(
+                (row_index, question_id, question_context, supports, row)
+            )
+
+        ordered_titles = sorted(
+            title_sentences, key=lambda value: (value.casefold(), value)
+        )
+        doc_id_by_title = {
+            title: f"hotpotqa:{split}:global_provenance:d:{ordinal:06d}"
+            for ordinal, title in enumerate(ordered_titles)
+        }
+        documents = tuple(
+            RawDocument(
+                doc_id=doc_id_by_title[title],
+                title=title,
+                text=" ".join(title_sentences[title]),
+            )
+            for title in ordered_titles
+        )
+        scopes = tuple(
+            DocumentScope(scope_id=scope_id, doc_id=item.doc_id) for item in documents
+        )
+
+        provenance: list[SourceSentenceProvenance] = []
+        sentence_id_by_source: dict[tuple[str, int], str | None] = {}
+        for title in ordered_titles:
+            doc_id = doc_id_by_title[title]
+            for source_pos, source_text in enumerate(title_sentences[title]):
+                sentence_id = (
+                    f"{doc_id}:s:{source_pos:04d}"
+                    if normalize_document_text(source_text)
+                    else None
+                )
+                sentence_id_by_source[(title, source_pos)] = sentence_id
+                provenance.append(
+                    SourceSentenceProvenance(
+                        scope_id=scope_id,
+                        doc_id=doc_id,
+                        sentence_id=sentence_id,
+                        original_title=title,
+                        original_sentence_id=source_pos,
+                        original_sentence_text=source_text,
+                    )
+                )
+
+        questions: list[BenchmarkQuestion] = []
+        gold_support: list[GoldSupport] = []
+        task_type_counts: Counter[str] = Counter()
+        for row_index, question_id, question_context, supports, row in parsed_rows:
+            question = row.get("question")
+            answer = row.get("answer")
+            if not isinstance(question, str) or not question.strip():
+                raise InputFormatError(
+                    f"HotpotQA question {question_id} has no question text"
+                )
+            if not isinstance(answer, str) or not answer.strip():
+                raise InputFormatError(
+                    f"HotpotQA question {question_id} has no non-empty answer"
+                )
+            question_type = normalize_task_type(
+                self.profile,
+                row.get("type") or row.get("question_type"),
+                question_id=question_id,
+            )
+            task_type_counts[question_type] += 1
+            questions.append(
+                BenchmarkQuestion(
+                    question_id=question_id,
+                    scope_id=scope_id,
+                    source=str(row.get("source") or "hotpotqa"),
+                    question=question,
+                    answer=answer,
+                    question_type=question_type,
+                    source_question_id=question_id,
+                    source_row_index=row_index,
+                )
+            )
+            for fact_index, (title, source_pos) in enumerate(supports):
+                source_text = question_context[title][source_pos]
+                sentence_id = sentence_id_by_source[(title, source_pos)]
+                if sentence_id is None:
+                    raise InputFormatError(
+                        f"Supporting fact {title!r}[{source_pos}] in question "
+                        f"{question_id} has no substrate sentence"
+                    )
+                gold_support.append(
+                    GoldSupport(
+                        scope_id=scope_id,
+                        doc_id=doc_id_by_title[title],
+                        title=title,
+                        source_sentence_pos=source_pos,
+                        source_sentence_text=source_text,
+                        sentence_id=sentence_id,
+                        question_id=question_id,
+                        fact_id=f"sf:{fact_index:04d}",
+                    )
+                )
+
+        if self.validate_reference_counts:
+            expected_task_types = Counter(dict(self.profile.reference_task_type_counts))
+            errors: list[str] = []
+            if len(questions) != self.profile.reference_question_count:
+                errors.append(
+                    f"questions expected {self.profile.reference_question_count}, "
+                    f"found {len(questions)}"
+                )
+            if task_type_counts != expected_task_types:
+                errors.append(
+                    f"task type counts expected {dict(expected_task_types)}, found "
+                    f"{dict(task_type_counts)}"
+                )
+            if errors:
+                raise InputFormatError(
+                    "HotpotQA global-provenance reference profile mismatch: "
+                    + "; ".join(errors)
+                )
+
+        return AdapterOutput(
+            documents=documents,
+            scopes=scopes,
+            gold_support=tuple(gold_support),
+            source_sentence_provenance=tuple(provenance),
+            benchmark_questions=tuple(
+                sorted(questions, key=lambda item: item.question_id)
+            ),
+            source_artifacts=(_source_artifact(source_path, "hotpotqa_source"),),
+            scope_mode="global",
+        )
+
+    def iter_documents(self, source_path: Path, split: str) -> Iterator[RawDocument]:
         yield from self.load(source_path, split).documents
 
 
@@ -246,7 +461,9 @@ def _benchmark_files(
             "benchmark_exact source must be a directory containing chunks.json "
             "and questions.json, or either one of those files"
         )
-    missing = [str(path) for path in (chunks_path, questions_path) if not path.is_file()]
+    missing = [
+        str(path) for path in (chunks_path, questions_path) if not path.is_file()
+    ]
     if missing:
         raise InputFormatError(
             f"benchmark_exact source is missing required files: {missing}"
@@ -328,8 +545,7 @@ class BenchmarkExactAdapter:
         source_positions = [item[0] for item in parsed_chunks]
         if source_positions != list(range(len(parsed_chunks))):
             raise InputFormatError(
-                "benchmark_exact source Chunk IDs must be ordered and contiguous "
-                "from 0"
+                "benchmark_exact source Chunk IDs must be ordered and contiguous from 0"
             )
         chunks = tuple(
             RawChunk(
@@ -371,9 +587,7 @@ class BenchmarkExactAdapter:
             question_id = (
                 source_question_id
                 if self._legacy_question_ids
-                else (
-                    f"{self.profile.key}:benchmark_exact:q:{row_index:06d}"
-                )
+                else (f"{self.profile.key}:benchmark_exact:q:{row_index:06d}")
             )
             question = row.get("question")
             answer = row.get("answer")
@@ -417,9 +631,7 @@ class BenchmarkExactAdapter:
                     source_question_id=(
                         None if self._legacy_question_ids else source_question_id
                     ),
-                    source_row_index=(
-                        None if self._legacy_question_ids else row_index
-                    ),
+                    source_row_index=(None if self._legacy_question_ids else row_index),
                 )
             )
 
@@ -491,9 +703,7 @@ class BenchmarkExactAdapter:
                 + "; ".join(errors)
             )
 
-    def iter_documents(
-        self, source_path: Path, split: str
-    ) -> Iterator[RawDocument]:
+    def iter_documents(self, source_path: Path, split: str) -> Iterator[RawDocument]:
         yield from self.load(source_path, split).documents
 
 

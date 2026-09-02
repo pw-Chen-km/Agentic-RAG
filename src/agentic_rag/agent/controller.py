@@ -92,7 +92,10 @@ class AgentController:
             max_retrieved_tokens=self.max_retrieved_tokens,
         )
 
-        while manager.can_continue:
+        while (
+            manager.can_continue
+            and not manager.should_reserve_policy_attempt_for_finalize
+        ):
             state = manager.snapshot()
             built = self.context_builder.build(
                 question,

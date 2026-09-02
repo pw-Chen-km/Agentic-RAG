@@ -10,8 +10,13 @@ from typing import Any, Iterable, TypeVar
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from agentic_rag.errors import NodeNotFoundError, ScopeNotFoundError, SubstrateNotFoundError
+from agentic_rag.errors import (
+    NodeNotFoundError,
+    ScopeNotFoundError,
+    SubstrateNotFoundError,
+)
 from agentic_rag.substrate.models import (
+    BenchmarkQuestion,
     BuildManifest,
     Chunk,
     ChunkRead,
@@ -22,8 +27,8 @@ from agentic_rag.substrate.models import (
     GoldSupport,
     Mention,
     Sentence,
-    SentencePreview,
     SentenceResult,
+    SourceSentenceProvenance,
 )
 
 T = TypeVar("T")
@@ -90,6 +95,8 @@ SCHEMAS: dict[str, pa.Schema] = {
             pa.field("source_sentence_pos", pa.int64(), False),
             pa.field("source_sentence_text", pa.string(), False),
             pa.field("sentence_id", pa.string(), True),
+            pa.field("question_id", pa.string(), True),
+            pa.field("fact_id", pa.string(), True),
         ]
     ),
     "benchmark_questions": pa.schema(
@@ -102,6 +109,16 @@ SCHEMAS: dict[str, pa.Schema] = {
             pa.field("question_type", pa.string(), True),
             pa.field("source_question_id", pa.string(), True),
             pa.field("source_row_index", pa.int64(), True),
+        ]
+    ),
+    "source_sentence_provenance": pa.schema(
+        [
+            pa.field("scope_id", pa.string(), False),
+            pa.field("doc_id", pa.string(), False),
+            pa.field("sentence_id", pa.string(), True),
+            pa.field("original_title", pa.string(), False),
+            pa.field("original_sentence_id", pa.int64(), False),
+            pa.field("original_sentence_text", pa.string(), False),
         ]
     ),
 }
@@ -129,6 +146,32 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
 
 def _construct(cls: type[T], rows: Iterable[dict[str, Any]]) -> list[T]:
     return [cls(**row) for row in rows]
+
+
+class EvaluationSidecars:
+    """Explicit evaluation-only view; never attached to runtime ``Substrate``."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        evaluation = root / "evaluation"
+        self.benchmark_questions = _construct(
+            BenchmarkQuestion,
+            read_rows(evaluation / "benchmark_questions.parquet"),
+        )
+        self.gold_support = _construct(
+            GoldSupport,
+            read_rows(evaluation / "gold_support.parquet"),
+        )
+        provenance_path = evaluation / "source_sentence_provenance.parquet"
+        self.source_sentence_provenance = (
+            _construct(SourceSentenceProvenance, read_rows(provenance_path))
+            if provenance_path.exists()
+            else []
+        )
+
+    @classmethod
+    def open(cls, path: str | Path) -> "EvaluationSidecars":
+        return cls(Path(path))
 
 
 class Substrate:
@@ -168,9 +211,7 @@ class Substrate:
 
         self.document_by_id = {record.doc_id: record for record in self.documents}
         self.chunk_by_id = {record.chunk_id: record for record in self.chunks}
-        self.sentence_by_id = {
-            record.sentence_id: record for record in self.sentences
-        }
+        self.sentence_by_id = {record.sentence_id: record for record in self.sentences}
         self.entity_by_id = {record.entity_id: record for record in self.entities}
 
         self.sentences_by_chunk: dict[str, list[Sentence]] = {}
@@ -217,9 +258,7 @@ class Substrate:
             scope_id: set() for scope_id in self.doc_ids_by_scope
         }
         for mention in self.mentions:
-            for scope_id in self.scope_ids_by_sentence.get(
-                mention.sentence_id, set()
-            ):
+            for scope_id in self.scope_ids_by_sentence.get(mention.sentence_id, set()):
                 self.entity_ids_by_scope[scope_id].add(mention.entity_id)
 
     @classmethod

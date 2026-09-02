@@ -1,6 +1,6 @@
 # HotpotQA semantic-memory baseline
 
-## Trainable retrieval workflow
+## Trainable action and answer workflow
 
 Act as one researcher. Inspect the complete Semantic Memory, identify the exact
 missing fact, choose one retrieval action, and give the final answer yourself.
@@ -56,10 +56,22 @@ preview appears to contain the answer, a bridge identity, or a comparison
 value, READ that Chunk before FINISH. Never READ a Chunk whose
 `has_been_read` value is true.
 
+### Finish and answer
+
 Choose FINISH when visible eligible evidence covers every obligation in the
 question; choosing FINISH is itself the decision to answer. `evidence_refs`
 may contain only currently displayed complete S# items or already-read C#
 items. E# and unread C# items are navigation, not answer evidence.
+
+Select evidence that directly supports the requested relation and every
+necessary comparison or bridge. Return a direct, concise, but complete answer.
+For HotpotQA, prefer the shortest complete answer and do not add an explanation
+that the question did not request.
+
+Preserve every requested qualifier, including dates, roles, nationality,
+comparison targets, yes/no polarity, and compound answer conditions. Extract
+the requested value rather than a nearby entity, title, or relation mentioned
+in the same evidence.
 
 ### Preserve progress
 
@@ -77,10 +89,5 @@ supported, FINISH instead of retrieving again.
 
 ## Fixed answer contract
 
-Return a direct, concise, but complete answer supported by the cited evidence.
-For HotpotQA, prefer the shortest complete answer and do not add an explanation
-that the question did not request.
-
-Preserve every requested qualifier, including dates, roles, nationality,
-comparison targets, yes/no polarity, and compound answer conditions. Do not
-guess or add unsupported details.
+The final answer must be supported by evidence that is legal for FINISH.
+Never guess, fabricate, or add a claim that this evidence does not support.

@@ -27,13 +27,29 @@ def test_baseline_has_a_fixed_answer_contract() -> None:
     fixed = skill.fixed_answer_contract
     assert fixed is not None
     assert fixed.startswith("## Fixed answer contract")
+    assert skill.content.count("## Trainable action and answer workflow") == 1
+    assert skill.content.count("## Fixed answer contract") == 1
+    assert skill.content.index("## Trainable action and answer workflow") < (
+        skill.content.index("## Fixed answer contract")
+    )
 
     candidate = skill.content.replace(
-        "Return a direct, concise, but complete answer",
-        "Return a long speculative answer",
+        "The final answer must be supported by evidence that is legal for FINISH.",
+        "The final answer may ignore the evidence.",
     )
     frozen = SkillDocument.freeze_answer_contract(candidate, fixed)
-    assert "Return a long speculative answer" not in frozen
+    assert "The final answer may ignore the evidence." not in frozen
+    trainable_candidate = skill.content.replace(
+        "Return a direct, concise, but complete answer.",
+        "Return the requested value in a complete sentence.",
+    )
+    trainable_frozen = SkillDocument.freeze_answer_contract(
+        trainable_candidate,
+        fixed,
+    )
+    assert "Return the requested value in a complete sentence." in (
+        trainable_frozen
+    )
     assert "query must contain that name alone" in skill.content
     assert "Eric A. Sykes nationality country" in skill.content
     assert "preview appears to contain the answer" in skill.content

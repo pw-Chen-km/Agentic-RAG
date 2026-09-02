@@ -29,7 +29,12 @@ from agentic_rag.skillopt.benchmark import (
     validate_benchmark_lineage,
 )
 from agentic_rag.skillopt.trainer import load_skillopt_config, run_skillopt_training
-from agentic_rag.substrate.storage import Substrate
+from agentic_rag.skillopt.trajectory import TRAJECTORY_REPRESENTATIONS
+from agentic_rag.skillopt.provenance import (
+    PROVENANCE_SPLIT_SCHEMA_VERSION,
+    validate_hotpotqa_provenance_lineage,
+)
+from agentic_rag.substrate.storage import EvaluationSidecars, Substrate
 
 
 def arguments() -> argparse.Namespace:
@@ -40,6 +45,12 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--skillopt-config", type=Path, required=True)
     parser.add_argument("--skill", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--trajectory-representation",
+        choices=TRAJECTORY_REPRESENTATIONS,
+        required=True,
+        help="Reflect-only trajectory view; target rollouts remain unchanged.",
+    )
     return parser.parse_args()
 
 
@@ -103,6 +114,17 @@ class LocalQwenJudge:
 def main() -> None:
     args = arguments()
     substrate = Substrate.open(args.substrate)
+    evaluation_sidecars = EvaluationSidecars.open(args.substrate)
+    sentence_provenance = _sentence_provenance_map(evaluation_sidecars)
+    if (
+        args.trajectory_representation
+        in {"organized_support_labels", "progress_abstracted"}
+        and not sentence_provenance
+    ):
+        raise ValueError(
+            f"{args.trajectory_representation} requires deterministic source "
+            "sentence provenance in the evaluation sidecars"
+        )
     profile = split_manifest_profile(args.split_dir)
     split_manifest = json.loads(
         (args.split_dir / "split_manifest.json").read_text(encoding="utf-8")
@@ -117,7 +139,13 @@ def main() -> None:
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError(f"split manifest {name} count must be positive")
         return value
-    if split_manifest.get("schema_version") in {"1.0", "1.1"}:
+    split_schema = split_manifest.get("schema_version")
+    if split_schema == PROVENANCE_SPLIT_SCHEMA_VERSION:
+        if profile.key != "hotpotqa":
+            raise ValueError("provenance reflection splits support only HotpotQA")
+        scope_id = str(split_manifest["dataset"]["scope_id"])
+        validate_hotpotqa_provenance_lineage(args.split_dir, args.substrate)
+    elif split_schema in {"1.0", "1.1"}:
         if profile.key != "hotpotqa":
             raise ValueError("schema 1.x splits support only HotpotQA")
         scope_id = HOTPOTQA_BENCHMARK_SCOPE_ID
@@ -134,11 +162,25 @@ def main() -> None:
     agent_config = AgentConfig.from_yaml(args.agent_config)
     if not isinstance(agent_config.policy, OllamaPolicyConfig):
         raise ValueError("local Qwen SkillOpt requires an Ollama Policy config")
-    if not agent_config.policy.think:
-        raise ValueError("local Qwen SkillOpt requires thinking mode")
+    if agent_config.policy.think:
+        raise ValueError(
+            "trajectory ablation requires Target Agent thinking to be disabled"
+        )
     initial_skill = SkillDocument.load(args.skill)
 
     config = load_skillopt_config(args.skillopt_config)
+    optimizer_model = str(config.get("optimizer_model") or "")
+    target_model = str(config.get("target_model") or "")
+    if optimizer_model != agent_config.policy.model or target_model != agent_config.policy.model:
+        raise ValueError(
+            "Target Agent and SkillOpt optimizer metadata must use the same model"
+        )
+    optimizer_thinking = config.get(
+        "optimizer_qwen_chat_enable_thinking",
+        config.get("qwen_chat_enable_thinking"),
+    )
+    if optimizer_thinking is not True:
+        raise ValueError("Qwen optimizer thinking must be explicitly enabled")
     config.update(
         {
             "out_root": str(args.output.resolve()),
@@ -148,6 +190,7 @@ def main() -> None:
             "train_size": split_count("train"),
             "sel_env_num": split_count("validation"),
             "test_env_num": split_count("test"),
+            "trajectory_representation": args.trajectory_representation,
         }
     )
 
@@ -174,9 +217,33 @@ def main() -> None:
         seed=int(config["seed"]),
         resume=True,
         fixed_answer_contract=initial_skill.fixed_answer_contract,
+        trajectory_representation=args.trajectory_representation,
+        sentence_provenance=sentence_provenance,
     )
     summary = run_skillopt_training(config, adapter)
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _sentence_provenance_map(
+    sidecars: EvaluationSidecars,
+) -> dict[str, dict[str, object]]:
+    """Index evaluation-only source coordinates by stable Sentence ID."""
+
+    result: dict[str, dict[str, object]] = {}
+    for item in sidecars.source_sentence_provenance:
+        if item.sentence_id is None:
+            continue
+        if item.sentence_id in result:
+            raise ValueError(
+                "source sentence provenance contains a duplicate stable ID: "
+                f"{item.sentence_id}"
+            )
+        result[item.sentence_id] = {
+            "original_title": item.original_title,
+            "original_sentence_id": item.original_sentence_id,
+            "text": item.original_sentence_text,
+        }
+    return result
 
 
 if __name__ == "__main__":

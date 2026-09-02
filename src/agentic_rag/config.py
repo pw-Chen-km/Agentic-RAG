@@ -18,6 +18,7 @@ class BuildConfig(BaseModel):
     source_format: Literal[
         "hotpotqa_scoped",
         "hotpotqa_benchmark_exact",
+        "hotpotqa_global_provenance",
         "benchmark_exact",
     ] = "hotpotqa_scoped"
     benchmark_scope_id: str | None = None
