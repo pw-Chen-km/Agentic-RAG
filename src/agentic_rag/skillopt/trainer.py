@@ -11,7 +11,7 @@ import hashlib
 import json
 import shutil
 from collections.abc import Callable, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -23,6 +23,9 @@ from agentic_rag.skillopt.ranking_compat import (
 )
 from agentic_rag.skillopt.rollout import _write_json_once
 from agentic_rag.skillopt.trajectory import REFLECTION_SCHEMA_VERSION
+from agentic_rag.skillopt.runtime_checkpoint import use_atomic_skillopt_checkpoints
+from agentic_rag.skillopt.reflection_budget import use_token_budget_reflection
+from agentic_rag.skillopt.reflection_format import VERSION as INPUT_FORMAT_VERSION
 
 
 class SkillOptUnavailableError(RuntimeError):
@@ -44,7 +47,7 @@ _CUSTOMIZED_PROMPT_FILES = (
     "analyst_success.md",
     "ranking.md",
 )
-_INTEGRATION_VERSION = "agentic-rag-skillopt-input-ranking-v1"
+_INTEGRATION_VERSION = "agentic-rag-skillopt-multidataset-progress-v2"
 
 
 def _ensure_integration_contract(out_root: Path) -> None:
@@ -65,12 +68,16 @@ def _ensure_integration_contract(out_root: Path) -> None:
     metadata = {
         "version": _INTEGRATION_VERSION,
         "reflection_schema_version": REFLECTION_SCHEMA_VERSION,
+        "optimizer_input_format": INPUT_FORMAT_VERSION,
         "ranking_compat_version": RANKING_COMPAT_VERSION,
         "code_sha256": {
             name: _sha256_file(source / name)
             for name in (
                 "trajectory.py", "adapter.py", "trainer.py", "rollout.py",
                 "ranking_compat.py", "patch_compat.py",
+                "evidence_progress.py", "reference_mapping.py", "multidataset_prepare.py",
+                "runtime_checkpoint.py", "reflection_budget.py", "reflection_tokenizer.py",
+                "reflection_format.py",
             )
         },
         "prompt_bundle_id": _PROMPT_BUNDLE_ID,
@@ -130,6 +137,9 @@ def run_skillopt_training(
     if not isinstance(out_root_value, str) or not out_root_value.strip():
         raise ValueError("flattened SkillOpt config requires a non-empty out_root")
     out_root = Path(out_root_value)
+    if cfg.get("durable_checkpoint_enabled") and cfg.get("num_epochs") != 1:
+        raise ValueError("Atomic reflection-context resume currently supports one epoch only")
+    resumed_atomic_run = bool(cfg.get("durable_checkpoint_enabled") and (out_root / "durable_checkpoint.json").exists())
     _ensure_integration_contract(out_root)
     cfg.update({
         "skillopt_integration_version": _INTEGRATION_VERSION,
@@ -171,11 +181,13 @@ def run_skillopt_training(
         trainer_cls=trainer_cls,
     )
     with (
+        use_atomic_skillopt_checkpoints(out_root) if cfg.get("durable_checkpoint_enabled") else nullcontext(),
         _use_skillopt_prompt_bundle(out_root),
         use_skillopt_patch_compatibility(
             fixed_answer_contract=fixed_contract,
         ),
         use_skillopt_ranking_compatibility(),
+        use_token_budget_reflection(cfg),
     ):
         raw_summary = trainer.train()
     if not isinstance(raw_summary, Mapping):
@@ -214,6 +226,7 @@ def run_skillopt_training(
     token_summary = {
         "target_and_judge": target_and_judge_usage,
         "optimizer": optimizer_usage,
+        "optimizer_native_usage_scope": "current_process_only" if resumed_atomic_run else "full_run",
     }
     workflow_summary = {
         "run_kind": "workflow_smoke",
@@ -237,6 +250,12 @@ def run_skillopt_training(
         # stages. Preserve it here beside our Policy/Judge counters
         # so one file contains the complete stage-level cost ledger.
         "optimizer_usage": optimizer_usage,
+        "resume_accounting": {
+            "resumed_atomic_run": resumed_atomic_run,
+            "optimizer_native_totals_complete": not resumed_atomic_run,
+            "target_judge_totals_from_all_saved_episodes": True,
+            "note": "After restart, native Optimizer totals and loop timing cover only this process; committed per-step history is retained.",
+        },
     }
     _write_json_once(out_root / "initial_metrics.json", initial_metrics)
     _write_json_once(out_root / "final_metrics.json", final_metrics)

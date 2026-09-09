@@ -169,7 +169,9 @@ def test_integration_contract_records_hashes_and_rejects_old_or_changed_runs(tmp
     path = fresh / "skillopt_integration.json"
     original = path.read_text()
     metadata = json.loads(original)
-    assert metadata["reflection_schema_version"].endswith("v3")
+    assert metadata["reflection_schema_version"].endswith("v5")
+    assert metadata["optimizer_input_format"] == "agentic-rag-skillopt-compact-v1"
+    assert "reflection_format.py" in metadata["code_sha256"]
     assert len(metadata["prompt_sha256"]) == 6
     assert all(len(value) == 64 for value in metadata["code_sha256"].values())
     _ensure_integration_contract(fresh)

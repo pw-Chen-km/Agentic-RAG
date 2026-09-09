@@ -533,7 +533,7 @@ def test_source_counts_use_document_ids_and_distinguish_top_level_hits() -> None
     progress = trajectory["step_diagnostics"][0]["information_progress"]
     ledger = trajectory["action_ledger"][0]
 
-    assert rendered["schema_version"] == "agentic-rag-skillopt-reflection-v3"
+    assert rendered["schema_version"] == "agentic-rag-skillopt-reflection-v5"
     assert progress["top_level_result_count"] == 2
     assert progress["returned_unit_count"] == 4
     assert progress["new_unit_count"] == 4

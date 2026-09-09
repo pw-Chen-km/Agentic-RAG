@@ -20,6 +20,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from agentic_rag.skillopt.reflection_format import VERSION as INPUT_FORMAT_VERSION, compact_reflection_input
+
 from agentic_rag.agent.models import (
     EpisodeResult,
     Observation,
@@ -30,8 +32,8 @@ from agentic_rag.agent.models import (
 )
 
 
-REFLECTION_SCHEMA_VERSION = "agentic-rag-skillopt-reflection-v3"
-REFLECTION_MANIFEST_SCHEMA_VERSION = "agentic-rag-skillopt-reflection-manifest-v2"
+REFLECTION_SCHEMA_VERSION = "agentic-rag-skillopt-reflection-v5"
+REFLECTION_MANIFEST_SCHEMA_VERSION = "agentic-rag-skillopt-reflection-manifest-v4"
 _TOKEN_RE = re.compile(r"(?u)\b\w+\b|[^\w\s]")
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -69,10 +71,42 @@ def build_training_reference(item: Mapping[str, Any]) -> dict[str, Any]:
 
     if item.get("answer") is None:
         raise ValueError("training reference requires an answer")
-    return {
+    result = {
         "answer": str(item["answer"]),
         "supporting_facts": _normalize_gold_facts(item.get("supporting_facts")),
     }
+    reference = item.get("reference_evidence")
+    if reference is not None:
+        if not isinstance(reference, Mapping):
+            raise ValueError("reference_evidence must be an object")
+        # The mapping contains complete corpus units used only for offline
+        # alignment. Never copy it (or arbitrary source metadata) into Reflect.
+        facts = reference.get("facts")
+        if not isinstance(facts, list):
+            raise ValueError("reference_evidence.facts must be a list")
+        public_facts = []
+        for fact in facts:
+            if not isinstance(fact, Mapping) or not isinstance(fact.get("text"), str):
+                raise ValueError("each reference fact requires original text")
+            public_facts.append({
+                "fact_id": fact.get("fact_id"),
+                "text": fact["text"],
+                "source_indices": fact.get("source_indices", []),
+                "source": {
+                    key: fact["source"][key]
+                    for key in (
+                        "source_row_index", "original_title",
+                        "original_sentence_id", "original_paragraph_id",
+                    )
+                    if isinstance(fact.get("source"), Mapping) and key in fact["source"]
+                },
+            })
+        result["reference_evidence"] = {
+            "kind": reference.get("kind"),
+            "method": reference.get("method"),
+            "facts": public_facts,
+        }
+    return result
 
 
 def build_training_reference_text(item: Mapping[str, Any]) -> str:
@@ -119,6 +153,9 @@ def build_reflection_input(
     training = rollout_phase == "train"
     hidden_reference = build_training_reference(item) if training else None
     gold_facts = hidden_reference["supporting_facts"] if training else []
+    reference = item.get("reference_evidence") if training else None
+    if reference is not None and not isinstance(reference, Mapping):
+        raise ValueError("reference_evidence must be an object")
     config = dict(effective_config or {})
     rendered: dict[str, Any] = {
         "schema_version": REFLECTION_SCHEMA_VERSION,
@@ -162,10 +199,26 @@ def build_reflection_input(
     else:
         diagnostics, diagnostic_meta = _support_diagnostics(
             episode.trajectory,
-            gold_facts=gold_facts,
-            sentence_provenance=(sentence_provenance if training else None),
+            gold_facts=gold_facts if reference is None else [],
+            sentence_provenance=(sentence_provenance if training and reference is None else None),
         )
         labels_included = bool(training and gold_facts)
+        if reference is not None:
+            from agentic_rag.skillopt.evidence_progress import score_reference_progress
+
+            progress, diagnostic_meta = score_reference_progress(episode.trajectory, reference)
+            if len(progress) != len(diagnostics):
+                raise ValueError("reference progress does not align with trajectory")
+            for diagnostic, row in zip(diagnostics, progress, strict=True):
+                diagnostic["reference_progress"] = row
+                utility = diagnostic.get("direct_expand_utility")
+                if isinstance(utility, dict):
+                    utility["reference_progress"] = _progress_summary(row)
+            later_uses, unattributed = _retrospective_bridge_uses(episode.trajectory, diagnostics)
+            for diagnostic in diagnostics:
+                diagnostic["later_expand_uses_of_acquired_information"] = later_uses.get(diagnostic["step"], [])
+            diagnostic_meta["unattributed_later_expand_uses"] = unattributed
+            labels_included = bool(reference.get("facts"))
         if representation is TrajectoryRepresentation.PROGRESS_ABSTRACTED:
             rendered["trajectory"] = _render_progress_abstracted(
                 episode,
@@ -183,6 +236,7 @@ def build_reflection_input(
             rendered["trajectory"] = organized
 
     payload = _canonical_json_bytes(rendered)
+    optimizer_payload = _canonical_json_bytes(compact_reflection_input(rendered))
     provenance_for_manifest = sentence_provenance if labels_included else None
     manifest = {
         "schema_version": REFLECTION_MANIFEST_SCHEMA_VERSION,
@@ -197,6 +251,10 @@ def build_reflection_input(
             skill_content.encode("utf-8")
         ).hexdigest(),
         "reflection_input_sha256": hashlib.sha256(payload).hexdigest(),
+        "optimizer_input_format": INPUT_FORMAT_VERSION,
+        "optimizer_input_sha256": hashlib.sha256(optimizer_payload).hexdigest(),
+        "optimizer_input_utf8_bytes": len(optimizer_payload),
+        "saved_reflection_is_expanded_audit": True,
         "reflection_input_utf8_bytes": len(payload),
         "reflection_input_estimated_tokens": len(
             _TOKEN_RE.findall(payload.decode("utf-8"))
@@ -204,6 +262,9 @@ def build_reflection_input(
         "truncated": False,
         "hidden_reference_included": training,
         "support_labels_included": labels_included,
+        "reference_progress_method": reference.get("method") if reference is not None else None,
+        "reference_evidence_sha256": _sha256_object(reference) if reference is not None else None,
+        "reference_fact_count": len(reference.get("facts", [])) if reference is not None else None,
         "retrieved_evidence_text_included": (
             representation is not TrajectoryRepresentation.PROGRESS_ABSTRACTED
         ),
@@ -310,7 +371,10 @@ def _episode_outcome(
         ],
         "termination_reason": episode.termination_reason.value,
         "error_code": episode.error_code,
-        "error_message": episode.error_message,
+        # Provider/tool exceptions may echo whole retrieved passages. The
+        # abstract view keeps the error code, not arbitrary exception text.
+        "error_message": episode.error_message if include_evidence_text else None,
+        **({"error_message_omitted": True} if not include_evidence_text and episode.error_message else {}),
         "evaluation": evaluation_value,
     }
 
@@ -475,11 +539,8 @@ def _render_progress_abstracted(
                             if step.observation is not None
                             else "policy_error"
                         ),
-                        "message": (
-                            step.observation.message
-                            if step.observation is not None
-                            else step.validation_error
-                        ),
+                        "message": None,
+                        "message_omitted": True,
                     }
                     if not execution["progress_evaluable"]
                     else None
@@ -488,6 +549,7 @@ def _render_progress_abstracted(
                 "supporting_fact_progress": diagnostic[
                     "supporting_fact_progress"
                 ],
+                **({"reference_progress": diagnostic["reference_progress"]} if "reference_progress" in diagnostic else {}),
                 "direct_expand_progress": diagnostic[
                     "direct_expand_utility"
                 ],
@@ -580,12 +642,49 @@ def _retrospective_bridge_uses(
                 "direct EXPAND observation only; retrospective, not causal"
             ),
         }
+        if "reference_progress" in diagnostic:
+            event["reference_progress"] = _progress_summary(diagnostic["reference_progress"])
+            event["direct_child_stable_ids"] = sorted(_returned_ids(step))
+            event["later_reads_of_direct_children"] = []
+            children = _returned_ids(step)
+            upgrades = []
+            for earlier in trajectory:
+                if earlier.step >= step.step:
+                    break
+                if (parent_id in earlier.state_after.read_chunk_ids - earlier.state_before.read_chunk_ids
+                    or parent_id in earlier.state_after.eligible_sentence_ids - earlier.state_before.eligible_sentence_ids):
+                    upgrades.append(earlier.step)
+            event["parent_visibility_upgrade_steps"] = upgrades
+            for later, later_diagnostic in zip(trajectory, diagnostics, strict=True):
+                if later.step <= step.step or _action_type(later) != "READ":
+                    continue
+                if later.resolved_decision is None or not _execution(later)["progress_evaluable"]:
+                    continue
+                chunk_id = getattr(later.resolved_decision.action, "chunk_id", None)
+                if chunk_id in children:
+                    event["later_reads_of_direct_children"].append({
+                        "read_step": later.step,
+                        "chunk_stable_id": chunk_id,
+                        "reference_progress": _progress_summary(later_diagnostic.get("reference_progress")),
+                        "credited_to": "READ only; not added to the preceding EXPAND",
+                    })
         acquisition_step = first_visible_step.get(parent_id)
         if acquisition_step is None:
             unattributed.append(event)
         else:
             attributed[acquisition_step].append(event)
     return dict(attributed), unattributed
+
+
+def _progress_summary(value: Any) -> dict[str, Any] | None:
+    """Small text-free event summary; no corpus mapping enters Reflect."""
+    if not isinstance(value, Mapping):
+        return None
+    result = {key: value.get(key) for key in ("kind", "method", "status", "reason")}
+    for pool in ("visible", "eligible"):
+        values = value.get(pool)
+        result[f"{pool}_delta"] = values.get("delta") if isinstance(values, Mapping) else None
+    return result
 
 
 def _action_ledger_row(
@@ -691,7 +790,10 @@ def _decision_context(step: StepRecord) -> dict[str, Any]:
                 "node_type": item.node_type,
                 "has_been_read": read if is_chunk else None,
                 "can_read": is_chunk and not read,
-                "can_use_as_evidence": item.node_type == "SENTENCE" or (is_chunk and read),
+                "can_use_as_evidence": (
+                    ref_to_id.get(item.ref) in before.eligible_sentence_ids
+                    if item.node_type == "SENTENCE" else is_chunk and read
+                ),
             })
     else:
         source = "state_before"

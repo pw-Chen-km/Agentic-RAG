@@ -5,12 +5,22 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from agentic_rag.agent.config import AgentConfig
+from ollama import Client
+
+from agentic_rag.agent.config import AgentConfig, OllamaPolicyConfig
 from agentic_rag.agent.harness import AgentHarness
-from agentic_rag.evaluation import contain_accuracy, normalize_answer
+from agentic_rag.evaluation import (
+    EpisodeEvaluator,
+    JudgeMessage,
+    JudgeResponse,
+    JudgeResponseError,
+    JudgeUsage,
+    normalize_answer,
+)
 from agentic_rag.evaluation.profiles import get_dataset_profile
 from agentic_rag.skillopt.benchmark import validate_benchmark_lineage
 from agentic_rag.skillopt.data import validate_hotpotqa_smoke_lineage
@@ -24,6 +34,62 @@ _REFERENCE_ERROR_CODES = {
     "reference_type_mismatch",
     "reference_not_evidence",
 }
+
+
+class LocalQwenJudge:
+    """Structured semantic judge on the same fixed Ollama endpoint."""
+
+    def __init__(self, config: OllamaPolicyConfig) -> None:
+        self.model = config.model
+        self.host = config.host
+        self.think = config.think
+        self.num_ctx = config.num_ctx
+        self.keep_alive = config.keep_alive
+        self.client = Client(host=config.host, timeout=config.timeout_seconds)
+
+    def judge(self, messages: Sequence[JudgeMessage]) -> JudgeResponse:
+        schema = {
+            "type": "object",
+            "properties": {"correct": {"type": "boolean"}},
+            "required": ["correct"],
+            "additionalProperties": False,
+        }
+        response = self.client.chat(
+            model=self.model,
+            messages=[message.as_provider_input() for message in messages],
+            stream=False,
+            format=schema,
+            think=self.think,
+            options={"temperature": 0, "num_ctx": self.num_ctx},
+            keep_alive=self.keep_alive,
+        )
+        try:
+            payload = json.loads(response.message.content)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise JudgeResponseError("local Qwen judge returned invalid JSON") from exc
+        correct = payload.get("correct")
+        if type(correct) is not bool:
+            raise JudgeResponseError("local Qwen judge omitted boolean correct")
+        input_tokens = max(int(response.prompt_eval_count or 0), 0)
+        output_tokens = max(int(response.eval_count or 0), 0)
+        return JudgeResponse(
+            correct=correct,
+            raw_output=payload,
+            model=self.model,
+            usage=JudgeUsage(
+                calls=1,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=input_tokens + output_tokens,
+            ),
+            request_options={
+                "provider": "ollama",
+                "host": self.host,
+                "think": self.think,
+                "temperature": 0,
+                "num_ctx": self.num_ctx,
+            },
+        )
 
 
 def _arguments() -> argparse.Namespace:
@@ -68,6 +134,9 @@ def _contract(args: argparse.Namespace, config: AgentConfig) -> dict[str, Any]:
         "architecture": "semantic_memory_typed_refs_compact",
         "policy_provider": config.policy.provider,
         "policy_model": config.policy.model,
+        "judge_model": config.policy.model,
+        "judge_host": getattr(config.policy, "host", None),
+        "judge_thinking": getattr(config.policy, "think", None),
         "openai_used": config.policy.provider == "openai",
         "split": args.split.as_posix(),
         "split_sha256": _sha256(args.split),
@@ -94,12 +163,23 @@ def _usage_totals(rows: list[dict[str, Any]]) -> dict[str, int]:
     return totals
 
 
+def _judge_usage_totals(rows: list[dict[str, Any]]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for row in rows:
+        for key, value in (row.get("judge_usage") or {}).items():
+            totals[key] = totals.get(key, 0) + int(value)
+    return totals
+
+
 def _summary(
     contract: dict[str, Any], rows: list[dict[str, Any]]
 ) -> dict[str, Any]:
     return {
         "run_contract": contract,
         "question_count": len(rows),
+        "llm_acc_correct": sum(row["llm_acc"] for row in rows),
+        "hard_correct": sum(row["hard"] for row in rows),
+        "soft_total": sum(float(row["soft"]) for row in rows),
         "normalized_exact_correct": sum(row["normalized_exact"] for row in rows),
         "contain_correct": sum(row["contain_acc"] for row in rows),
         "total_invalid_attempts": sum(row["invalid_attempts"] for row in rows),
@@ -115,6 +195,7 @@ def _summary(
         ),
         "reference_errors": sum(row["reference_errors"] for row in rows),
         "usage": _usage_totals(rows),
+        "judge_usage": _judge_usage_totals(rows),
         "results": rows,
     }
 
@@ -123,6 +204,9 @@ def main() -> None:
     args = _arguments()
     config = AgentConfig.from_yaml(args.config)
     profile = get_dataset_profile(args.dataset)
+    if not isinstance(config.policy, OllamaPolicyConfig):
+        raise ValueError("benchmark LLM judge requires an Ollama policy config")
+    evaluator = EpisodeEvaluator(LocalQwenJudge(config.policy), profile=profile)
     substrate = Substrate.open(args.substrate)
     if substrate.manifest.dataset != profile.key:
         raise ValueError(
@@ -205,6 +289,15 @@ def main() -> None:
 
         prediction = result.answer or ""
         gold = str(item["answer"])
+        evaluation = evaluator.evaluate(
+            question=str(item["question"]),
+            predicted_answer=prediction,
+            gold_answer=gold,
+        )
+        _write_json(
+            task_dir / "evaluation.json",
+            evaluation.model_dump(mode="json"),
+        )
         action_counts = {
             action_type: sum(
                 step.decision is not None
@@ -241,10 +334,17 @@ def main() -> None:
             "question_type": str(item.get("question_type") or ""),
             "gold_answer": gold,
             "predicted_answer": prediction,
+            "llm_acc": evaluation.llm_acc,
+            "hard": evaluation.hard,
+            "soft": evaluation.soft,
+            "metric_contract": {
+                "hard": evaluation.hard_metric.value,
+                "soft": evaluation.soft_metric.value,
+            },
             "normalized_exact": int(
                 normalize_answer(prediction) == normalize_answer(gold)
             ),
-            "contain_acc": contain_accuracy(prediction, gold),
+            "contain_acc": evaluation.contain_acc,
             "termination_reason": result.termination_reason.value,
             "error_code": result.error_code,
             "environment_steps": result.final_state.step if result.final_state else 0,
@@ -261,6 +361,7 @@ def main() -> None:
             "search_after_no_progress": search_after_no_progress,
             "reference_errors": reference_errors,
             "usage": result.usage.model_dump(mode="json"),
+            "judge_usage": evaluation.judge_usage.model_dump(mode="json"),
             "artifact_dir": result.artifact_dir,
         }
         rows.append(row)
@@ -270,7 +371,8 @@ def main() -> None:
         )
         print(
             f"DONE {index}/{len(items)} answer={prediction!r} "
-            f"contain={row['contain_acc']} exact={row['normalized_exact']} "
+            f"hard={row['hard']} contain={row['contain_acc']} "
+            f"exact={row['normalized_exact']} "
             f"termination={row['termination_reason']} "
             f"steps={row['environment_steps']} "
             f"attempts={row['policy_attempts']} "
@@ -281,7 +383,8 @@ def main() -> None:
     summary = _summary(contract, rows)
     _write_json(args.output / "summary.json", summary)
     print(
-        f"SUMMARY contain={summary['contain_correct']}/{len(items)} "
+        f"SUMMARY hard={summary['hard_correct']}/{len(items)} "
+        f"contain={summary['contain_correct']}/{len(items)} "
         f"exact={summary['normalized_exact_correct']}/{len(items)} "
         f"invalid={summary['total_invalid_attempts']} "
         f"policy_calls={summary['usage'].get('policy_calls', 0)} "

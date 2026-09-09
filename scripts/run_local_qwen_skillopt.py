@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Sequence
@@ -34,6 +35,10 @@ from agentic_rag.skillopt.provenance import (
     PROVENANCE_SPLIT_SCHEMA_VERSION,
     validate_hotpotqa_provenance_lineage,
 )
+from agentic_rag.skillopt.multidataset_prepare import (
+    PREPARATION_SPLIT_SCHEMA_VERSION,
+    validate_prepared_split,
+)
 from agentic_rag.substrate.storage import EvaluationSidecars, Substrate
 
 
@@ -45,6 +50,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--skillopt-config", type=Path, required=True)
     parser.add_argument("--skill", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Validate data and configuration without creating model clients or starting training.",
+    )
     parser.add_argument(
         "--trajectory-representation",
         choices=TRAJECTORY_REPRESENTATIONS,
@@ -114,17 +123,6 @@ class LocalQwenJudge:
 def main() -> None:
     args = arguments()
     substrate = Substrate.open(args.substrate)
-    evaluation_sidecars = EvaluationSidecars.open(args.substrate)
-    sentence_provenance = _sentence_provenance_map(evaluation_sidecars)
-    if (
-        args.trajectory_representation
-        in {"organized_support_labels", "progress_abstracted"}
-        and not sentence_provenance
-    ):
-        raise ValueError(
-            f"{args.trajectory_representation} requires deterministic source "
-            "sentence provenance in the evaluation sidecars"
-        )
     profile = split_manifest_profile(args.split_dir)
     split_manifest = json.loads(
         (args.split_dir / "split_manifest.json").read_text(encoding="utf-8")
@@ -140,7 +138,33 @@ def main() -> None:
             raise ValueError(f"split manifest {name} count must be positive")
         return value
     split_schema = split_manifest.get("schema_version")
-    if split_schema == PROVENANCE_SPLIT_SCHEMA_VERSION:
+    requires_reference_progress = args.trajectory_representation in {
+        "organized_support_labels", "progress_abstracted"
+    }
+    prepared_split = split_schema in {"3.0", PREPARATION_SPLIT_SCHEMA_VERSION}
+    if prepared_split:
+        if split_manifest.get("dataset_role") == "transfer_only":
+            raise ValueError("Transfer-only data is sealed for final answer testing, not SkillOpt training")
+        # New datasets can use sentence coordinates, paragraph spans, or
+        # reference-text overlap. None should be forced through HotpotQA's
+        # sentence-only sidecar contract.
+        lineage = validate_prepared_split(
+            args.split_dir, args.substrate,
+            require_reference_progress=requires_reference_progress,
+        )
+        scope_id = str(lineage["scope_id"])
+        sentence_provenance = None
+    else:
+        evaluation_sidecars = EvaluationSidecars.open(args.substrate)
+        sentence_provenance = _sentence_provenance_map(evaluation_sidecars)
+        if requires_reference_progress and not sentence_provenance:
+            raise ValueError(
+                f"{args.trajectory_representation} requires deterministic source "
+                "sentence provenance in the evaluation sidecars"
+            )
+    if prepared_split:
+        pass
+    elif split_schema == PROVENANCE_SPLIT_SCHEMA_VERSION:
         if profile.key != "hotpotqa":
             raise ValueError("provenance reflection splits support only HotpotQA")
         scope_id = str(split_manifest["dataset"]["scope_id"])
@@ -193,6 +217,42 @@ def main() -> None:
             "trajectory_representation": args.trajectory_representation,
         }
     )
+    if prepared_split:
+        # New test data remains sealed during optimization. Independent final
+        # evaluation is a separate entrypoint after all Skills are frozen.
+        config["eval_test"] = False
+
+    prepared_contract = None
+    if prepared_split:
+        prepared_contract = _prepared_training_contract(args, dataset=profile.key)
+        _check_training_contract(args.output, prepared_contract)
+
+    if args.dry_run:
+        print(json.dumps(
+            {
+                "status": "validated", "dry_run": True,
+                "dataset": profile.key, "split_schema": split_schema,
+                "scope_id": scope_id,
+                "trajectory_representation": args.trajectory_representation,
+                "reference_progress_required": requires_reference_progress,
+                "split_counts": {name: split_count(name) for name in ("train", "validation", "test")},
+                "effective_training": {
+                    key: config.get(key) for key in (
+                        "train_size", "sel_env_num", "test_env_num", "batch_size",
+                        "minibatch_size", "accumulation", "num_epochs", "seed",
+                        "eval_test", "optimizer_model", "target_model",
+                    )
+                },
+                "model_clients_created": False, "training_started": False,
+                "output": str(args.output.resolve()),
+                "prepared_training_contract": prepared_contract,
+            },
+            ensure_ascii=False, indent=2, sort_keys=True,
+        ))
+        return
+
+    if prepared_contract is not None:
+        _write_training_contract(args.output, prepared_contract)
 
     def harness_factory(*, skill_content: str, output_root: Path) -> AgentHarness:
         return AgentHarness.from_skill_content(
@@ -222,6 +282,42 @@ def main() -> None:
     )
     summary = run_skillopt_training(config, adapter)
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _prepared_training_contract(args: argparse.Namespace, *, dataset: str) -> dict[str, str]:
+    def sha256(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    return {
+        "split_manifest_sha256": sha256(args.split_dir / "split_manifest.json"),
+        "skillopt_config_sha256": sha256(args.skillopt_config),
+        "agent_config_sha256": sha256(args.agent_config),
+        "initial_skill_sha256": sha256(args.skill),
+        "trajectory_representation": args.trajectory_representation,
+        "dataset": dataset,
+    }
+
+
+def _check_training_contract(output: Path, contract: dict[str, str]) -> None:
+    path = output / "prepared_training_contract.json"
+    if path.exists():
+        if json.loads(path.read_text(encoding="utf-8")) != contract:
+            raise ValueError("Prepared training contract changed; use a new output directory")
+    elif any((output / name).exists() for name in (
+        "config.json", "history.json", "steps", "skills", "workflow_summary.json", "runtime_state.json",
+    )):
+        raise ValueError("Existing output has no prepared training contract; use a new output directory")
+
+
+def _write_training_contract(output: Path, contract: dict[str, str]) -> None:
+    _check_training_contract(output, contract)
+    path = output / "prepared_training_contract.json"
+    if path.exists():
+        return
+    output.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as handle:
+        json.dump(contract, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
 
 
 def _sentence_provenance_map(

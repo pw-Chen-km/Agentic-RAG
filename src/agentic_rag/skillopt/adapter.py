@@ -340,6 +340,12 @@ __all__ = ["AgenticRAGSkillOptAdapter", "SKILLOPT_AVAILABLE"]
 def _native_reflection_conversation(
     rendered: Mapping[str, Any],
 ) -> list[dict[str, str]]:
+    # Historical audits can still be inspected with their original renderer.
+    # Live reflect rejects old versions before calling this function.
+    from agentic_rag.skillopt.reflection_format import compact_reflection_input
+
+    if rendered.get("schema_version") == REFLECTION_SCHEMA_VERSION:
+        rendered = compact_reflection_input(rendered)
     representation = str(rendered["trajectory_representation"])
     legends = {
         "raw": (
@@ -354,16 +360,18 @@ def _native_reflection_conversation(
             "No GT-derived step labels."
         ),
         "organized_support_labels": (
-            "The organized rollout plus evaluator-derived supporting-fact "
-            "progress. Retrieval text organization is unchanged from the "
+            "The organized rollout plus evaluator-derived reference progress. "
+            "Read the declared method: exact source matches, paragraph text "
+            "exposure, and reference-word overlap have different meanings. "
+            "Retrieval text organization is unchanged from the "
             "organized arm; no answer-progress labels are present."
         ),
         "progress_abstracted": (
             "A step-by-step abstract progress record with all retrieved result "
             "text removed, including the final cited evidence text. "
             "Each step shows whether the action ran, whether it "
-            "added new information, whether it moved toward the known "
-            "supporting facts, and whether information acquired at that step "
+            "added new information, how the declared reference measure changed, "
+            "and whether information acquired at that step "
             "was later used by EXPAND and produced direct progress. It does "
             "not claim that a bridge caused the final outcome, and it contains "
             "no answer-progress labels."
@@ -375,6 +383,7 @@ def _native_reflection_conversation(
             {
                 "trajectory_representation": representation,
                 "meaning": legends[representation],
+                **({"input_format": rendered["input_format"]} if "input_format" in rendered else {}),
                 "shared_decision_context": (
                     "Each step includes the model's missing_information from "
                     "that decision (null if unavailable), recorded pre-action "
@@ -388,6 +397,24 @@ def _native_reflection_conversation(
                 "execution_na_vs_zero": (
                     "not_executed/tool_error => progress N/A; an executed "
                     "empty result => zero progress"
+                ),
+                "reference_progress_meaning": (
+                    "lexical_f1 is the best word overlap seen so far for each "
+                    "original reference fact, averaged across facts. It is not "
+                    "a factual-support verdict or the probability of a correct "
+                    "answer. A low-scoring clue may be useful later. Visible "
+                    "text and legally citable text are scored separately; READ "
+                    "may improve only the latter. Paragraph coverage measures "
+                    "original text exposure, not how much reasoning is solved. "
+                    "Source matching and word overlap never use embeddings."
+                ),
+                "later_use_meaning": (
+                    "A recorded EXPAND parent link proves the unit was used "
+                    "as that expansion's input. Direct progress belongs to "
+                    "that action; later READ progress belongs to READ only. "
+                    "The full parent-child-READ path is retained, but neither "
+                    "a link nor a score proves the parent caused success. "
+                    "No EXPAND link does not mean the unit was useless."
                 ),
                 "count_definitions": {
                     "top_level_result_count": (
@@ -425,7 +452,7 @@ def _native_reflection_conversation(
     return [
         {
             "role": "system" if index == 0 else "user",
-            "content": f"## {name}\n{json.dumps(value, ensure_ascii=False, sort_keys=True)}",
+            "content": f"## {name}\n{json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':') if 'input_format' in rendered else None)}",
         }
         for index, (name, value) in enumerate(sections)
     ]
