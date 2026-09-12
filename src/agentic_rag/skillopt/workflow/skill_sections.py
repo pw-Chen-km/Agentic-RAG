@@ -1,6 +1,7 @@
 """Parse Skill blocks and fail closed when a stage crosses its boundary."""
 from __future__ import annotations
 import hashlib
+import re
 from dataclasses import dataclass
 
 SECTIONS = ("retrieval_policy", "recovery_policy", "answer_policy", "fixed_runtime_guidance", "fixed_answer_contract")
@@ -28,6 +29,13 @@ def validate_stage_patch(old: str, new: str, stage: str) -> None:
     if allowed is None: raise ValueError(f"unknown stage: {stage}")
     before, after = SkillSections.parse(old), SkillSections.parse(new)
     if set(before.blocks) != set(after.blocks): raise ValueError("section structure changed")
+    def protected(text: str) -> str:
+        for name in allowed:
+            start, end = MARKERS[name]
+            text = re.sub(re.escape(start) + r".*?" + re.escape(end), start + end, text, flags=re.S)
+        return text
+    if protected(old) != protected(new):
+        raise ValueError("patch changed text outside editable blocks")
     for name in before.blocks:
         if name not in allowed and before.hashes[name] != after.hashes[name]: raise ValueError(f"fixed section modified: {name}")
     if before.text == new: return

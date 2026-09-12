@@ -35,6 +35,7 @@ skillopt = [
 
 [project.scripts]
 agentic-rag = "agentic_rag.cli:app"
+agentic-rag-workflow = "agentic_rag.skillopt.workflow.cli:main"
 
 [build-system]
 requires = ["hatchling"]

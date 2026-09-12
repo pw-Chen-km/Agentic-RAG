@@ -1,8 +1,10 @@
 # Agentic-RAG Workflow Skill
 
+<!-- FIXED_RUNTIME_GUIDANCE_START -->
 ## Fixed runtime guidance
 The Agent must output one legal PolicyDecision at a time. Follow the action
 schema and use only references visible in the current state.
+<!-- FIXED_RUNTIME_GUIDANCE_END -->
 
 <!-- RETRIEVAL_POLICY_START -->
 ## Retrieval policy
@@ -22,6 +24,8 @@ When the legal evidence covers the question, FINISH and give a concise,
 complete answer using the appropriate evidence references.
 <!-- ANSWER_POLICY_END -->
 
+<!-- FIXED_ANSWER_CONTRACT_START -->
 ## Fixed answer contract
 The final answer must be supported by legal evidence. Never guess, fabricate,
 or add claims that the evidence does not support.
+<!-- FIXED_ANSWER_CONTRACT_END -->
