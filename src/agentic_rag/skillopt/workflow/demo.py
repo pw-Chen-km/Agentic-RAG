@@ -15,4 +15,4 @@ class DemoBackend:
         section = "answer_policy" if stage == "answer" else "recovery_policy"
         return {"sections": {section: "Use a different available retrieval path when no new evidence is obtained."}
                 if stage != "answer" else {section: "Finish once legal evidence covers all requested conditions."},
-                "accept": True, "reason": "FAKE demo proposal; not research evidence"}
+                "reason": "FAKE demo proposal; not research evidence"}

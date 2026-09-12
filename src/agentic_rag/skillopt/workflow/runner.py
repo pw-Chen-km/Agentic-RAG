@@ -146,11 +146,6 @@ class WorkflowRunner:
             if patch:
                 try:
                     candidate = apply_sections(skill, patch, stage)
-                    # Every candidate, including a singleton, goes through a
-                    # separate review. Explicit false never defaults to first.
-                    review = self._call(stage, "rank", {"skill": skill, "sections": patch}, folder / "rank.json")
-                    if review.get("accept") is not True:
-                        candidate, reason = skill, "ranking_declined"
                 except ValueError as exc:
                     candidate, reason = skill, f"scope_rejected: {exc}"
         candidate_rows = []

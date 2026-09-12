@@ -35,3 +35,7 @@ and set `"enable_meta": false` under `workflow`. Keep the same train,
 validation, test, seed, model, and Retrieval output as the Meta-enabled arm.
 The no-Meta arm skips only the Meta stage and then runs Answer; never compare
 arms with different input questions or independently sampled splits.
+
+There is no separate ranking step. A merged proposal goes directly to the
+validation gate, so acceptance is based on held-out validation performance and
+cost rather than a second LLM opinion.

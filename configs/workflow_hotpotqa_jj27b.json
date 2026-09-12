@@ -5,8 +5,8 @@
   "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/hotpotqa_provenance/substrate",
   "agent_config": "hotpotqa_workflow_jj27b.yaml",
   "skill": "../skills/workflow_seed.md",
-  "output": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/workflow_skillopt_hotpotqa_jj27b_full200_200_600",
-  "optimizer": {"provider":"ollama", "model":"qwen3.8:27b-q4_K_M", "host":"http://127.0.0.1:11440", "temperature":0, "think":false, "timeout_seconds":900, "num_ctx":65536},
+  "output": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/workflow_skillopt_hotpotqa_jj27b_full200_200_600_optimizer_thinking",
+  "optimizer": {"provider":"ollama", "model":"qwen3.8:27b-q4_K_M", "host":"http://127.0.0.1:11440", "temperature":0, "think":true, "timeout_seconds":900, "num_ctx":65536},
   "judge": {"provider":"ollama", "model":"qwen3.8:27b-q4_K_M", "host":"http://127.0.0.1:11440", "temperature":0, "think":false, "timeout_seconds":900, "num_ctx":65536},
   "workflow": {"rollout_batch_size":40, "reflection_minibatch_size":5, "replay_rejected_candidates":true}
 }
