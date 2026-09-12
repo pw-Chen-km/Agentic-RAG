@@ -1,0 +1,19 @@
+agent:
+  max_steps: 10
+  max_policy_attempts: 12
+  max_retrieved_tokens: 12000
+  enabled_expansions:
+    - ENTITY_MENTIONED_IN_SENTENCE
+    - SENTENCE_MENTIONS_ENTITY
+    - ENTITY_CO_OCCURS_ENTITY_SENTENCE
+    - CHUNK_ADJACENT_CHUNK
+policy:
+  provider: ollama
+  model: qwen3.8:27b-q4_K_M
+  host: http://127.0.0.1:11440
+  temperature: 0
+  think: false
+  timeout_seconds: 900
+  keep_alive: 30m
+  max_retries: 2
+  num_ctx: 65536
