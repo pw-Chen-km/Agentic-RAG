@@ -29,3 +29,7 @@ class WorkflowCoordinator:
         request = replay_purpose(candidate_skill_sha256, parent_skill_sha256, question_ids)
         if self.replay is None: return request
         return self.replay(request=request)
+
+    def run_meta(self, comparisons: list[Any], *, prompt_builder: Callable[[list[Any]], Any], meta_llm: Callable[[Any], Any]) -> list[Any]:
+        """Run Meta reflection in the same five-case minibatches as reflection."""
+        return [meta_llm(prompt_builder(comparisons[i:i+self.config.reflection_minibatch_size])) for i in range(0, len(comparisons), self.config.reflection_minibatch_size)]

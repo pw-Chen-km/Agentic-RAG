@@ -2,6 +2,7 @@ from agentic_rag.skillopt.workflow.config import WorkflowConfig
 from agentic_rag.skillopt.workflow.skill_sections import SkillSections, validate_stage_patch
 from agentic_rag.skillopt.workflow.candidate_replay import replay_purpose
 from agentic_rag.skillopt.workflow.trajectory_views import batch_views
+from agentic_rag.skillopt.workflow.validation import ValidationMetrics, evaluate_candidate
 import pytest
 
 def test_defaults_and_replay_are_train_only():
@@ -17,3 +18,8 @@ def test_views_batch_without_mutating_rows():
     rows=[{'text':'secret','action':'READ'} for _ in range(6)]
     out=batch_views([rows], 'workflow', minibatch_size=5)
     assert len(out)==1 and len(out[0]['episodes'])==1 and rows[0]['text']=='secret'
+
+def test_gate_requires_same_complete_nonzero_cost():
+    a=ValidationMetrics(.80,1000,10,10); b=ValidationMetrics(.80,950,10,10)
+    assert evaluate_candidate(a,b).accepted
+    assert not evaluate_candidate(a,ValidationMetrics(.80,0,10,10)).accepted
