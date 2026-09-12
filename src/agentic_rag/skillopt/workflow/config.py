@@ -20,6 +20,7 @@ class WorkflowConfig:
         StageConfig("answer", ("answer_policy",)),
     ))
     replay_rejected_candidates: bool = True
+    enable_meta: bool = True
     replay_split: str = "train"
     no_test_in_meta: bool = True
 
@@ -40,4 +41,4 @@ class WorkflowConfig:
         parsed = None
         if stages is not None:
             parsed = tuple(StageConfig(str(s["name"]), tuple(s.get("editable_sections", ())), int(s.get("reflection_minibatch_size", value.get("reflection_minibatch_size", 5)))) for s in stages)
-        return cls(rollout_batch_size=int(value.get("rollout_batch_size", 40)), reflection_minibatch_size=int(value.get("reflection_minibatch_size", 5)), stages=parsed or cls().stages, replay_rejected_candidates=bool(value.get("replay_rejected_candidates", True)), replay_split=str(value.get("replay_split", "train")), no_test_in_meta=bool(value.get("no_test_in_meta", True)))
+        return cls(rollout_batch_size=int(value.get("rollout_batch_size", 40)), reflection_minibatch_size=int(value.get("reflection_minibatch_size", 5)), stages=parsed or cls().stages, replay_rejected_candidates=bool(value.get("replay_rejected_candidates", True)), enable_meta=bool(value.get("enable_meta", True)), replay_split=str(value.get("replay_split", "train")), no_test_in_meta=bool(value.get("no_test_in_meta", True)))

@@ -8,6 +8,8 @@ import pytest
 def test_defaults_and_replay_are_train_only():
     c=WorkflowConfig(); assert c.rollout_batch_size==40 and c.reflection_minibatch_size==5
     assert replay_purpose('a','b',['q']).purpose=='meta_analysis_only'
+    assert c.enable_meta is True
+    assert WorkflowConfig.from_mapping({'enable_meta': False}).enable_meta is False
 
 def test_stage_scope_rejects_fixed_change():
     s='''<!-- RETRIEVAL_POLICY_START -->a<!-- RETRIEVAL_POLICY_END -->\n<!-- RECOVERY_POLICY_START -->b<!-- RECOVERY_POLICY_END -->\n<!-- ANSWER_POLICY_START -->c<!-- ANSWER_POLICY_END -->'''

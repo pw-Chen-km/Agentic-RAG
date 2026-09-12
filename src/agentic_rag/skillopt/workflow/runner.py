@@ -184,7 +184,8 @@ class WorkflowRunner:
         batches = [self.train[i:i+self.config.rollout_batch_size]
                    for i in range(0, len(self.train), self.config.rollout_batch_size)]
         retrieval_receipts, receipts = [], []
-        for stage in ("retrieval", "meta", "answer"):
+        stages = ("retrieval", "meta", "answer") if self.config.enable_meta else ("retrieval", "answer")
+        for stage in stages:
             for index, questions in enumerate(batches):
                 if stage == "meta":
                     previous = retrieval_receipts[index]
@@ -210,6 +211,6 @@ class WorkflowRunner:
         # the documented gate can also accept an efficiency improvement.
         (self.output / "final_skill.md").write_text(skill)
         summary = {"status": "complete", "final_skill_sha256": skill_hash(skill),
-                   "updates": receipts, "test_executed": False}
+                   "meta_enabled": self.config.enable_meta, "updates": receipts, "test_executed": False}
         write_json(self.output / "summary.json", summary)
         return summary

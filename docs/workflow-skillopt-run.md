@@ -29,3 +29,9 @@ changed input or model contract requires a new output directory.
 used as research evidence. `--dry-run` makes no model call. The runner uses
 one process per output directory; run independent datasets in independent
 directories.
+
+For the Meta ablation, copy the same configuration to a new output directory
+and set `"enable_meta": false` under `workflow`. Keep the same train,
+validation, test, seed, model, and Retrieval output as the Meta-enabled arm.
+The no-Meta arm skips only the Meta stage and then runs Answer; never compare
+arms with different input questions or independently sampled splits.
