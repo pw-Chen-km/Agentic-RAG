@@ -24,6 +24,22 @@ def main() -> None:
         "conditions": {name: aggregate(values) for name, values in sorted(groups.items())},
         "episode_count": len(rows),
     }
+    by_question = defaultdict(dict)
+    for row in rows:
+        by_question[row.get("question_id")][row.get("condition")] = row
+    cases = {"benefited": [], "harmed": [], "no_improvement": []}
+    for question_id, values in by_question.items():
+        baseline = values.get("C0")
+        if baseline is None:
+            continue
+        for condition, row in values.items():
+            if condition == "C0":
+                continue
+            baseline_score = (bool(baseline.get("answer_correct_exact")), float(baseline.get("support_recall") or 0))
+            score = (bool(row.get("answer_correct_exact")), float(row.get("support_recall") or 0))
+            bucket = "benefited" if score > baseline_score else "harmed" if score < baseline_score else "no_improvement"
+            cases[bucket].append({"question_id": question_id, "condition": condition})
+    summary["trajectory_cases"] = cases
     (args.run / "analysis.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

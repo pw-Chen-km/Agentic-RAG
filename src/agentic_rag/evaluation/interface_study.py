@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+from collections import Counter
 from typing import Any
 
 
@@ -74,6 +75,15 @@ def evaluate_episode(
     support_recall = (
         len(gold_ids & visible_sentence_ids) / len(gold_ids) if evaluable else None
     )
+    curves = {
+        str(prefix): sum(
+            1
+            for row in rows
+            if row.get("first_complete_support_decision") is not None
+            and int(row["first_complete_support_decision"]) <= prefix
+        )
+        for prefix in range(1, 16)
+    }
     return {
         "question_id": question.get("_id"),
         "question_type": question.get("type"),
@@ -117,4 +127,12 @@ def aggregate(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
         "policy_calls": sum(int(row.get("policy_calls") or 0) for row in rows),
         "invalid_attempts": sum(int(row.get("invalid_attempts") or 0) for row in rows),
         "retrieval_actions": sum(int(row.get("retrieval_actions") or 0) for row in rows),
+        "failure_categories": dict(
+            Counter(
+                str(row.get("error_code") or row.get("termination_reason") or "unknown")
+                for row in rows
+                if row.get("error_code") or row.get("termination_reason") != "finish"
+            )
+        ),
+        "prefix_acquisition_curves": curves,
     }
