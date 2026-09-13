@@ -34,8 +34,11 @@ Pilot 使用本機 Ollama 的 `qwen3.5:4b`、temperature 0、`think=false`、
 與最多一次 FINISH-only finalize。執行五個條件（C0–C4，共 150 episodes）：
 
 ```powershell
-python scripts/run_interface_study.py
-python scripts/analyze_interface_study.py
+python scripts/run_interface_study.py `
+  --substrate data/interface_study/substrate `
+  --questions data/interface_study/pilot_questions.json `
+  --source-manifest data/interface_study/source_manifest.json
+python scripts/analyze_interface_study.py --run runs/interface-study-v1
 ```
 
 A1 是 annotation-only control，可額外以 `--conditions C0 C1 C2 C3 C4 A1` 執行。
