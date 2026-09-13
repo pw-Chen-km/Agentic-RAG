@@ -112,6 +112,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.limit is not None and args.limit < 1:
         raise ValueError("--limit must be positive")
     substrate = Substrate.open(args.substrate)
+    skill = SkillDocument.load(args.skill)
+    harnesses: dict[str, AgentHarness] = {}
+    for condition in conditions:
+        condition_config = base_config.model_copy(update={"interface": condition})
+        harnesses[condition] = AgentHarness(
+            substrate=substrate,
+            config=condition_config,
+            skill=skill,
+            policy=_policy_from_config(condition_config),
+            output_root=args.output / "episodes",
+        )
     completed = _load_progress(args.output / "progress.jsonl")
     if args.limit is not None:
         questions = questions[: args.limit]
@@ -124,14 +135,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if episode_id in completed:
             summaries.append(completed[episode_id])
             continue
-        condition_config = base_config.model_copy(update={"interface": condition})
-        harness = AgentHarness(
-            substrate=substrate,
-            config=condition_config,
-            skill=SkillDocument.load(args.skill),
-            policy=_policy_from_config(condition_config),
-            output_root=args.output / "episodes",
-        )
+        harness = harnesses[condition]
         started = time.perf_counter()
         try:
             result = harness.run(
