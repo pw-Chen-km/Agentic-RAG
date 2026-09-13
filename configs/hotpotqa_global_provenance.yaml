@@ -3,7 +3,7 @@ split: dev
 dataset: hotpotqa
 source_format: hotpotqa_global_provenance
 benchmark_scope_id: hotpotqa:benchmark_exact:dev
-validate_benchmark_profile: true
+validate_benchmark_profile: false
 max_chunk_tokens: 256
 spacy_model: en_core_web_sm
 enable_abbreviations: true

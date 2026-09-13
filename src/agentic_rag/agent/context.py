@@ -14,6 +14,7 @@ from agentic_rag.agent.action_schema import (
     decision_schema_sha256,
 )
 from agentic_rag.agent.action_space import AvailableActionSpaceBuilder
+from agentic_rag.agent.interface import InterfaceContract
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
     ActionSpaceMode,
@@ -78,13 +79,19 @@ class PolicyContextBuilder:
         *,
         show_available_action_options: bool = True,
         use_state_conditioned_schema: bool = True,
+        interface_contract: InterfaceContract | None = None,
     ) -> None:
+        if isinstance(enabled_expansions, InterfaceContract) and interface_contract is None:
+            interface_contract = enabled_expansions
+            enabled_expansions = interface_contract.enabled_expansions
         self.substrate = substrate
         self.enabled_expansions = tuple(enabled_expansions)
         self.show_available_action_options = show_available_action_options
         self.use_state_conditioned_schema = use_state_conditioned_schema
+        self.interface_contract = interface_contract
         self.action_space_builder = AvailableActionSpaceBuilder(
-            self.enabled_expansions
+            self.enabled_expansions,
+            interface_contract,
         )
         self.action_schema_builder = ActionSchemaBuilder()
 
@@ -138,7 +145,11 @@ class PolicyContextBuilder:
                 ),
             )
         )
-        protocol = render_action_protocol(self.enabled_expansions)
+        protocol = (
+            self.interface_contract.protocol
+            if self.interface_contract is not None
+            else render_action_protocol(self.enabled_expansions)
+        )
         if self.show_available_action_options:
             protocol = (
                 f"{protocol}\n\n"
@@ -247,7 +258,11 @@ class PolicyContextBuilder:
                     SentenceMemoryItem(
                         ref=ref,
                         title=document.title,
-                        text=sentence.text,
+                        text=(
+                            "[complete text is available in the READ chunk]"
+                            if chunk.chunk_id in state.read_chunk_ids
+                            else sentence.text
+                        ),
                         parent_chunk_ref=parent_ref,
                     )
                 )
@@ -262,7 +277,11 @@ class PolicyContextBuilder:
                     chunk_position=chunk.chunk_pos,
                     has_been_read=read,
                     text=chunk.text if read else None,
-                    previews=[item.text for item in state.chunk_previews.get(node_id, [])][:2],
+                    previews=(
+                        []
+                        if read
+                        else [item.text for item in state.chunk_previews.get(node_id, [])][:2]
+                    ),
                 )
             )
         return items

@@ -47,6 +47,7 @@ class OllamaChatPolicy:
         timeout_seconds: float | None = 300.0,
         max_retries: int = 2,
         retry_backoff_seconds: float = 0.5,
+        max_output_tokens: int = 2_048,
     ) -> None:
         self.model = _normalize_model(model)
         self.host = _resolve_host(host)
@@ -66,6 +67,9 @@ class OllamaChatPolicy:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        if isinstance(max_output_tokens, bool) or max_output_tokens < 1:
+            raise PolicyConfigurationError("max_output_tokens must be positive")
+        self.max_output_tokens = int(max_output_tokens)
         try:
             self.enabled_expansions = tuple(ExpansionKind(item) for item in enabled_expansions)
             self.decision_format = policy_decision_model(self.enabled_expansions)
@@ -77,6 +81,7 @@ class OllamaChatPolicy:
             host=self.host, timeout_seconds=timeout_seconds
         )
         self.last_usage = Usage()
+        self.last_usage_metadata: dict[str, Any] = {}
 
     def decide(
         self,
@@ -86,6 +91,16 @@ class OllamaChatPolicy:
     ) -> PolicyDecision:
         response_model = decision_format or self.decision_format
         self.last_usage = Usage()
+        self.last_usage_metadata = {
+            "provider": "ollama",
+            "model": self.model,
+            "host": self.host,
+            "temperature": self.temperature,
+            "think": self.think,
+            "num_ctx": self.num_ctx,
+            "max_output_tokens": self.max_output_tokens,
+            "reasoning_tokens": "unavailable",
+        }
         request: dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -94,7 +109,11 @@ class OllamaChatPolicy:
             ],
             "stream": False,
             "format": response_model.model_json_schema(),
-            "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
+            "options": {
+                "temperature": self.temperature,
+                "num_ctx": self.num_ctx,
+                "num_predict": self.max_output_tokens,
+            },
         }
         if self.think is not None:
             request["think"] = self.think
@@ -102,6 +121,17 @@ class OllamaChatPolicy:
             request["keep_alive"] = self.keep_alive
         response = self._call_with_retries(lambda: self._client.chat(**request))
         self.last_usage = _usage(response)
+        self.last_usage_metadata.update(
+            {
+                "provider_input_tokens": _optional_integer(response, "prompt_eval_count"),
+                "provider_output_tokens": _optional_integer(response, "eval_count"),
+                "provider_total_tokens": _optional_integer(response, "prompt_eval_count")
+                + (_optional_integer(response, "eval_count") or 0)
+                if _optional_integer(response, "prompt_eval_count") is not None
+                and _optional_integer(response, "eval_count") is not None
+                else None,
+            }
+        )
         content = _value(_value(response, "message"), "content")
         if not isinstance(content, str) or not content.strip():
             raise PolicyResponseError("Ollama response did not contain structured output")
@@ -147,6 +177,16 @@ def _integer(value: Any, name: str) -> int:
         return max(int(_value(value, name) or 0), 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _optional_integer(value: Any, name: str) -> int | None:
+    raw = _value(value, name)
+    if raw is None:
+        return None
+    try:
+        return max(int(raw), 0)
+    except (TypeError, ValueError):
+        return None
 
 
 def _value(value: Any, name: str) -> Any:

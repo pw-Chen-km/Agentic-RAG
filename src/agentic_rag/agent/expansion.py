@@ -23,6 +23,7 @@ from agentic_rag.substrate.embedding import (
 )
 from agentic_rag.errors import AgenticRAGError, NodeNotFoundError
 from agentic_rag.substrate.storage import Substrate
+from agentic_rag.substrate.ranking import RankingService
 
 
 ENTITY_MENTIONED_IN_SENTENCE = "ENTITY_MENTIONED_IN_SENTENCE"
@@ -195,11 +196,15 @@ class ExpansionEngine:
         substrate: Substrate | str | Path,
         *,
         embedding_backend: EmbeddingBackend | None = None,
+        ranking_service: RankingService | None = None,
     ) -> None:
         self.substrate = (
             substrate if isinstance(substrate, Substrate) else Substrate.open(substrate)
         )
         self._embedding_backend = embedding_backend
+        self.ranking_service = ranking_service or RankingService(
+            self.substrate, embedding_backend=embedding_backend
+        )
 
         entity_to_sentences: dict[str, set[str]] = defaultdict(set)
         sentence_to_entities: dict[str, set[str]] = defaultdict(set)
@@ -703,6 +708,31 @@ class ExpansionEngine:
     def _rank_candidates(
         self, candidates: Mapping[KeyT, str], query: str
     ) -> list[tuple[KeyT, float]]:
+        # Most continuation candidates are already indexed source units. Use
+        # the same cached vectors as global retrieval and encode the query only
+        # once. Composite entity-edge rankings retain the deterministic
+        # fallback below because they are not standalone substrate units.
+        if candidates:
+            keys = list(candidates)
+            target = None
+            if all(str(key) in self.substrate.sentence_by_id for key in keys):
+                target = "sentence"
+            elif all(str(key) in self.substrate.chunk_by_id for key in keys):
+                target = "chunk"
+            elif all(str(key) in self.substrate.entity_by_id for key in keys):
+                target = "entity"
+            expected_text = {
+                "sentence": self._sentence_ranking_text,
+                "chunk": self._chunk_ranking_text,
+                "entity": self._entity_ranking_text,
+            }.get(target)
+            if target is not None and expected_text is not None and all(
+                candidates[key] == expected_text(str(key)) for key in keys
+            ):
+                ranked = self.ranking_service.rank(
+                    query, target=target, candidate_ids=(str(key) for key in keys), top_k=5
+                )
+                return [(next(key for key in keys if str(key) == node_id), score) for node_id, score in ranked]
         scores = self._score_candidates(candidates, query)
         ranked = list(scores.items())
         ranked.sort(key=lambda item: (-item[1], str(item[0])))

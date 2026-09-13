@@ -13,7 +13,6 @@ dependencies = [
     "bm25s>=0.3,<0.4",
     "numpy>=1.26,<2",
     "ollama>=0.6.2,<0.7",
-    "openai>=2,<3",
     "pyarrow>=19,<23",
     "pydantic>=2.10,<3",
     "pyyaml>=6,<7",
@@ -28,9 +27,6 @@ dependencies = [
 dev = [
     "pytest>=8.3,<10",
     "pytest-cov>=6,<8",
-]
-skillopt = [
-    "skillopt==0.2.0",
 ]
 
 [project.scripts]
@@ -48,9 +44,7 @@ addopts = "-q"
 testpaths = ["tests"]
 markers = [
     "real_models: downloads and exercises real spaCy/scispaCy/MiniLM models",
-    "openai_smoke: opt-in live gpt-5.6-luna Policy smoke test",
     "ollama_smoke: opt-in live local Ollama Policy smoke test",
-    "skillopt_smoke: opt-in live 18-question SkillOpt workflow smoke test",
 ]
 
 [tool.coverage.run]

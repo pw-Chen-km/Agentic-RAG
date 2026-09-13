@@ -9,7 +9,15 @@ __pycache__/
 !.env.example
 
 artifacts/
-data/
+!data/
+data/*
+!data/interface_study/
+!data/interface_study/*
+!data/interface_study/source_manifest.json
+!data/interface_study/pilot_questions.json
+!data/interface_study/hotpot_dev_distractor_v1.selected.json
+data/interface_study/hotpot_dev_distractor_v1.json
+data/interface_study/substrate/
 results/
 runs/
 dist/

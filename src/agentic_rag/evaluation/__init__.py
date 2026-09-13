@@ -551,3 +551,7 @@ __all__ = [
     "contain_accuracy",
     "normalize_answer",
 ]
+
+from agentic_rag.evaluation.interface_study import aggregate, evaluate_episode, score_answer
+
+__all__ += ["aggregate", "evaluate_episode", "score_answer"]

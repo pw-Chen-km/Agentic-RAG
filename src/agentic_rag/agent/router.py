@@ -7,6 +7,8 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from agentic_rag.agent.expansion import ExpansionEngine
+from agentic_rag.agent.interface import InterfaceContract
+from agentic_rag.agent.observation_projection import ObservationProjector
 from agentic_rag.agent.models import (
     EpisodeState,
     Observation,
@@ -39,10 +41,20 @@ class ActionRouter:
         substrate: Substrate,
         retriever: Retriever,
         expansion_engine: ExpansionEngine,
+        interface_contract: InterfaceContract | None = None,
     ) -> None:
         self.substrate = substrate
         self.retriever = retriever
         self.expansion_engine = expansion_engine
+        self.interface_contract = interface_contract
+        self.projector = ObservationProjector(
+            substrate,
+            expose_entities=(
+                interface_contract.entity_annotation
+                if interface_contract is not None
+                else False
+            ),
+        )
 
     def execute(
         self,
@@ -54,6 +66,13 @@ class ActionRouter:
         action_id: str,
     ) -> Observation:
         if isinstance(action, SearchAction):
+            if self.interface_contract is not None and not self.interface_contract.allows_search(
+                action.method, action.target
+            ):
+                raise NodeNotFoundError(
+                    f"SEARCH pair is not enabled by {self.interface_contract.name}: "
+                    f"{action.method.value}->{action.target.value}"
+                )
             hits = self.retriever.search(
                 query=action.query,
                 method=action.method.value,
@@ -70,6 +89,10 @@ class ActionRouter:
                 "query_used": action.query,
             }
         elif isinstance(action, ResolvedExpandAction):
+            if self.interface_contract is not None and not self.interface_contract.allows_expansion(action.kind):
+                raise NodeNotFoundError(
+                    f"EXPAND kind is not enabled by {self.interface_contract.name}: {action.kind.value}"
+                )
             expanded = self.expansion_engine.expand(
                 action, question, scope_id
             )
@@ -91,6 +114,10 @@ class ActionRouter:
                 )
             read = self.substrate.read_chunk(action.chunk_id)
             raw_result = read.model_dump(mode="json")
+            projected_read, projected_delta, projection_audit = self.projector.project(
+                [raw_result], action_type="READ"
+            )
+            raw_result = projected_read[0]
             result_tokens = _count_result_tokens(raw_result)
             if result_tokens > state.remaining_retrieved_token_budget:
                 return Observation(
@@ -105,6 +132,7 @@ class ActionRouter:
                     metadata={"retrieved_budget_exhausted": True},
                 )
             delta = {
+                **projected_delta,
                 "visible_chunk_ids": [read.chunk_id],
                 "read_chunk_ids": [read.chunk_id],
                 "visible_sentence_ids": [
@@ -123,15 +151,22 @@ class ActionRouter:
                 retrieved_tokens=result_tokens,
                 novel_node_ids=novel,
                 already_seen_node_ids=already,
-                metadata={"visibility_delta": delta},
+                metadata={
+                    "visibility_delta": delta,
+                    **projection_audit,
+                },
             )
         else:
             raise TypeError(
                 f"ActionRouter cannot execute {type(action).__name__}"
             )
 
+        projected_results, visibility_delta, projection_audit = self.projector.project(
+            raw_results,
+            action_type=("SEARCH" if isinstance(action, SearchAction) else "EXPAND"),
+        )
         kept, retrieved_tokens, truncated = _fit_results(
-            raw_results, state.remaining_retrieved_token_budget
+            projected_results, state.remaining_retrieved_token_budget
         )
         if raw_results and not kept:
             return Observation(
@@ -149,10 +184,31 @@ class ActionRouter:
                 },
             )
 
-        delta = _visibility_delta(kept)
+        # Projection has already decided which source spans are visible.  Do
+        # not infer new references from hidden backend payloads.
+        delta = {
+            **visibility_delta,
+            "visible_entity_ids": [
+                item for item in visibility_delta["visible_entity_ids"]
+                if _result_contains_id(kept, item)
+            ],
+            "visible_sentence_ids": [
+                item for item in visibility_delta["visible_sentence_ids"]
+                if _result_contains_id(kept, item)
+            ],
+            "visible_chunk_ids": [
+                item for item in visibility_delta["visible_chunk_ids"]
+                if _result_contains_id(kept, item)
+            ],
+            "eligible_sentence_ids": [
+                item for item in visibility_delta["eligible_sentence_ids"]
+                if _result_contains_id(kept, item)
+            ],
+        }
         novel, already = _novelty(delta, state)
         metadata["visibility_delta"] = delta
         metadata["truncated_by_retrieved_token_budget"] = truncated
+        metadata.update(projection_audit)
         return Observation(
             action_id=action_id,
             status=ObservationStatus.OK,
@@ -182,6 +238,21 @@ def _json_results(values: Iterable[Any]) -> list[dict[str, Any]]:
             raise TypeError("Expansion results must serialize to JSON objects")
         results.append(converted)
     return results
+
+
+def _result_contains_id(results: list[dict[str, Any]], node_id: str) -> bool:
+    """Check that a projected result still carries a visible stable ID."""
+
+    def visit(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            if any(value.get(key) == node_id for key in ("entity_id", "sentence_id", "chunk_id", "parent_chunk_id")):
+                return True
+            return any(visit(child) for child in value.values())
+        if isinstance(value, list):
+            return any(visit(child) for child in value)
+        return False
+
+    return any(visit(result) for result in results)
 
 
 def _fit_results(

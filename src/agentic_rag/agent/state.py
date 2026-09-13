@@ -33,12 +33,14 @@ class StateUpdater:
         action_signature: str | None,
         commit_assessment: bool = True,
         consume_step: bool = True,
+        consume_policy_attempt: bool = True,
     ) -> EpisodeState:
         updated = state.model_copy(deep=True)
-        updated.policy_attempts += 1
-        updated.remaining_policy_attempt_budget = max(
-            0, updated.remaining_policy_attempt_budget - 1
-        )
+        if consume_policy_attempt:
+            updated.policy_attempts += 1
+            updated.remaining_policy_attempt_budget = max(
+                0, updated.remaining_policy_attempt_budget - 1
+            )
         if consume_step:
             updated.step += 1
             updated.remaining_step_budget = max(0, updated.remaining_step_budget - 1)

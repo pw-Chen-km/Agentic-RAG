@@ -1,159 +1,51 @@
-# Agentic RAG
+# Agentic RAG Interface Study
 
-A single-agent, multi-substrate retrieval system for 2WikiMultiHopQA,
-HotpotQA, Medical and Novel from GraphRAG-Bench, and MuSiQue. The repository
-contains one production architecture: Semantic Memory, episode-local typed
-references, centralized State Management, and a stateless Controller.
+這個工作區只保留 Agentic RAG 介面研究需要的 runtime、Ollama provider、global
+HotpotQA provenance substrate、evaluation 與 pilot scripts。原本的
+`agenticRAG_研究` 沒有被修改。
 
-```mermaid
-flowchart LR
-    Q["Question"] --> CB["Context Builder"]
-    SM["State Management"] --> CB
-    SK["Selected Skill"] --> CB
-    CB --> P["LLM Policy"]
-    P --> C["Stateless Controller"]
-    C --> RV["Reference Resolver + Validator"]
-    RV --> ENV["Multi-substrate Retrieval Environment"]
-    ENV --> O["Observation"]
-    O --> SM
-    C --> F["Final Answer"]
-```
+## Data lineage
 
-## Design
+`data/interface_study/source_manifest.json` 固定 HotpotQA distractor dev 檔案的
+來源、版本、授權與 SHA-256。`prepare_interface_study.py` 會先把官方資料與本機
+1,000 題逐筆比對，再以 seed `20260805` 抽出 24 bridge 與 6 comparison；比對失敗
+會直接停止。
 
-The Policy sees the question, neutral action protocol, selected Skill, last
-assessment, complete visible Semantic Memory, semantic action history, and one
-compact remaining-budget line. It chooses exactly one `SEARCH`, `EXPAND`,
-`READ`, or `FINISH` action.
+## Build and run
 
-State Management is the only state owner. It accumulates novel entities,
-sentences, chunks, observations, action history, usage, and budgets. The
-Controller stores nothing; it resolves the current frozen `E#/S#/C#` map,
-validates the decision, executes retrieval, and returns the observation to
-State Management.
-
-`SEARCH` never needs a reference. `EXPAND` and `READ` use currently visible
-typed refs. `FINISH` answers directly and cites only a complete visible `S#` or
-an already-read `C#`. Invalid attempts consume a Policy call but do not consume
-a retrieval step.
-
-See [architecture.md](docs/architecture.md),
-[action-contract.md](docs/action-contract.md), and
-[evaluation.md](docs/evaluation.md). For a clean-machine setup, the pinned
-five-dataset collection, local Qwen SkillOpt, and the A-RAG baseline procedure, use the
-[reproduction and A-RAG baseline guide](docs/reproduction-and-arag-baseline.md).
-
-## Install
-
-Python 3.12 is required.
+先建立環境並安裝本專案（Python 3.12）：
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 ```
 
-For SkillOpt:
+準備資料與 provenance：
 
 ```powershell
-pip install -e ".[dev,skillopt]"
+python scripts/prepare_interface_study.py `
+  --official data/hotpotqa/hotpot_dev_distractor_v1.json `
+  --local-questions C:\Users\Patrick\Desktop\agenticRAG_研究\data\arag_hotpotqa\hotpotqa\questions.json `
+  --output data/interface_study
+python scripts/build_interface_substrate.py
 ```
 
-Secrets belong in an untracked `.env` or the process environment. Never put an
-API key in YAML, a trajectory, or a commit.
-
-## Build benchmark substrates
-
-The canonical `benchmark_exact` adapter supports these dataset keys:
-`2wikimultihop`, `hotpotqa`, `medical`, `musique`, and `novel`. Each checked-in
-build config pins its dataset profile and validates the official row counts.
+Pilot 使用本機 Ollama 的 `qwen3.5:4b`、temperature 0、`think=false`、
+`num_ctx=32768`、每次最多 2,048 output tokens、每題 15 次正常 policy decisions
+與最多一次 FINISH-only finalize。執行五個條件（C0–C4，共 150 episodes）：
 
 ```powershell
-agentic-rag build data\rag_test artifacts\medical_benchmark_exact `
-  --config configs\datasets\medical.yaml
-agentic-rag validate artifacts\medical_benchmark_exact
+python scripts/run_interface_study.py
+python scripts/analyze_interface_study.py
 ```
 
-Use the corresponding file under `configs\datasets\` for the other four
-datasets. Gold questions and answers are written only to the evaluation
-sidecar; they never enter retrieval or Policy context.
+A1 是 annotation-only control，可額外以 `--conditions C0 C1 C2 C3 C4 A1` 執行。
+每個 episode 的 `episode.json` 保存實際 messages、schema digest、visible source
+spans、exposed refs、provider token metadata 與錯誤原因；gold answer/support 只在
+evaluation sidecar，不會進入 Policy context。
 
-### Query-scoped HotpotQA input
+## Acceptance criteria
 
-The separate `hotpotqa_scoped` input format remains available for custom
-Hotpot-style records whose context is attached to each question:
-
-```powershell
-agentic-rag build data\hotpotqa.json artifacts\hotpotqa `
-  --corpus-id hotpotqa-dev `
-  --source-format hotpotqa_scoped
-agentic-rag validate artifacts\hotpotqa
-```
-
-## Run one episode
-
-Ollama Qwen:
-
-```powershell
-agentic-rag run artifacts\hotpotqa_benchmark_exact `
-  "Which person was born earlier?" `
-  --scope-id hotpotqa:benchmark_exact:dev `
-  --skill-file skills\baseline.md `
-  --config configs\hotpotqa_qwen.yaml `
-  --output runs\qwen
-```
-
-The Policy configs are dataset-independent despite their historical filenames.
-OpenAI Luna uses `configs/hotpotqa_luna.yaml` and reads `OPENAI_API_KEY` from
-the environment.
-
-Three interchangeable Skill conditions share the exact same runtime contract:
-
-- `skills/baseline.md`: neutral evidence-adaptive baseline.
-- `skills/chunk_entity_expert.md`: chunk-first, entity drill-down procedure.
-- `skills/guarded_procedure.md`: post-hoc experimental failure guard.
-
-## Artifacts
-
-Each episode writes the final record, full trajectory, frozen reference maps,
-Policy conversation, Skill snapshot, and effective configuration. Stable
-substrate IDs remain audit-only and never enter Policy context.
-
-## Evaluation and SkillOpt
-
-```powershell
-python scripts\run_benchmark_eval.py --help
-python scripts\judge_benchmark.py --help
-python scripts\run_benchmark_matrix.py --help
-agentic-rag skillopt-prepare --help
-agentic-rag skillopt-train --help
-```
-
-With the five standard substrates and deterministic smoke splits in place,
-one command runs the same V3.2 Policy and Skill over every test split:
-
-```powershell
-python scripts\run_benchmark_matrix.py `
-  --config configs\hotpotqa_qwen.yaml `
-  --skill skills\guarded_procedure.md `
-  --output runs\qwen_all_datasets
-```
-
-The matrix runner writes one complete result directory per dataset and a
-`matrix_summary.json`. Use `judge_benchmark.py --dataset <dataset>` for semantic
-accuracy. Medical and Novel intentionally report LLM accuracy rather than
-contain accuracy because their answers are long-form.
-
-The standard metrics are exact match, contain accuracy, Luna-as-judge,
-invalid attempts, Policy calls/tokens, retrieved tokens, and action counts.
-
-## Verification
-
-```powershell
-pytest
-python -m compileall src\agentic_rag
-```
-
-The multi-version research snapshot remains available in branch
-`codex/pre-singularity-version-archive` and tag
-`pre-singularity-v3.2-20260806`; it is not part of this mainline runtime.
+所有正常決策（valid、invalid、duplicate、empty）都計入 15 次上限；finalize 不得
+搜尋、擴展或讀取新資料。resume 會拒絕 source/config/substrate/renderer hash 改變。
+Pilot 的主要輸出是流程、provenance、instrumentation 與成本的可重現性；4B 結果不
+直接作為正式研究結論。

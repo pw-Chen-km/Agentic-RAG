@@ -546,6 +546,9 @@ class StepRecord(AgentModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    messages: list[Message] = Field(default_factory=list)
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
+    visible_source_spans: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TerminationReason(StrEnum):

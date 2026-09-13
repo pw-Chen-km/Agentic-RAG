@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import re
+import time
 from uuid import uuid4
 
 from agentic_rag.agent.context import PolicyContextBuilder
@@ -58,6 +60,7 @@ class AgentController:
         max_steps: int = 10,
         max_policy_attempts: int = 12,
         max_retrieved_tokens: int = 12_000,
+        episode_timeout_seconds: float = 3_600.0,
         state_updater: StateUpdater | None = None,
     ) -> None:
         self.policy = policy
@@ -69,6 +72,7 @@ class AgentController:
         self.max_steps = max_steps
         self.max_policy_attempts = max_policy_attempts
         self.max_retrieved_tokens = max_retrieved_tokens
+        self.episode_timeout_seconds = episode_timeout_seconds
         self.state_manager_factory = EpisodeStateManagerFactory(
             state_updater or StateUpdater(router.substrate)
         )
@@ -92,10 +96,14 @@ class AgentController:
             max_retrieved_tokens=self.max_retrieved_tokens,
         )
 
-        while (
-            manager.can_continue
-            and not manager.should_reserve_policy_attempt_for_finalize
-        ):
+        started = time.monotonic()
+        while manager.can_continue:
+            if time.monotonic() - started >= self.episode_timeout_seconds:
+                return manager.result(
+                    reason=TerminationReason.RUNTIME_ERROR,
+                    error_code="episode_timeout",
+                    error_message="episode exceeded its configured timeout",
+                )
             state = manager.snapshot()
             built = self.context_builder.build(
                 question,
@@ -132,8 +140,10 @@ class AgentController:
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
                         commit_assessment=False,
-                        consume_step=False,
+                        consume_step=True,
                         invalid_attempt=True,
+                        messages=tuple(built.messages),
+                        provider_metadata=self._provider_metadata(built.messages),
                     )
                 )
                 continue
@@ -177,8 +187,10 @@ class AgentController:
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
                         commit_assessment=False,
-                        consume_step=False,
+                        consume_step=True,
                         invalid_attempt=True,
+                        messages=tuple(built.messages),
+                        provider_metadata=self._provider_metadata(built.messages),
                     )
                 )
                 continue
@@ -211,8 +223,10 @@ class AgentController:
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
                         commit_assessment=False,
-                        consume_step=False,
+                        consume_step=True,
                         invalid_attempt=True,
+                        messages=tuple(built.messages),
+                        provider_metadata=self._provider_metadata(built.messages),
                     )
                 )
                 continue
@@ -267,6 +281,8 @@ class AgentController:
                     context_reference_map=built.reference_map,
                     available_action_space=built.available_action_space,
                     decision_schema_sha256=built.decision_schema_sha256,
+                    messages=tuple(built.messages),
+                    provider_metadata=self._provider_metadata(built.messages),
                 )
             )
 
@@ -302,6 +318,28 @@ class AgentController:
         usage = getattr(self.policy, "last_usage", Usage())
         return usage if isinstance(usage, Usage) else Usage()
 
+    def _provider_metadata(self, messages: Sequence[Message]) -> dict:
+        metadata = dict(getattr(self.policy, "last_usage_metadata", {}) or {})
+        metadata.setdefault(
+            "visible_payload_token_estimate",
+            sum(
+                len(re.findall(r"(?u)\b\w+\b|[^\w\s]", message.content))
+                for message in messages
+            ),
+        )
+        metadata.setdefault("query_encoding", "unavailable")
+        metadata.setdefault("candidate_scoring", "unavailable")
+        metadata.setdefault("annotation_lookup_ms", "unavailable")
+        contract = getattr(self.context_builder, "interface_contract", None)
+        if contract is not None:
+            metadata["interface_contract_digest"] = contract.compile()["digest"]
+        ranking = getattr(self.router.retriever, "ranking_service", None)
+        if ranking is not None:
+            metadata["query_encoding"] = ranking.query_encodes
+            metadata["candidate_scoring"] = ranking.candidate_scores
+            metadata["ranking_wall_time_ms"] = ranking.last_wall_time_ms
+        return metadata
+
     def _try_budget_finalize(self, manager: EpisodeStateManager) -> EpisodeResult | None:
         state = manager.snapshot()
         built = self.context_builder.build(
@@ -313,13 +351,41 @@ class AgentController:
             action_space_mode=ActionSpaceMode.BUDGET_FINALIZE,
         )
         messages = [*built.messages, Message(role="user", content=BUDGET_FINALIZE_INSTRUCTION)]
+        manager.mark_budget_finalize_used()
         try:
             decision = self.policy.decide(messages, decision_format=built.decision_format)
             usage = self._policy_usage()
             resolved = resolve_decision(decision, built.reference_map)
             validation = self.validator.validate(resolved, state, manager.scope_id)
         except Exception as exc:
-            manager.add_usage(self._policy_usage())
+            usage = self._policy_usage()
+            manager.record_attempt(
+                AttemptEvent(
+                    decision=locals().get("decision"),
+                    resolved_decision=locals().get("resolved"),
+                    validation_status=ValidationStatus.INVALID,
+                    validation_error=str(exc),
+                    observation=Observation(
+                        action_id=manager.next_action_id,
+                        status=ObservationStatus.INVALID_ACTION,
+                        error_code="budget_finalize_failed",
+                        message=str(exc),
+                        metadata={"budget_finalize": True},
+                    ),
+                    assessment=(locals().get("decision").assessment if locals().get("decision") is not None else None),
+                    action_signature=None,
+                    usage=usage,
+                    policy_view=built.policy_view,
+                    context_reference_map=built.reference_map,
+                    available_action_space=built.available_action_space,
+                    decision_schema_sha256=built.decision_schema_sha256,
+                    commit_assessment=False,
+                    consume_step=False,
+                    consume_policy_attempt=False,
+                    messages=tuple(messages),
+                    provider_metadata=self._provider_metadata(messages),
+                )
+            )
             return manager.result(
                 reason=TerminationReason.BUDGET_EXHAUSTED,
                 error_code="budget_finalize_failed",
@@ -335,8 +401,36 @@ class AgentController:
                 usage=usage,
                 built=built,
                 consume_step=False,
+                messages=messages,
             )
-        manager.add_usage(usage)
+        manager.record_attempt(
+            AttemptEvent(
+                decision=decision,
+                resolved_decision=resolved,
+                validation_status=ValidationStatus.INVALID,
+                validation_error=validation.message,
+                observation=Observation(
+                    action_id=manager.next_action_id,
+                    status=ObservationStatus.INVALID_ACTION,
+                    action=resolved.action,
+                    error_code="budget_finalize_requires_finish",
+                    message=validation.message or "Budget finalization requires FINISH",
+                    metadata={"budget_finalize": True},
+                ),
+                assessment=resolved.assessment,
+                action_signature=None,
+                usage=usage,
+                policy_view=built.policy_view,
+                context_reference_map=built.reference_map,
+                available_action_space=built.available_action_space,
+                decision_schema_sha256=built.decision_schema_sha256,
+                commit_assessment=False,
+                consume_step=False,
+                consume_policy_attempt=False,
+                messages=tuple(messages),
+                provider_metadata=self._provider_metadata(messages or built.messages),
+            )
+        )
         return manager.result(
             reason=TerminationReason.BUDGET_EXHAUSTED,
             error_code="budget_finalize_requires_finish",
@@ -354,6 +448,7 @@ class AgentController:
         usage: Usage,
         built,
         consume_step: bool = True,
+        messages: Sequence[Message] | None = None,
     ) -> EpisodeResult:
         evidence_refs = list(resolved.action.evidence_refs)
         evidence = self.evidence_resolver.resolve(evidence_refs, state, manager.scope_id)
@@ -379,6 +474,9 @@ class AgentController:
                 available_action_space=built.available_action_space,
                 decision_schema_sha256=built.decision_schema_sha256,
                 consume_step=consume_step,
+                consume_policy_attempt=consume_step,
+                messages=tuple(messages or built.messages),
+                provider_metadata=self._provider_metadata(messages or built.messages),
             )
         )
         return manager.result(
@@ -420,5 +518,7 @@ class AgentController:
                 context_reference_map=built.reference_map,
                 available_action_space=built.available_action_space,
                 decision_schema_sha256=built.decision_schema_sha256,
+                messages=tuple(built.messages),
+                provider_metadata=self._provider_metadata(built.messages),
             )
         )

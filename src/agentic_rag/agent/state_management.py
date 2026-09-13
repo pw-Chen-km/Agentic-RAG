@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from agentic_rag.agent.context import project_observation_for_audit
 from agentic_rag.agent.models import (
@@ -21,6 +21,7 @@ from agentic_rag.agent.models import (
     TerminationReason,
     Usage,
     ValidationStatus,
+    Message,
 )
 from agentic_rag.agent.state import StateUpdater
 
@@ -42,6 +43,9 @@ class AttemptEvent:
     commit_assessment: bool = True
     consume_step: bool = True
     invalid_attempt: bool = False
+    consume_policy_attempt: bool = True
+    messages: tuple[Message, ...] = ()
+    provider_metadata: dict = field(default_factory=dict)
 
 
 class EpisodeStateManager:
@@ -69,6 +73,7 @@ class EpisodeStateManager:
         )
         self._trajectory: list[StepRecord] = []
         self._total_usage = Usage()
+        self._finalize_used = False
 
     def snapshot(self) -> EpisodeState:
         return self._state.model_copy(deep=True)
@@ -100,9 +105,12 @@ class EpisodeStateManager:
     @property
     def can_attempt_budget_finalize(self) -> bool:
         return (
-            self._state.remaining_policy_attempt_budget > 0
+            not self._finalize_used
             and bool(self._state.eligible_sentence_ids or self._state.read_chunk_ids)
         )
+
+    def mark_budget_finalize_used(self) -> None:
+        self._finalize_used = True
 
     @property
     def policy_attempt_budget_exhausted(self) -> bool:
@@ -121,6 +129,7 @@ class EpisodeStateManager:
             action_signature=event.action_signature,
             commit_assessment=event.commit_assessment,
             consume_step=event.consume_step,
+            consume_policy_attempt=event.consume_policy_attempt,
         )
         record = StepRecord(
             step=updated.step if event.consume_step else state_before.step + 1,
@@ -140,6 +149,13 @@ class EpisodeStateManager:
             context_reference_map=event.context_reference_map,
             available_action_space=event.available_action_space,
             decision_schema_sha256=event.decision_schema_sha256,
+            messages=list(event.messages),
+            provider_metadata=dict(event.provider_metadata or {}),
+            visible_source_spans=list(
+                (event.observation.metadata.get("visible_source_spans") or [])
+                if event.observation is not None
+                else []
+            ),
         )
         self._state = updated
         self._trajectory.append(record)

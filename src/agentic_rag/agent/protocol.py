@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from agentic_rag.agent.models import AvailableActionSpace, ExpansionKind
+from agentic_rag.agent.interface import InterfaceContract
 
 
 ACTION_PROTOCOL = """\
@@ -57,8 +58,13 @@ Invalid examples:
 """
 
 
-def render_action_protocol(enabled_expansions: Sequence[ExpansionKind]) -> str:
+def render_action_protocol(
+    enabled_expansions: Sequence[ExpansionKind] | InterfaceContract,
+) -> str:
     """Render the stable protocol plus this run's enabled expansion enums."""
+
+    if isinstance(enabled_expansions, InterfaceContract):
+        return enabled_expansions.protocol
 
     enabled = [item.value for item in enabled_expansions]
     expansion_lines = (

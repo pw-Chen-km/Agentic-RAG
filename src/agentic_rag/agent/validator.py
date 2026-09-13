@@ -18,11 +18,13 @@ from agentic_rag.agent.models import (
     SentenceRef,
     action_signature,
 )
+from agentic_rag.agent.interface import InterfaceContract
 from agentic_rag.agent.references import expected_expansion_source
 from agentic_rag.substrate.storage import Substrate
 
 
 ValidationCode = Literal[
+    "search_pair_not_enabled",
     "duplicate_action",
     "expansion_not_enabled",
     "expansion_not_valid_for_node",
@@ -49,9 +51,18 @@ class DecisionValidator:
         self,
         substrate: Substrate,
         enabled_expansions: tuple[ExpansionKind, ...] = DEFAULT_ENABLED_EXPANSIONS,
+        interface_contract: InterfaceContract | None = None,
     ) -> None:
+        if isinstance(enabled_expansions, InterfaceContract) and interface_contract is None:
+            interface_contract = enabled_expansions
+            enabled_expansions = interface_contract.enabled_expansions
         self.substrate = substrate
-        self.enabled_expansions = tuple(enabled_expansions)
+        self.interface_contract = interface_contract
+        self.enabled_expansions = tuple(
+            interface_contract.enabled_expansions
+            if interface_contract is not None
+            else enabled_expansions
+        )
 
     def validate(
         self,
@@ -61,6 +72,14 @@ class DecisionValidator:
     ) -> ValidationResult:
         self.substrate.require_scope(scope_id)
         action = decision.action
+        if isinstance(action, SearchAction) and self.interface_contract is not None:
+            if not self.interface_contract.allows_search(action.method, action.target):
+                return self._invalid(
+                    "search_pair_not_enabled",
+                    f"SEARCH pair is not enabled by {self.interface_contract.name}: "
+                    f"{action.method.value}->{action.target.value}",
+                    decision,
+                )
         if isinstance(action, ResolvedExpandAction):
             invalid = self._validate_expand(action, state, scope_id)
             if invalid is not None:

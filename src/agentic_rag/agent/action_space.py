@@ -16,6 +16,7 @@ from agentic_rag.agent.models import (
     SearchMethod,
     SearchTarget,
 )
+from agentic_rag.agent.interface import InterfaceContract
 from agentic_rag.agent.references import expected_expansion_source
 
 
@@ -32,8 +33,17 @@ _SEARCH_OPTION_ORDER = (
 class AvailableActionSpaceBuilder:
     """Compute legal structural variants without choosing a strategy."""
 
-    def __init__(self, enabled_expansions: Sequence[ExpansionKind]) -> None:
-        self.enabled_expansions = tuple(enabled_expansions)
+    def __init__(
+        self,
+        enabled_expansions: Sequence[ExpansionKind],
+        interface_contract: InterfaceContract | None = None,
+    ) -> None:
+        self.interface_contract = interface_contract
+        self.enabled_expansions = tuple(
+            interface_contract.enabled_expansions
+            if interface_contract is not None
+            else enabled_expansions
+        )
 
     def build(
         self,
@@ -64,9 +74,15 @@ class AvailableActionSpaceBuilder:
                 finish_evidence_refs=tuple(evidence_refs),
             )
 
+        pairs = (
+            self.interface_contract.legal_search_pairs
+            if self.interface_contract is not None
+            else frozenset(_SEARCH_OPTION_ORDER)
+        )
         search_options = tuple(
             SearchActionOption(method=method, target=target)
             for method, target in _SEARCH_OPTION_ORDER
+            if (method, target) in pairs
         )
         expand_options: list[ExpandActionOption] = []
         for kind in self.enabled_expansions:

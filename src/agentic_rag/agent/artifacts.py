@@ -92,7 +92,7 @@ class ArtifactWriter:
             if trajectory is not None
             else _field(episode, "trajectory", _field(episode, "steps", ()))
         )
-        conversation_value = _skillopt_conversation(trajectory_value)
+        conversation_value = _conversation(trajectory_value)
         config_value = _to_jsonable(effective_config)
 
         payloads = {
@@ -172,8 +172,8 @@ class ArtifactWriter:
                 shutil.rmtree(temporary)
 
 
-def _skillopt_conversation(trajectory: Any) -> list[dict[str, Any]]:
-    """Project controller trajectory records into SkillOpt step records."""
+def _conversation(trajectory: Any) -> list[dict[str, Any]]:
+    """Project controller trajectory records into compact conversation records."""
 
     if trajectory is None:
         return []
