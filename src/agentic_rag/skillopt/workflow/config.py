@@ -23,6 +23,14 @@ class WorkflowConfig:
     enable_meta: bool = True
     replay_split: str = "train"
     no_test_in_meta: bool = True
+    # When false, candidate Skills are still measured on validation and test,
+    # but validation is observational only and cannot block adoption.  This
+    # is an explicit ablation, not the production safety gate.
+    use_validation_gate: bool = True
+    # Ollama may reject a very large reflection request.  The runner keeps the
+    # configured minibatch when possible and splits only requests over this
+    # serialized-character limit (normally down to one case).
+    max_reflection_input_chars: int = 120_000
 
     def __post_init__(self) -> None:
         if self.rollout_batch_size <= 0 or self.reflection_minibatch_size <= 0:
@@ -34,6 +42,8 @@ class WorkflowConfig:
             raise ValueError("stages must be retrieval, meta, answer")
         if self.replay_split != "train":
             raise ValueError("rejected-candidate replay is train-only")
+        if self.max_reflection_input_chars <= 0:
+            raise ValueError("max_reflection_input_chars must be positive")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "WorkflowConfig":
@@ -41,4 +51,4 @@ class WorkflowConfig:
         parsed = None
         if stages is not None:
             parsed = tuple(StageConfig(str(s["name"]), tuple(s.get("editable_sections", ())), int(s.get("reflection_minibatch_size", value.get("reflection_minibatch_size", 5)))) for s in stages)
-        return cls(rollout_batch_size=int(value.get("rollout_batch_size", 40)), reflection_minibatch_size=int(value.get("reflection_minibatch_size", 5)), stages=parsed or cls().stages, replay_rejected_candidates=bool(value.get("replay_rejected_candidates", True)), enable_meta=bool(value.get("enable_meta", True)), replay_split=str(value.get("replay_split", "train")), no_test_in_meta=bool(value.get("no_test_in_meta", True)))
+        return cls(rollout_batch_size=int(value.get("rollout_batch_size", 40)), reflection_minibatch_size=int(value.get("reflection_minibatch_size", 5)), stages=parsed or cls().stages, replay_rejected_candidates=bool(value.get("replay_rejected_candidates", True)), enable_meta=bool(value.get("enable_meta", True)), replay_split=str(value.get("replay_split", "train")), no_test_in_meta=bool(value.get("no_test_in_meta", True)), use_validation_gate=bool(value.get("use_validation_gate", True)), max_reflection_input_chars=int(value.get("max_reflection_input_chars", 120_000)))

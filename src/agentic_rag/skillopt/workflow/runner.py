@@ -75,23 +75,34 @@ def apply_sections(skill: str, patch: dict, stage: str) -> str:
 
 class WorkflowRunner:
     def __init__(self, *, backend: Backend, output: Path, config: WorkflowConfig,
-                 contract: dict, train: list[dict], validation: list[dict], skill: str):
+                 contract: dict, train: list[dict], validation: list[dict],
+                 skill: str, test: list[dict] | None = None):
         self.backend, self.output, self.config = backend, output, config
-        self.train, self.validation, self.initial = train, validation, skill
+        self.train, self.validation, self.test, self.initial = train, validation, test or [], skill
         if set(SkillSections.parse(skill).blocks) != set(SECTIONS):
             raise ValueError("seed needs all five marked sections")
-        for name, rows in (("train", train), ("validation", validation)):
+        for name, rows in (("train", train), ("validation", validation), ("test", self.test)):
+            if name == "test" and not rows:
+                continue
             if not rows or len({r["id"] for r in rows}) != len(rows):
                 raise ValueError(f"{name} must be nonempty with unique IDs")
             if any(r.get("split", name) != name for r in rows):
                 raise ValueError(f"non-{name} row in {name}")
         if {r["id"] for r in train} & {r["id"] for r in validation}:
             raise ValueError("train/validation IDs overlap")
+        if self.test and (({r["id"] for r in train} & {r["id"] for r in self.test}) or
+                          ({r["id"] for r in validation} & {r["id"] for r in self.test})):
+            raise ValueError("train/validation/test IDs overlap")
         normalize = lambda q: " ".join(q.casefold().split())
         if {normalize(r["question"]) for r in train} & {normalize(r["question"]) for r in validation}:
             raise ValueError("train/validation questions overlap")
+        if self.test:
+            if ({normalize(r["question"]) for r in train} & {normalize(r["question"]) for r in self.test}) or \
+               ({normalize(r["question"]) for r in validation} & {normalize(r["question"]) for r in self.test}):
+                raise ValueError("train/validation/test questions overlap")
         self.contract = {"version": VERSION, "runtime": contract, "config": asdict(config),
                          "train": digest(train), "validation": digest(validation),
+                         "test": digest(self.test) if self.test else None,
                          "initial_skill": skill_hash(skill)}
 
     def _call(self, stage: str, operation: str, payload: dict, path: Path) -> dict:
@@ -134,9 +145,23 @@ class WorkflowRunner:
             return saved["active_skill"], saved
         drafts = []
         size = self.config.stages[1].reflection_minibatch_size if stage == "meta" else self.config.reflection_minibatch_size
-        for i in range(0, len(cases), size):
-            drafts.append(self._call(stage, "reflect", {"skill": skill, "cases": cases[i:i+size]},
-                                     folder / f"reflect_{i//size:04d}.json"))
+        # Keep the normal minibatch size, but split an oversized serialized
+        # request.  The request number is independent of the case offset so
+        # resumed runs retain stable paths (including prior successful calls).
+        offset = 0
+        request_index = 0
+        while offset < len(cases):
+            chunk_size = min(size, len(cases) - offset)
+            while chunk_size > 1:
+                payload = {"skill": skill, "cases": cases[offset:offset + chunk_size]}
+                if len(json.dumps(payload, ensure_ascii=False)) <= self.config.max_reflection_input_chars:
+                    break
+                chunk_size = max(1, chunk_size // 2)
+            payload = {"skill": skill, "cases": cases[offset:offset + chunk_size]}
+            drafts.append(self._call(stage, "reflect", payload,
+                                     folder / f"reflect_{request_index:04d}.json"))
+            offset += chunk_size
+            request_index += 1
         candidate = skill
         reason = "no_comparison_cases" if not cases else "no_proposal"
         decision = None
@@ -149,11 +174,34 @@ class WorkflowRunner:
                 except ValueError as exc:
                     candidate, reason = skill, f"scope_rejected: {exc}"
         candidate_rows = []
+        validation_record = None
+        test_record = None
         if candidate != skill:
             baseline = self._roll(self.validation, skill, "validation", "validation")
             proposed = self._roll(self.validation, candidate, "validation", "validation")
-            decision = asdict(evaluate_candidate(metrics(baseline), metrics(proposed)))
-            reason = decision["reason"]
+            baseline_metrics = metrics(baseline)
+            proposed_metrics = metrics(proposed)
+            validation_record = {"baseline": asdict(baseline_metrics),
+                                 "candidate": asdict(proposed_metrics)}
+            if self.test:
+                baseline_test = self._roll(self.test, skill, "test", "baseline_evaluation")
+                proposed_test = self._roll(self.test, candidate, "test", "candidate_evaluation")
+                test_record = {"baseline": asdict(metrics(baseline_test)),
+                               "candidate": asdict(metrics(proposed_test))}
+            if self.config.use_validation_gate:
+                decision = asdict(evaluate_candidate(baseline_metrics, proposed_metrics))
+                reason = decision["reason"]
+            else:
+                # Record the same gate statistics for auditability, but make
+                # adoption independent of validation.  Test is never used to
+                # choose a candidate; it is an external evaluation only.
+                observed = evaluate_candidate(baseline_metrics, proposed_metrics)
+                decision = {"accepted": True,
+                            "reason": "validation_gate_disabled_candidate_adopted",
+                            "accuracy_delta": observed.accuracy_delta,
+                            "token_gain": observed.token_gain,
+                            "call_gain": observed.call_gain}
+                reason = decision["reason"]
             # Both accepted branches and rejected replay must be paired on the
             # SAME training questions. Neither validation nor test enters Meta.
             if stage == "retrieval" and (decision["accepted"] or self.config.replay_rejected_candidates):
@@ -164,6 +212,8 @@ class WorkflowRunner:
                  "candidate_hash": skill_hash(candidate), "candidate_skill": candidate,
                  "active_skill": active, "active_hash": skill_hash(active),
                  "accepted": accepted, "reason": reason, "validation": decision,
+                 "validation_metrics": validation_record,
+                 "test_metrics": test_record,
                  "question_ids": [q["id"] for q in questions],
                  "parent_train": parent_rows, "candidate_train": candidate_rows}
         write_json(receipt, saved)
@@ -205,7 +255,12 @@ class WorkflowRunner:
         # This is the latest accepted version, NOT highest raw-accuracy Skill:
         # the documented gate can also accept an efficiency improvement.
         (self.output / "final_skill.md").write_text(skill)
+        final_test = None
+        if self.test:
+            final_test = asdict(metrics(self._roll(self.test, skill, "test", "final_evaluation")))
         summary = {"status": "complete", "final_skill_sha256": skill_hash(skill),
-                   "meta_enabled": self.config.enable_meta, "updates": receipts, "test_executed": False}
+                   "meta_enabled": self.config.enable_meta, "updates": receipts,
+                   "test_executed": bool(self.test), "final_test_metrics": final_test,
+                   "validation_gate_enabled": self.config.use_validation_gate}
         write_json(self.output / "summary.json", summary)
         return summary

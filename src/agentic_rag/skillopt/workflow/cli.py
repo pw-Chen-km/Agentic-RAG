@@ -20,9 +20,12 @@ def main(argv=None):
     base = args.config.resolve().parent
     resolve = lambda value: (base / value).resolve()
     train_path, val_path = resolve(config["train"]), resolve(config["validation"])
+    test_path = resolve(config["test"]) if config.get("test") else None
     train = [json.loads(line) for line in train_path.read_text().splitlines() if line.strip()]
     val = [json.loads(line) for line in val_path.read_text().splitlines() if line.strip()]
-    for rows in (train, val):
+    test = ([json.loads(line) for line in test_path.read_text().splitlines() if line.strip()]
+            if test_path else [])
+    for rows in (train, val, test):
         if any(not all(key in r for key in ("id", "question", "answer", "scope_id")) for r in rows):
             raise ValueError("each question needs id, question, answer, scope_id")
     seed = resolve(config["skill"]).read_text()
@@ -73,9 +76,10 @@ def main(argv=None):
             backend = OllamaBackend(substrate=substrate, agent=agent, optimizer=optimizer,
                                     judge=judge, dataset=config["dataset"])
     runner = WorkflowRunner(backend=backend, output=resolve(config["output"]), config=workflow,
-        contract=contract, train=train, validation=val, skill=seed)
+        contract=contract, train=train, validation=val, test=test, skill=seed)
     if args.dry_run:
         print(json.dumps({"status": "validated", "train": len(train), "validation": len(val),
+                          "test": len(test),
                           "model_calls": 0, "demo": args.demo, "contract": runner.contract}, indent=2))
     else:
         # One writer per output. OS releases the lock on process termination.
