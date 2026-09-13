@@ -75,15 +75,6 @@ def evaluate_episode(
     support_recall = (
         len(gold_ids & visible_sentence_ids) / len(gold_ids) if evaluable else None
     )
-    curves = {
-        str(prefix): sum(
-            1
-            for row in rows
-            if row.get("first_complete_support_decision") is not None
-            and int(row["first_complete_support_decision"]) <= prefix
-        )
-        for prefix in range(1, 16)
-    }
     return {
         "question_id": question.get("_id"),
         "question_type": question.get("type"),
@@ -114,6 +105,15 @@ def aggregate(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
         values = [float(row[key]) for row in rows if row.get(key) is not None]
         return sum(values) / len(values) if values else None
 
+    curves = {
+        str(prefix): sum(
+            1
+            for row in rows
+            if row.get("first_complete_support_decision") is not None
+            and int(row["first_complete_support_decision"]) <= prefix
+        )
+        for prefix in range(1, 16)
+    }
     return {
         "episodes": len(rows),
         "evaluable_episodes": sum(not row.get("not_evaluable", True) for row in rows),
