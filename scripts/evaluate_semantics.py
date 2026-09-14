@@ -52,7 +52,7 @@ def main() -> None:
     def mean(name, values):
         nums = [float(item["metrics"][name]) for item in values if item.get("metrics", {}).get(name) is not None]
         return sum(nums) / len(nums) if nums else None
-    summary = {condition: {metric: mean(metric, values) for metric in ("answer_correctness", "rouge_l", "coverage", "faithfulness", "context_relevancy", "evidence_recall")} for condition, values in aggregate.items()}
+    summary = {condition: {**{metric: mean(metric, values) for metric in ("answer_correctness", "rouge_l", "coverage", "faithfulness", "context_relevancy", "evidence_recall")}, "judge_calls": sum(int(item.get("judge_usage", {}).get("calls") or 0) for item in values), "judge_input_tokens": sum(int(item.get("judge_usage", {}).get("input_tokens") or 0) for item in values), "judge_output_tokens": sum(int(item.get("judge_usage", {}).get("output_tokens") or 0) for item in values)} for condition, values in aggregate.items()}
     (args.output / "summary.json").write_text(json.dumps({"episodes": len(rows), "conditions": summary}, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

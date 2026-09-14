@@ -62,7 +62,11 @@ def _statements(client: SemanticJudgeClient, text: str) -> tuple[list[str], dict
         "Split the text into self-contained atomic factual statements. Do not add facts.",
         {"text": text},
     ))
-    statements = value.get("statements") if isinstance(value, Mapping) else None
+    statements = None
+    if isinstance(value, Mapping):
+        statements = value.get("statements") or value.get("facts") or value.get("atomic_statements")
+        if statements is None and value and all(isinstance(key, str) for key in value):
+            statements = list(value.keys())
     if not isinstance(statements, list) or not all(isinstance(item, str) for item in statements):
         raise ValueError("judge response missing statements list")
     return [item.strip() for item in statements if item.strip()], usage
@@ -73,10 +77,15 @@ def _classify(client: SemanticJudgeClient, answer: list[str], reference: list[st
         "Classify each answer statement against reference statements. verdict must be TP, FP, or FN; include reasons.",
         {"answer_statements": answer, "reference_statements": reference},
     ))
-    if not isinstance(value, Mapping) or not isinstance(value.get("items"), list):
+    rows = None
+    if isinstance(value, Mapping):
+        rows = value.get("items") or value.get("classifications") or value.get("results") or value.get("verdicts")
+        if rows is None and value.get("verdict") is not None:
+            rows = [value]
+    if not isinstance(rows, list):
         raise ValueError("judge response missing classification items")
     counts = {"TP": 0, "FP": 0, "FN": 0}
-    for item in value["items"]:
+    for item in rows:
         verdict = str(item.get("verdict", "")).upper() if isinstance(item, Mapping) else ""
         if verdict in counts:
             counts[verdict] += 1
@@ -87,7 +96,11 @@ def _fraction_judged(client: SemanticJudgeClient, task: str, items: list[str], c
     if not items:
         return 1.0, {"status": "ok", "items": []}
     value, usage = client.complete(_json_prompt(task, {"items": items, "context": context}))
-    rows = value.get("items") if isinstance(value, Mapping) else None
+    rows = None
+    if isinstance(value, Mapping):
+        rows = value.get("items") or value.get("verdicts") or value.get("results")
+        if rows is None and any(key in value for key in ("attributed", "supported", "verdict")):
+            rows = [value]
     if not isinstance(rows, list) or len(rows) != len(items):
         raise ValueError("judge response item count mismatch")
     verdicts = [int(bool(item.get("attributed", item.get("supported", 0)))) for item in rows if isinstance(item, Mapping)]
@@ -167,6 +180,22 @@ class GraphRAGSemanticEvaluator:
                 return 0.0, {"status": "ok", "reason": "empty_context"}
             return _fraction_judged(self.client, "For each reference evidence statement, decide whether the context supports it. Use attributed=1 or 0.", list(evidence), context)
         run("evidence_recall", evidence_recall)
+        if any(detail.get("status") == "unavailable" for detail in result["details"].values()):
+            result["status"] = "partial"
+        def collect(value: Any) -> tuple[int, int, int]:
+            if isinstance(value, Mapping):
+                calls = 1 if ("prompt_eval_count" in value or "eval_count" in value) else 0
+                ins = int(value.get("prompt_eval_count") or 0) if calls else 0
+                outs = int(value.get("eval_count") or 0) if calls else 0
+                for child in value.values():
+                    c, i, o = collect(child); calls += c; ins += i; outs += o
+                return calls, ins, outs
+            if isinstance(value, list):
+                totals = [collect(item) for item in value]
+                return tuple(sum(item[index] for item in totals) for index in range(3))  # type: ignore[return-value]
+            return 0, 0, 0
+        calls, input_tokens, output_tokens = collect(result["details"])
+        result["judge_usage"] = {"calls": calls, "input_tokens": input_tokens or None, "output_tokens": output_tokens or None, "total_tokens": (input_tokens + output_tokens) or None}
         return result
 
 
