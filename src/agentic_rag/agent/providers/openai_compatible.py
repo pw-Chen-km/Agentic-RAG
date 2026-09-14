@@ -26,7 +26,7 @@ class OpenAICompatibleChatPolicy:
     def decide(self, messages: Sequence[Message | dict[str, str]], *, decision_format: type[BaseModel] | None = None) -> PolicyDecision:
         response_model = decision_format or self.decision_format
         wire_messages = [m.as_openai_input() if isinstance(m, Message) else dict(m) for m in messages]
-        payload = {"model": self.model, "messages": wire_messages, "temperature": self.temperature, "max_tokens": self.max_output_tokens, "stream": False, "response_format": {"type": "json_schema", "json_schema": {"name": "policy_decision", "schema": response_model.model_json_schema(), "strict": True}}}
+        payload = {"model": self.model, "messages": wire_messages, "temperature": self.temperature, "top_p": 1, "max_tokens": self.max_output_tokens, "stream": False, "response_format": {"type": "json_schema", "json_schema": {"name": "policy_decision", "schema": response_model.model_json_schema(), "strict": True}}, "chat_template_kwargs": {"enable_thinking": False, "preserve_thinking": False}}
         raw = self._request(payload)
         usage = raw.get("usage") or {}
         prompt = _int_or_none(usage.get("prompt_tokens")); completion = _int_or_none(usage.get("completion_tokens")); total = _int_or_none(usage.get("total_tokens"))

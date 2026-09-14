@@ -210,6 +210,7 @@ class BuildManifest(ManifestModel):
     abbreviation_detector: ModelVersion | None
     embedding_model: ModelVersion
     embedding_backend: str = "sentence_transformers"
+    embedding_host: str = "http://localhost:11434"
     embedding_dimension: int
     bm25_backend: ModelVersion
     bm25_tokenizer: str

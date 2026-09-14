@@ -917,6 +917,7 @@ class ExpansionEngine:
             self._embedding_backend = create_embedding_backend(
                 self.substrate.manifest.embedding_model.name,
                 backend=self.substrate.manifest.embedding_backend,
+                host=self.substrate.manifest.embedding_host,
             )
         return self._embedding_backend
 

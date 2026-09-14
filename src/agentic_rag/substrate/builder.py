@@ -1272,6 +1272,7 @@ class SubstrateBuilder:
             ),
             embedding_model=ModelVersion(name=backend.name, version=backend.version),
             embedding_backend=self.config.embedding_backend,
+            embedding_host=self.config.embedding_host,
             embedding_dimension=dense_dimension,
             bm25_backend=ModelVersion(name="bm25s", version=bm25_version),
             bm25_tokenizer="unicode-nfkc-casefold-regex-v1",
