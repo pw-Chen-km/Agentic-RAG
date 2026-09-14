@@ -27,6 +27,8 @@ class BuildConfig(BaseModel):
     spacy_model: str = "en_core_web_sm"
     enable_abbreviations: bool = True
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_backend: Literal["sentence_transformers", "ollama"] = "sentence_transformers"
+    embedding_host: str = "http://localhost:11434"
     embedding_batch_size: int = Field(default=64, ge=1)
     embedding_device: str | None = None
     bm25_stopwords: str | None = None
@@ -57,6 +59,8 @@ class BuildConfig(BaseModel):
                 "embedding_model": dense.get(
                     "model", "sentence-transformers/all-MiniLM-L6-v2"
                 ),
+                "embedding_backend": dense.get("backend", "sentence_transformers"),
+                "embedding_host": dense.get("host", "http://localhost:11434"),
                 "embedding_batch_size": dense.get("batch_size", 64),
                 "embedding_device": dense.get("device"),
             }

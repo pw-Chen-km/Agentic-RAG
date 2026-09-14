@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentic_rag.substrate.embedding import (
     EmbeddingBackend,
-    SentenceTransformerEmbeddingBackend,
+    create_embedding_backend,
     normalize_embeddings,
 )
 from agentic_rag.errors import AgenticRAGError, NodeNotFoundError
@@ -914,8 +914,9 @@ class ExpansionEngine:
 
     def _get_embedding_backend(self) -> EmbeddingBackend:
         if self._embedding_backend is None:
-            self._embedding_backend = SentenceTransformerEmbeddingBackend(
-                self.substrate.manifest.embedding_model.name
+            self._embedding_backend = create_embedding_backend(
+                self.substrate.manifest.embedding_model.name,
+                backend=self.substrate.manifest.embedding_backend,
             )
         return self._embedding_backend
 

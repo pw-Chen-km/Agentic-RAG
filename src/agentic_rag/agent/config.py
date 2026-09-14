@@ -82,7 +82,30 @@ class OllamaPolicyConfig(ConfigModel):
         return value
 
 
-PolicyProviderConfig = OllamaPolicyConfig
+class OpenAICompatiblePolicyConfig(ConfigModel):
+    provider: Literal["openai_compatible"] = "openai_compatible"
+    model: str = Field(min_length=1)
+    base_url: str = Field(default="http://localhost:8000/v1", min_length=1)
+    api_key: str = "EMPTY"
+    temperature: float = Field(default=0.0, ge=0.0)
+    timeout_seconds: float = Field(default=600.0, gt=0.0)
+    max_retries: int = Field(default=2, ge=0, le=10)
+    num_ctx: int = Field(default=32_768, ge=2_048)
+    max_output_tokens: int = Field(default=2_048, ge=1)
+
+    @field_validator("model", "base_url")
+    @classmethod
+    def text_fields_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value.rstrip("/") if value.startswith("http") else value
+
+
+PolicyProviderConfig = Annotated[
+    OllamaPolicyConfig | OpenAICompatiblePolicyConfig,
+    Field(discriminator="provider"),
+]
 
 
 class AgentConfig(ConfigModel):

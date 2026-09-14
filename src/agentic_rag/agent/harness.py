@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentic_rag.agent.artifacts import ArtifactWriter
-from agentic_rag.agent.config import AgentConfig, OllamaPolicyConfig
+from agentic_rag.agent.config import AgentConfig, OllamaPolicyConfig, OpenAICompatiblePolicyConfig
 from agentic_rag.agent.context import PolicyContextBuilder
 from agentic_rag.agent.interface import InterfaceContract, get_interface_contract
 from agentic_rag.agent.controller import BUDGET_FINALIZE_INSTRUCTION, AgentController
@@ -305,4 +305,13 @@ def _policy_from_config(config: AgentConfig) -> PolicyClient:
                 else config.enabled_expansions
             ),
         )
-    raise TypeError("interface study requires an Ollama policy provider")
+    if isinstance(config.policy, OpenAICompatiblePolicyConfig):
+        from agentic_rag.agent.providers.openai_compatible import OpenAICompatibleChatPolicy
+        return OpenAICompatibleChatPolicy(
+            model=config.policy.model, base_url=config.policy.base_url, api_key=config.policy.api_key,
+            temperature=config.policy.temperature, timeout_seconds=config.policy.timeout_seconds,
+            max_retries=config.policy.max_retries, num_ctx=config.policy.num_ctx,
+            max_output_tokens=config.policy.max_output_tokens,
+            enabled_expansions=(get_interface_contract(config.interface).enabled_expansions if config.interface else config.enabled_expansions),
+        )
+    raise TypeError("unsupported Policy provider")

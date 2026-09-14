@@ -12,7 +12,7 @@ import numpy as np
 from agentic_rag.substrate.bm25_index import BM25Index
 from agentic_rag.substrate.embedding import (
     EmbeddingBackend,
-    SentenceTransformerEmbeddingBackend,
+    create_embedding_backend,
     load_dense_index,
     normalize_embeddings,
 )
@@ -213,8 +213,9 @@ class Retriever:
 
     def _get_embedding_backend(self) -> EmbeddingBackend:
         if self._embedding_backend is None:
-            self._embedding_backend = SentenceTransformerEmbeddingBackend(
-                self.substrate.manifest.embedding_model.name
+            self._embedding_backend = create_embedding_backend(
+                self.substrate.manifest.embedding_model.name,
+                backend=self.substrate.manifest.embedding_backend,
             )
         return self._embedding_backend
 
