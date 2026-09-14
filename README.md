@@ -81,3 +81,21 @@ python scripts/evaluate_semantics.py `
 Novel、Medical、HotpotQA 的 aggregate 分開保存；所有 judge prompt、parsed verdict、
 provider usage、耗時與 unavailable/not_evaluable 原因都保留在 semantic evaluation
 artifact。GraphRAG-Benchmark 的 indexing structural metrics 不在本研究的主要輸出中。
+
+要對 GraphRAG-Benchmark 全量執行六個介面條件，可使用：
+
+```powershell
+python scripts/run_interface_study.py `
+  --dataset novel `
+  --substrate data/graphrag_benchmark/novel/substrate `
+  --questions data/graphrag_benchmark/novel/questions.json `
+  --source-manifest data/graphrag_benchmark/novel/source_manifest.json `
+  --judge-config configs/semantic_judge_qwen.yaml `
+  --semantic-eval `
+  --conditions C0 C1 C2 C3 C4 A1 `
+  --output runs/graphrag-novel-v1
+```
+
+Medical 只需把 dataset、substrate、questions、source manifest 與 output 換成
+`medical` 對應路徑。若 target episodes 已完成，可用 `evaluate_semantics.py` 只補做
+judge，避免重跑 Agent。
