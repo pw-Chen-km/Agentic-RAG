@@ -158,11 +158,8 @@ class PolicyContextBuilder:
         messages = [
             Message(
                 role="system",
-                content=protocol,
-            ),
-            Message(
-                role="system",
                 content=(
+                    f"{protocol}\n\n"
                     "Current retrieval skill (plain Markdown):\n\n"
                     f"{skill_text}"
                 ),
