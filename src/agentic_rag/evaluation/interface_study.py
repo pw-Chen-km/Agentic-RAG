@@ -27,7 +27,8 @@ def evaluate_episode(
 ) -> dict[str, Any]:
     """Evaluate only against source spans actually exposed to Policy."""
 
-    facts = [item for item in gold_support if item.get("question_id") == question.get("_id")]
+    question_id = question.get("_id") or question.get("id") or question.get("qid")
+    facts = [item for item in gold_support if item.get("question_id") == question_id]
     mapping_missing = any(not item.get("sentence_id") for item in facts)
     visible_sentence_ids: set[str] = set()
     projected_sentence_ids: set[str] = set()
@@ -76,8 +77,8 @@ def evaluate_episode(
         len(gold_ids & visible_sentence_ids) / len(gold_ids) if evaluable else None
     )
     return {
-        "question_id": question.get("_id"),
-        "question_type": question.get("type"),
+        "question_id": question_id,
+        "question_type": question.get("type") or question.get("question_type"),
         "answer_correct_exact": answer["exact"],
         "answer_correct_contain": answer["contain"],
         "candidate_retrieved": candidate_count,

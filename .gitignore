@@ -18,6 +18,13 @@ data/*
 !data/interface_study/hotpot_dev_distractor_v1.selected.json
 data/interface_study/hotpot_dev_distractor_v1.json
 data/interface_study/substrate/
+!data/graphrag_benchmark/
+!data/graphrag_benchmark/*/
+!data/graphrag_benchmark/*/corpus.json
+!data/graphrag_benchmark/*/questions.json
+!data/graphrag_benchmark/*/chunks.json
+!data/graphrag_benchmark/*/source_manifest.json
+data/graphrag_benchmark/*/substrate/
 results/
 runs/
 dist/

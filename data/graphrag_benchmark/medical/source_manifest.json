@@ -1,0 +1,37 @@
+{
+  "chunking": {
+    "max_characters": 5000,
+    "method": "deterministic whitespace chunks"
+  },
+  "counts": {
+    "chunks": 211,
+    "corpus_documents": 1,
+    "questions": 2062
+  },
+  "dataset": "medical",
+  "downloaded_at_utc": "2026-09-14T17:34:33.476283+00:00",
+  "files": {
+    "chunks.json": {
+      "path": "data\\graphrag_benchmark\\medical\\chunks.json",
+      "sha256": "27796d481893dbef6653b15fc89a0ade177c0955790070b78fc5272ff3d1439c",
+      "size_bytes": 1059574
+    },
+    "corpus.json": {
+      "path": "data\\graphrag_benchmark\\medical\\corpus.json",
+      "sha256": "e15c3b8af5931610c005cbf465e58c2b9ff3b9fa83b7c4bfb042bd8343cdf002",
+      "size_bytes": 1055437
+    },
+    "questions.json": {
+      "path": "data\\graphrag_benchmark\\medical\\questions.json",
+      "sha256": "ea9798d7ba768c2986f2419b112f11d984499640ce6be94c9e8dd61c01d158b8",
+      "size_bytes": 2079608
+    }
+  },
+  "license": "MIT (repository LICENSE; source datasets retain their upstream notices)",
+  "resolved_commit": "fdbab5959b18c96532580877ffe27d112bccc0ec",
+  "source_repository": "https://github.com/GraphRAG-Bench/GraphRAG-Benchmark",
+  "source_urls": [
+    "https://raw.githubusercontent.com/GraphRAG-Bench/GraphRAG-Benchmark/main/Datasets/Corpus/medical.json",
+    "https://raw.githubusercontent.com/GraphRAG-Bench/GraphRAG-Benchmark/main/Datasets/Questions/medical_questions.json"
+  ]
+}

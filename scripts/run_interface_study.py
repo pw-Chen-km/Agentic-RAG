@@ -44,6 +44,7 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
     )
     return {
         "manifest_version": "interface-study-run-v1",
+        "dataset": args.dataset,
         "seed": args.seed,
         "question_limit": args.limit,
         "conditions": list(conditions),
@@ -57,6 +58,7 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         "config_sha256": sha256(args.config),
         "skill": args.skill.resolve().as_posix(),
         "skill_sha256": sha256(args.skill),
+        "judge_config_sha256": sha256(args.judge_config) if args.judge_config else None,
         "renderer_version": "observation-projector-v1",
         "renderer_sha256": hashlib.sha256(renderer_bytes).hexdigest(),
         "budget": {
@@ -126,10 +128,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     completed = _load_progress(args.output / "progress.jsonl")
     if args.limit is not None:
         questions = questions[: args.limit]
-    schedule = [(str(row["_id"]), condition, row) for row in questions for condition in conditions]
+    schedule = [(str(row.get("_id") or row.get("id")), condition, row) for row in questions for condition in conditions]
     random.Random(args.seed).shuffle(schedule)
     progress_path = args.output / "progress.jsonl"
     summaries: list[dict[str, Any]] = []
+    scope_id = sidecars.benchmark_questions[0].scope_id if sidecars.benchmark_questions else "hotpotqa:benchmark_exact:dev"
+    semantic_evaluator = None
+    if args.semantic_eval:
+        from agentic_rag.evaluation.graphrag_bench import GraphRAGSemanticEvaluator, OllamaSemanticJudge
+        judge_model, judge_host, embedding_model = args.judge_model, args.judge_host, args.embedding_model
+        if args.judge_config:
+            import yaml
+            raw = yaml.safe_load(args.judge_config.read_text(encoding="utf-8")) or {}
+            judge_model = raw.get("model", judge_model); judge_host = raw.get("host", judge_host); embedding_model = raw.get("embedding_model", embedding_model)
+        judge = OllamaSemanticJudge(model=judge_model, host=judge_host, embedding_model=embedding_model)
+        semantic_evaluator = GraphRAGSemanticEvaluator(judge)
     for question_id, condition, row in schedule:
         episode_id = f"{condition}--{question_id}"
         if episode_id in completed:
@@ -138,11 +151,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         harness = harnesses[condition]
         started = time.perf_counter()
         try:
-            result = harness.run(
-                row["question"], "hotpotqa:benchmark_exact:dev", episode_id=episode_id
-            )
+            result = harness.run(row["question"], scope_id, episode_id=episode_id)
             episode_payload = json.loads((harness.artifact_writer.path_for_episode(episode_id) / "episode.json").read_text(encoding="utf-8"))
             scored = evaluate_episode(episode_payload, question=row, gold_support=gold)
+            if semantic_evaluator is not None:
+                visible_spans = [span for step in episode_payload.get("trajectory", []) for span in step.get("visible_source_spans", [])]
+                semantic = semantic_evaluator.evaluate(
+                    question=row,
+                    answer=episode_payload.get("answer"),
+                    contexts=[str(span.get("text") or span.get("source_text") or "") for span in visible_spans],
+                    evidence=row.get("evidence") if isinstance(row.get("evidence"), list) else ([row.get("evidence")] if row.get("evidence") else []),
+                )
+                write_json(args.output / "semantic_evaluations" / f"{episode_id}.json", semantic)
             scored.update({"episode_id": episode_id, "condition": condition, "wall_time_seconds": time.perf_counter() - started})
         except Exception as exc:
             scored = {
@@ -177,6 +197,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("runs/interface-study-v1"))
     parser.add_argument("--seed", type=int, default=20260805)
     parser.add_argument("--conditions", nargs="+", default=list(CONDITIONS), choices=("C0", "C1", "C2", "C3", "C4", "A1"))
+    parser.add_argument("--dataset", default="hotpotqa")
+    parser.add_argument("--semantic-eval", action="store_true")
+    parser.add_argument("--judge-model", default="qwen3.5:4b")
+    parser.add_argument("--judge-host", default="http://localhost:11434")
+    parser.add_argument("--embedding-model", default="nomic-embed-text")
+    parser.add_argument("--judge-config", type=Path, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--limit", type=int, default=None, help="limit questions for a smoke run")
     args = parser.parse_args()

@@ -37,6 +37,9 @@ class BenchmarkQuestion:
     question_type: str | None
     source_question_id: str | None = None
     source_row_index: int | None = None
+    evidence: tuple[str, ...] = ()
+    evidence_triple: str | None = None
+    evidence_relations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

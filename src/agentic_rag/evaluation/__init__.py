@@ -336,5 +336,6 @@ __all__ = [
 ]
 
 from agentic_rag.evaluation.interface_study import aggregate, evaluate_episode, score_answer
+from agentic_rag.evaluation.graphrag_bench import GraphRAGSemanticEvaluator, OllamaSemanticJudge, rouge_l
 
-__all__ += ["aggregate", "evaluate_episode", "score_answer"]
+__all__ += ["aggregate", "evaluate_episode", "score_answer", "GraphRAGSemanticEvaluator", "OllamaSemanticJudge", "rouge_l"]

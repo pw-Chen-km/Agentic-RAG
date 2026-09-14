@@ -52,3 +52,32 @@ evaluation sidecar，不會進入 Policy context。
 搜尋、擴展或讀取新資料。resume 會拒絕 source/config/substrate/renderer hash 改變。
 Pilot 的主要輸出是流程、provenance、instrumentation 與成本的可重現性；4B 結果不
 直接作為正式研究結論。
+
+## GraphRAG-Benchmark semantic evaluation
+
+下載並固定官方 Novel、Medical corpus/questions，產生 source manifest 與固定大小的
+normalized chunks：
+
+```powershell
+python scripts/fetch_graphrag_benchmark.py --download
+python scripts/build_graphrag_substrate.py --dataset novel
+python scripts/build_graphrag_substrate.py --dataset medical
+```
+
+兩個資料集各自建立 substrate。Semantic judge 使用獨立 Ollama `qwen3.5:4b` 與
+`nomic-embed-text`，依官方題型計算 ROUGE-L、Answer Correctness、Coverage、
+Faithfulness、Context Relevancy、Evidence Recall。它讀取已完成的 episode，不會改變
+target Policy input：
+
+```powershell
+python scripts/evaluate_semantics.py `
+  --episodes runs/interface-study-v1/episodes `
+  --substrate data/interface_study/substrate `
+  --output runs/interface-study-v1/semantic_evaluations `
+  --model qwen3.5:4b `
+  --embedding-model nomic-embed-text
+```
+
+Novel、Medical、HotpotQA 的 aggregate 分開保存；所有 judge prompt、parsed verdict、
+provider usage、耗時與 unavailable/not_evaluable 原因都保留在 semantic evaluation
+artifact。GraphRAG-Benchmark 的 indexing structural metrics 不在本研究的主要輸出中。

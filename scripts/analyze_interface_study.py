@@ -40,6 +40,24 @@ def main() -> None:
             bucket = "benefited" if score > baseline_score else "harmed" if score < baseline_score else "no_improvement"
             cases[bucket].append({"question_id": question_id, "condition": condition})
     summary["trajectory_cases"] = cases
+    semantic_dir = args.run / "semantic_evaluations"
+    semantic_rows = []
+    if semantic_dir.exists():
+        for path in semantic_dir.glob("*.json"):
+            if path.name == "summary.json":
+                continue
+            semantic_rows.append(json.loads(path.read_text(encoding="utf-8")))
+    semantic_groups = defaultdict(list)
+    for row in semantic_rows:
+        semantic_groups[row.get("condition", "unknown")].append(row)
+    metrics = ("answer_correctness", "rouge_l", "coverage", "faithfulness", "context_relevancy", "evidence_recall")
+    summary["semantic_evaluation"] = {
+        condition: {
+            metric: (sum(float(item.get("metrics", {}).get(metric)) for item in values if item.get("metrics", {}).get(metric) is not None) / len([item for item in values if item.get("metrics", {}).get(metric) is not None]) if any(item.get("metrics", {}).get(metric) is not None for item in values) else None)
+            for metric in metrics
+        }
+        for condition, values in sorted(semantic_groups.items())
+    }
     (args.run / "analysis.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

@@ -109,6 +109,9 @@ SCHEMAS: dict[str, pa.Schema] = {
             pa.field("question_type", pa.string(), True),
             pa.field("source_question_id", pa.string(), True),
             pa.field("source_row_index", pa.int64(), True),
+            pa.field("evidence", pa.list_(pa.string()), True),
+            pa.field("evidence_triple", pa.string(), True),
+            pa.field("evidence_relations", pa.list_(pa.string()), True),
         ]
     ),
     "source_sentence_provenance": pa.schema(
