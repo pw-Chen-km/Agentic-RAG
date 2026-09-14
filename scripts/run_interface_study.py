@@ -162,6 +162,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     contexts=[str(span.get("text") or span.get("source_text") or "") for span in visible_spans],
                     evidence=row.get("evidence") if isinstance(row.get("evidence"), list) else ([row.get("evidence")] if row.get("evidence") else []),
                 )
+                semantic.update({"episode_id": episode_id, "question_id": question_id, "condition": condition})
                 write_json(args.output / "semantic_evaluations" / f"{episode_id}.json", semantic)
             scored.update({"episode_id": episode_id, "condition": condition, "wall_time_seconds": time.perf_counter() - started})
         except Exception as exc:
