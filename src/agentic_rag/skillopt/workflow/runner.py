@@ -134,6 +134,52 @@ class WorkflowRunner:
             raise ValueError("rollout split/skill mismatch")
         return result
 
+    def _merge_drafts(self, stage: str, skill: str, drafts: list[dict],
+                      folder: Path) -> dict:
+        """Merge reflection results without sending an oversized request.
+
+        A direct merge is retained for small inputs.  For a large set of
+        drafts, each group is merged first; only those short merge results are
+        then passed to a final merge.  This keeps the proposal content while
+        preventing the Meta request from containing every full trajectory.
+        """
+        def payload_size(items: list[dict]) -> int:
+            return len(json.dumps({"skill": skill, "drafts": items},
+                                  ensure_ascii=False))
+
+        if payload_size(drafts) <= self.config.max_reflection_input_chars:
+            return self._call(stage, "merge", {"skill": skill, "drafts": drafts},
+                              folder / "merge.json")
+
+        current = drafts
+        level = 0
+        while payload_size(current) > self.config.max_reflection_input_chars and len(current) > 1:
+            groups: list[list[dict]] = []
+            offset = 0
+            while offset < len(current):
+                group = [current[offset]]
+                offset += 1
+                while offset < len(current):
+                    trial = group + [current[offset]]
+                    if payload_size(trial) > self.config.max_reflection_input_chars:
+                        break
+                    group = trial
+                    offset += 1
+                groups.append(group)
+            merged_groups = []
+            for group_index, group in enumerate(groups):
+                merged_groups.append(self._call(
+                    stage, "merge",
+                    {"skill": skill, "drafts": group},
+                    folder / f"merge_level_{level:02d}_{group_index:04d}.json"))
+            current = merged_groups
+            level += 1
+
+        if len(current) == 1:
+            return current[0]
+        return self._call(stage, "merge", {"skill": skill, "drafts": current},
+                          folder / "merge_final.json")
+
     def _update(self, stage: str, index: int, skill: str, cases: list[dict],
                 questions: list[dict], parent_rows: list[dict]) -> tuple[str, dict]:
         folder = self.output / stage / f"batch_{index:04d}"
@@ -166,7 +212,7 @@ class WorkflowRunner:
         reason = "no_comparison_cases" if not cases else "no_proposal"
         decision = None
         if drafts:
-            merged = self._call(stage, "merge", {"skill": skill, "drafts": drafts}, folder / "merge.json")
+            merged = self._merge_drafts(stage, skill, drafts, folder)
             patch = merged.get("sections", {})
             if patch:
                 try:
