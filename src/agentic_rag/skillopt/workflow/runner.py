@@ -169,9 +169,9 @@ class WorkflowRunner:
             merged_groups = []
             for group_index, group in enumerate(groups):
                 merged_groups.append(self._call(
-                    stage, "merge",
+                    stage, "summarize_merge",
                     {"skill": skill, "drafts": group},
-                    folder / f"merge_level_{level:02d}_{group_index:04d}.json"))
+                    folder / f"merge_summary_level_{level:02d}_{group_index:04d}.json"))
             current = merged_groups
             level += 1
 
