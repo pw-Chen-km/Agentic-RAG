@@ -1,0 +1,111 @@
+{
+  "version": "workflow-skill-v2",
+  "fixed_runtime_guidance": "The Agent must output one legal PolicyDecision at a time. Follow the action schema and use only references visible in the current state.",
+  "fixed_answer_contract": "The final answer must be supported by legal evidence. Never guess, fabricate, or add claims that the evidence does not support.",
+  "blocks": {
+    "retrieval_policy": [
+      {
+        "rule_id": "R01",
+        "title": "Start from the current question",
+        "when": "No useful evidence is currently visible.",
+        "action_sequence": [
+          "Use SEARCH to identify the main entity, relation, or requested attribute.",
+          "Choose the target that matches the question's requested level of detail."
+        ],
+        "stop_or_recovery": "Inspect the returned material before choosing the next action.",
+        "exceptions": [],
+        "editable_stages": ["retrieval", "meta"]
+      },
+      {
+        "rule_id": "R02",
+        "title": "Use a sentence when it already answers the question",
+        "when": "A visible Sentence directly states the requested fact and covers the question's conditions.",
+        "action_sequence": [
+          "Check the subject, relation, and requested answer level.",
+          "Use FINISH with the smallest legal evidence set."
+        ],
+        "stop_or_recovery": "Do not retrieve more material after all answer conditions are covered.",
+        "exceptions": ["Continue when a multi-hop question still lacks evidence for another hop."],
+        "editable_stages": ["retrieval", "meta"]
+      },
+      {
+        "rule_id": "R03",
+        "title": "Read a useful visible chunk",
+        "when": "A visible unread Chunk may contain the missing fact and no complete Sentence is yet sufficient.",
+        "action_sequence": [
+          "READ the most relevant unread Chunk.",
+          "Inspect the newly visible Sentences before another SEARCH."
+        ],
+        "stop_or_recovery": "FINISH when the newly visible legal evidence covers the question; otherwise change the missing part of the search.",
+        "exceptions": [],
+        "editable_stages": ["retrieval", "meta"]
+      },
+      {
+        "rule_id": "R04",
+        "title": "Resolve a bridge before the next hop",
+        "when": "The question needs two or more facts and the current evidence identifies an intermediate entity or relation.",
+        "action_sequence": [
+          "EXPAND or READ the visible source that can identify the intermediate entity.",
+          "SEARCH for the remaining attribute only after the bridge is explicit."
+        ],
+        "stop_or_recovery": "FINISH only after every required hop has legal supporting evidence.",
+        "exceptions": ["Skip expansion when the question or visible evidence already names the intermediate entity unambiguously."],
+        "editable_stages": ["retrieval", "meta"]
+      }
+    ],
+    "recovery_policy": [
+      {
+        "rule_id": "R05",
+        "title": "Change path after no progress",
+        "when": "The last SEARCH or EXPAND did not add useful information for the missing part of the question.",
+        "action_sequence": [
+          "Check for an unread Chunk or expandable visible source.",
+          "Use READ or EXPAND when one is available.",
+          "Otherwise change the searched entity, attribute, target, or method."
+        ],
+        "stop_or_recovery": "Do not repeat a semantically equivalent SEARCH without a changed target or missing fact.",
+        "exceptions": [],
+        "editable_stages": ["retrieval", "meta"]
+      },
+      {
+        "rule_id": "R06",
+        "title": "Avoid repeated actions",
+        "when": "The previous action was duplicate, invalid, or returned only material already visible.",
+        "action_sequence": [
+          "Read the current available-action list.",
+          "Choose a different legal path that can add information."
+        ],
+        "stop_or_recovery": "FINISH when existing legal evidence is sufficient; otherwise keep the next action different in purpose.",
+        "exceptions": [],
+        "editable_stages": ["retrieval", "meta"]
+      },
+      {
+        "rule_id": "R07",
+        "title": "Keep a finishing opportunity",
+        "when": "Legal evidence covers all requested conditions or the remaining budget is small.",
+        "action_sequence": [
+          "Check the available evidence references.",
+          "FINISH with a concise supported answer when possible."
+        ],
+        "stop_or_recovery": "Do not spend the last policy attempts on another search when a legal answer can already be formed.",
+        "exceptions": ["Continue only when a required condition is visibly unsupported."],
+        "editable_stages": ["retrieval", "meta"]
+      }
+    ],
+    "answer_policy": [
+      {
+        "rule_id": "A01",
+        "title": "Answer from legal evidence",
+        "when": "FINISH is legal and the selected evidence covers the question.",
+        "action_sequence": [
+          "Extract the requested answer from the cited evidence.",
+          "Preserve required dates, people, relations, and comparison conditions.",
+          "Keep the answer direct and concise."
+        ],
+        "stop_or_recovery": "Do not add content that the legal evidence does not support.",
+        "exceptions": [],
+        "editable_stages": ["answer"]
+      }
+    ]
+  }
+}

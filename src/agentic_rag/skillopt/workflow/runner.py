@@ -16,6 +16,7 @@ from .checkpoint import WorkflowCheckpoint
 from .config import WorkflowConfig
 from .skill_sections import MARKERS, SECTIONS, SkillSections, validate_stage_patch
 from .validation import ValidationMetrics, evaluate_candidate
+from .rule_store import RuleStore, count_tokens
 
 
 VERSION = "workflow-runner-v1"
@@ -76,9 +77,13 @@ def apply_sections(skill: str, patch: dict, stage: str) -> str:
 class WorkflowRunner:
     def __init__(self, *, backend: Backend, output: Path, config: WorkflowConfig,
                  contract: dict, train: list[dict], validation: list[dict],
-                 skill: str, test: list[dict] | None = None):
+                 skill: str, test: list[dict] | None = None,
+                 rules: RuleStore | None = None):
         self.backend, self.output, self.config = backend, output, config
         self.train, self.validation, self.test, self.initial = train, validation, test or [], skill
+        self.rules = rules
+        if self.rules is not None and self.rules.render_markdown() != skill:
+            raise ValueError("compiled Skill does not match the JSON rule source")
         if set(SkillSections.parse(skill).blocks) != set(SECTIONS):
             raise ValueError("seed needs all five marked sections")
         for name, rows in (("train", train), ("validation", validation), ("test", self.test)):
@@ -100,7 +105,8 @@ class WorkflowRunner:
             if ({normalize(r["question"]) for r in train} & {normalize(r["question"]) for r in self.test}) or \
                ({normalize(r["question"]) for r in validation} & {normalize(r["question"]) for r in self.test}):
                 raise ValueError("train/validation/test questions overlap")
-        self.contract = {"version": VERSION, "runtime": contract, "config": asdict(config),
+        runner_version = "workflow-runner-v2" if self.rules is not None else VERSION
+        self.contract = {"version": runner_version, "runtime": contract, "config": asdict(config),
                          "train": digest(train), "validation": digest(validation),
                          "test": digest(self.test) if self.test else None,
                          "initial_skill": skill_hash(skill)}
@@ -115,6 +121,36 @@ class WorkflowRunner:
         response = self.backend.optimize(stage, operation, payload, path.with_suffix(".audit.json"))
         write_json(path, {"request_hash": fingerprint, "request": payload, "response": response})
         return response
+
+    @staticmethod
+    def _deduplicate_rule_drafts(drafts: list[dict]) -> list[dict]:
+        """Remove byte-identical edits before asking the merge model.
+
+        Different edits targeting the same rule are deliberately retained: a
+        disagreement is useful evidence for ``no_change`` and must not be
+        hidden by a heuristic merge.  Only exact duplicates are removed.
+        """
+        output: list[dict] = []
+        for draft in drafts:
+            if not isinstance(draft, dict):
+                continue
+            edits = draft.get("edits")
+            if not isinstance(edits, list):
+                output.append(draft)
+                continue
+            seen: set[str] = set()
+            unique: list[dict] = []
+            for edit in edits:
+                if not isinstance(edit, dict):
+                    continue
+                key = json.dumps(edit, sort_keys=True, ensure_ascii=False)
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(edit)
+            normalized = dict(draft)
+            normalized["edits"] = unique
+            output.append(normalized)
+        return output
 
     def _roll(self, rows: list[dict], skill: str, split: str, purpose: str) -> list[dict]:
         key = digest({"ids": [r["id"] for r in rows], "skill": skill_hash(skill),
@@ -135,7 +171,7 @@ class WorkflowRunner:
         return result
 
     def _merge_drafts(self, stage: str, skill: str, drafts: list[dict],
-                      folder: Path) -> dict:
+                      folder: Path, *, rule_catalog: dict | None = None) -> dict:
         """Merge reflection results without sending an oversized request.
 
         A direct merge is retained for small inputs.  For a large set of
@@ -144,16 +180,24 @@ class WorkflowRunner:
         preventing the Meta request from containing every full trajectory.
         """
         def payload_size(items: list[dict]) -> int:
-            return len(json.dumps({"skill": skill, "drafts": items},
-                                  ensure_ascii=False))
+            payload = {"skill": skill, "drafts": items}
+            if rule_catalog is not None:
+                payload = {"rule_catalog": rule_catalog, "drafts": items}
+                return count_tokens(json.dumps(payload, ensure_ascii=False))
+            return len(json.dumps(payload, ensure_ascii=False))
 
-        if payload_size(drafts) <= self.config.max_reflection_input_chars:
-            return self._call(stage, "merge", {"skill": skill, "drafts": drafts},
+        limit = self.config.max_optimizer_input_tokens if rule_catalog is not None else self.config.max_reflection_input_chars
+
+        if payload_size(drafts) <= limit:
+            payload = {"skill": skill, "drafts": drafts}
+            if rule_catalog is not None:
+                payload = {"rule_catalog": rule_catalog, "drafts": drafts}
+            return self._call(stage, "merge", payload,
                               folder / "merge.json")
 
         current = drafts
         level = 0
-        while payload_size(current) > self.config.max_reflection_input_chars and len(current) > 1:
+        while payload_size(current) > limit and len(current) > 1:
             groups: list[list[dict]] = []
             offset = 0
             while offset < len(current):
@@ -161,27 +205,195 @@ class WorkflowRunner:
                 offset += 1
                 while offset < len(current):
                     trial = group + [current[offset]]
-                    if payload_size(trial) > self.config.max_reflection_input_chars:
+                    if payload_size(trial) > limit:
                         break
                     group = trial
                     offset += 1
                 groups.append(group)
             merged_groups = []
             for group_index, group in enumerate(groups):
-                merged_groups.append(self._call(
-                    stage, "summarize_merge",
-                    {"skill": skill, "drafts": group},
-                    folder / f"merge_summary_level_{level:02d}_{group_index:04d}.json"))
+                try:
+                    merged_groups.append(self._call(
+                        stage, "summarize_merge",
+                        ({"rule_catalog": rule_catalog, "drafts": group}
+                         if rule_catalog is not None else {"skill": skill, "drafts": group}),
+                        folder / f"merge_summary_level_{level:02d}_{group_index:04d}.json"))
+                except Exception as exc:
+                    # A single over-sized case must not stop the entire stage.
+                    # Keep an auditable no-op summary so later groups can still
+                    # be merged and the checkpoint remains resumable.
+                    merged_groups.append({"edits": [], "no_change": True,
+                                          "reason": f"summary_case_skipped: {exc}"}
+                                         if rule_catalog is not None else
+                                         {"sections": {}, "reason": f"summary_case_skipped: {exc}"})
             current = merged_groups
             level += 1
 
         if len(current) == 1:
+            if payload_size(current) > limit:
+                return ({"edits": [], "no_change": True,
+                         "reason": "merge_input_still_over_token_limit"}
+                        if rule_catalog is not None else
+                        {"sections": {}, "reason": "merge_input_still_over_limit"})
             return current[0]
-        return self._call(stage, "merge", {"skill": skill, "drafts": current},
+        payload = {"skill": skill, "drafts": current}
+        if rule_catalog is not None:
+            payload = {"rule_catalog": rule_catalog, "drafts": current}
+        return self._call(stage, "merge", payload,
                           folder / "merge_final.json")
+
+    def _update_rules(self, stage: str, index: int, skill: str, cases: list[dict],
+                      questions: list[dict], parent_rows: list[dict]) -> tuple[str, dict]:
+        """Apply the v2 bounded rule-edit workflow."""
+        folder = self.output / stage / f"batch_{index:04d}"
+        receipt = folder / "completed.json"
+        if receipt.exists():
+            saved = read_json(receipt)
+            if saved["parent_hash"] != skill_hash(skill):
+                raise ValueError("batch parent mismatch")
+            if saved.get("accepted") and saved.get("candidate_rules"):
+                self.rules = RuleStore.from_mapping(saved["candidate_rules"])
+            return saved["active_skill"], saved
+        assert self.rules is not None
+        parent_rules_mapping = self.rules.to_mapping()
+        rule_catalog = self.rules.optimizer_view(stage)
+        drafts: list[dict] = []
+        size = self.config.reflection_minibatch_size
+        offset = 0
+        request_index = 0
+        while offset < len(cases):
+            chunk_size = min(size, len(cases) - offset)
+            while chunk_size > 1:
+                payload = {"rule_catalog": rule_catalog, "cases": cases[offset:offset + chunk_size]}
+                if count_tokens(json.dumps(payload, ensure_ascii=False)) <= self.config.max_optimizer_input_tokens:
+                    break
+                chunk_size = max(1, chunk_size // 2)
+            payload = {"rule_catalog": rule_catalog, "cases": cases[offset:offset + chunk_size]}
+            if count_tokens(json.dumps(payload, ensure_ascii=False)) > self.config.max_optimizer_input_tokens:
+                case_ids = [case.get("id") for case in payload["cases"] if isinstance(case, dict)]
+                skipped = {"edits": [], "no_change": True,
+                           "reason": "case_skipped_input_too_large",
+                           "skipped_case_ids": case_ids}
+                write_json(folder / f"reflect_{request_index:04d}.skipped.json", {
+                    "stage": stage, "operation": "reflect", "request": payload,
+                    "reason": skipped["reason"]})
+                drafts.append(skipped)
+            else:
+                try:
+                    draft = self._call(stage, "reflect", payload,
+                                        folder / f"reflect_{request_index:04d}.json")
+                    if len(draft.get("edits") or []) > self.config.max_edits_per_reflection:
+                        drafts.append({"edits": [], "no_change": True,
+                                       "reason": "reflection_edit_limit_exceeded"})
+                    else:
+                        drafts.append(draft)
+                except Exception as exc:
+                    # Preserve the failure as a no-op and continue with other
+                    # minibatches. The receipt records the skipped case.
+                    drafts.append({"edits": [], "no_change": True,
+                                   "reason": f"reflection_case_skipped: {exc}"})
+                    write_json(folder / f"reflect_{request_index:04d}.error.json", {
+                        "stage": stage, "operation": "reflect", "request": payload,
+                        "error": str(exc)})
+            offset += chunk_size
+            request_index += 1
+
+        edits: list[dict] = []
+        reason = "no_comparison_cases" if not cases else "no_proposal"
+        audit: dict[str, Any] = {"applied": [], "changed_rule_ids": [], "no_change": True}
+        candidate_rules = self.rules
+        candidate = skill
+        if drafts:
+            drafts = self._deduplicate_rule_drafts(drafts)
+            try:
+                merged = self._merge_drafts(stage, skill, drafts, folder, rule_catalog=rule_catalog)
+            except Exception as exc:
+                merged = {"edits": [], "no_change": True,
+                          "reason": f"merge_failed: {exc}"}
+                write_json(folder / "merge.error.json", {
+                    "stage": stage, "operation": "merge", "error": str(exc)})
+            edits = merged.get("edits") or []
+            if merged.get("no_change") or not edits:
+                reason = merged.get("reason") or "no_change"
+            else:
+                if len(edits) > self.config.max_edits_per_batch:
+                    reason = "too_many_edits"
+                else:
+                    try:
+                        candidate_rules, audit = self.rules.apply_edits(
+                            edits,
+                            stage=stage,
+                            max_edits=self.config.max_edits_per_batch,
+                            max_delta_tokens=self.config.max_edit_tokens,
+                            max_trainable_tokens=self.config.max_trainable_skill_tokens,
+                        )
+                        candidate = candidate_rules.render_markdown()
+                        reason = merged.get("reason") or "candidate_created"
+                    except ValueError as exc:
+                        reason = f"edit_rejected: {exc}"
+                        candidate_rules = self.rules
+                        candidate = skill
+
+        validation_record = None
+        decision = None
+        candidate_rows: list[dict] = []
+        if candidate != skill:
+            baseline = self._roll(self.validation, skill, "validation", "validation")
+            proposed = self._roll(self.validation, candidate, "validation", "validation")
+            baseline_metrics = metrics(baseline)
+            proposed_metrics = metrics(proposed)
+            validation_record = {"baseline": asdict(baseline_metrics),
+                                 "candidate": asdict(proposed_metrics)}
+            observed = evaluate_candidate(baseline_metrics, proposed_metrics)
+            if self.config.use_validation_gate:
+                decision = asdict(observed)
+                reason = decision["reason"]
+            else:
+                decision = {"accepted": True,
+                            "reason": "validation_gate_disabled_candidate_adopted",
+                            "accuracy_delta": observed.accuracy_delta,
+                            "token_gain": observed.token_gain,
+                            "call_gain": observed.call_gain}
+                reason = decision["reason"]
+            if stage == "retrieval" and (decision["accepted"] or self.config.replay_rejected_candidates):
+                candidate_rows = self._roll(questions, candidate, "train", "meta_analysis_only")
+
+        accepted = decision is not None and decision["accepted"]
+        active = candidate if accepted else skill
+        if accepted:
+            self.rules = candidate_rules
+        saved = {
+            "stage": stage,
+            "index": index,
+            "parent_hash": skill_hash(skill),
+            "candidate_hash": skill_hash(candidate),
+            "candidate_skill": candidate,
+            "active_skill": active,
+            "active_hash": skill_hash(active),
+            "accepted": accepted,
+            "reason": reason,
+            "validation": decision,
+            "validation_metrics": validation_record,
+            "test_metrics": None,
+            "question_ids": [q["id"] for q in questions],
+            "parent_train": parent_rows,
+            "candidate_train": candidate_rows,
+            "edits": edits,
+            "edit_audit": audit,
+            "changed_rule_ids": audit.get("changed_rule_ids", []),
+            "parent_rules": parent_rules_mapping,
+            "candidate_rules": candidate_rules.to_mapping(),
+            "skill_tokens_before": audit.get("skill_tokens_before", self.rules.trainable_token_count()),
+            "skill_tokens_after": audit.get("skill_tokens_after", candidate_rules.trainable_token_count()),
+            "optimizer_input_token_limit": self.config.max_optimizer_input_tokens,
+        }
+        write_json(receipt, saved)
+        return active, saved
 
     def _update(self, stage: str, index: int, skill: str, cases: list[dict],
                 questions: list[dict], parent_rows: list[dict]) -> tuple[str, dict]:
+        if self.rules is not None:
+            return self._update_rules(stage, index, skill, cases, questions, parent_rows)
         folder = self.output / stage / f"batch_{index:04d}"
         receipt = folder / "completed.json"
         if receipt.exists():
@@ -277,6 +489,8 @@ class WorkflowRunner:
         retrieval_receipts, receipts = [], []
         stages = ("retrieval", "meta", "answer") if self.config.enable_meta else ("retrieval", "answer")
         for stage in stages:
+            if stage == "answer" and self.rules is not None and not self.config.enable_answer_updates:
+                continue
             for index, questions in enumerate(batches):
                 if stage == "meta":
                     previous = retrieval_receipts[index]
@@ -285,7 +499,11 @@ class WorkflowRunner:
                     for a, b in pairs:
                         if a["id"] != b["id"] or a["split"] != "train" or b["split"] != "train":
                             raise ValueError("Meta requires same-question TRAIN branches")
-                        cases.append({"match_level": "same_question", "branch_a": a["view"],
+                        cases.append({"match_level": "same_question",
+                                      "train_batch_id": f"batch_{index:04d}",
+                                      "parent_skill_hash": previous["parent_hash"],
+                                      "candidate_skill_hash": previous["candidate_hash"],
+                                      "branch_a": a["view"],
                                       "branch_b": b["view"], "outcomes": [a["correct"], b["correct"]],
                                       "costs": [[a["tokens"], a["calls"]], [b["tokens"], b["calls"]]],
                                       "causal_claim": False})

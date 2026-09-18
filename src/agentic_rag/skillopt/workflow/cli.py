@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import WorkflowConfig
 from .runner import WorkflowRunner, digest, read_json
+from .rule_store import RuleStore
 
 
 def main(argv=None):
@@ -28,7 +29,13 @@ def main(argv=None):
     for rows in (train, val, test):
         if any(not all(key in r for key in ("id", "question", "answer", "scope_id")) for r in rows):
             raise ValueError("each question needs id, question, answer, scope_id")
-    seed = resolve(config["skill"]).read_text()
+    rules = None
+    if config.get("skill_rules"):
+        rules_path = resolve(config["skill_rules"])
+        rules = RuleStore.from_json(rules_path)
+        seed = rules.render_markdown()
+    else:
+        seed = resolve(config["skill"]).read_text()
     workflow = WorkflowConfig.from_mapping(config.get("workflow", {}))
     source_dir = Path(__file__).parent
     # Include all runtime source files, not just the new runner, in lineage.
@@ -37,6 +44,9 @@ def main(argv=None):
     contract = {"demo": args.demo, "settings": config,
                 "source_hash": digest({str(p.relative_to(source_dir.parents[1])):
                     hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files})}
+    if rules is not None:
+        contract["skill_rules_hash"] = rules.json_hash()
+        contract["compiled_skill_hash"] = hashlib.sha256(seed.encode()).hexdigest()
     backend = None
     if args.demo:
         from .demo import DemoBackend
@@ -76,7 +86,7 @@ def main(argv=None):
             backend = OllamaBackend(substrate=substrate, agent=agent, optimizer=optimizer,
                                     judge=judge, dataset=config["dataset"])
     runner = WorkflowRunner(backend=backend, output=resolve(config["output"]), config=workflow,
-        contract=contract, train=train, validation=val, test=test, skill=seed)
+        contract=contract, train=train, validation=val, test=test, skill=seed, rules=rules)
     if args.dry_run:
         print(json.dumps({"status": "validated", "train": len(train), "validation": len(val),
                           "test": len(test),

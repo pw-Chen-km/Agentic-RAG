@@ -12,6 +12,17 @@ class DemoBackend:
                 for q in questions]
 
     def optimize(self, stage, operation, payload, output):
+        if "rule_catalog" in payload:
+            rules = payload["rule_catalog"].get("rules", [])
+            target = next((r for r in rules if r["rule_id"] == "R05"), None)
+            if target is not None and operation in {"reflect", "merge", "summarize_merge"}:
+                rule = dict(target)
+                rule["stop_or_recovery"] = "Use a different legal path when no new information is obtained."
+                return {"edits": [{"operation": "replace", "rule_id": "R05",
+                                    "rule": rule, "reason": "FAKE demo edit",
+                                    "supporting_case_ids": []}],
+                        "no_change": False, "reason": "FAKE demo proposal; not research evidence"}
+            return {"edits": [], "no_change": True, "reason": "FAKE demo no change"}
         section = "answer_policy" if stage == "answer" else "recovery_policy"
         return {"sections": {section: "Use a different available retrieval path when no new evidence is obtained."}
                 if stage != "answer" else {section: "Finish once legal evidence covers all requested conditions."},
