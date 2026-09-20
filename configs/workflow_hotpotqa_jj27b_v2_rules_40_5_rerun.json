@@ -1,0 +1,25 @@
+{
+  "dataset": "hotpotqa",
+  "train": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/skillopt_source3_transfer5_fresh40_8_seed42_20260903/prepared/hotpotqa/train.jsonl",
+  "validation": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/skillopt_source3_transfer5_fresh40_8_seed42_20260903/prepared/hotpotqa/validation.jsonl",
+  "test": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/skillopt_source3_transfer5_fresh40_8_seed42_20260903/prepared/hotpotqa/test.jsonl",
+  "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/hotpotqa_provenance/substrate",
+  "agent_config": "hotpotqa_workflow_jj27b.yaml",
+  "skill_rules": "../skills/workflow_rules_v2.json",
+  "output": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/workflow_skillopt_hotpotqa_jj27b_v2_rules_40_5_rerun_ruleid",
+  "optimizer": {"provider":"ollama", "model":"qwen3.8:27b-q4_K_M", "host":"http://127.0.0.1:11440", "temperature":0, "think":true, "timeout_seconds":900, "num_ctx":65536},
+  "judge": {"provider":"ollama", "model":"qwen3.8:27b-q4_K_M", "host":"http://127.0.0.1:11440", "temperature":0, "think":false, "timeout_seconds":900, "num_ctx":65536},
+  "workflow": {
+    "rollout_batch_size":40,
+    "reflection_minibatch_size":5,
+    "replay_rejected_candidates":true,
+    "enable_meta":true,
+    "enable_answer_updates":false,
+    "use_validation_gate":true,
+    "max_optimizer_input_tokens":16000,
+    "max_edits_per_reflection":2,
+    "max_edits_per_batch":2,
+    "max_edit_tokens":250,
+    "max_trainable_skill_tokens":1500
+  }
+}
