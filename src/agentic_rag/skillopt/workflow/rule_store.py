@@ -322,7 +322,22 @@ class RuleStore:
             operation = raw.get("operation")
             if operation not in {"add", "replace", "delete"}:
                 raise ValueError(f"invalid operation: {operation}")
-            rule_id = raw.get("rule_id")
+            # Early v2 optimizer responses put the identifier inside the
+            # replacement rule (``rule.rule_id``), while the wire contract
+            # describes it on the edit itself.  Accept either location, but
+            # never silently choose between conflicting values.  This keeps
+            # old responses recoverable without allowing an edit to target a
+            # different rule than the replacement body claims.
+            nested_rule = raw.get("rule")
+            nested_rule_id = (nested_rule.get("rule_id")
+                              if isinstance(nested_rule, Mapping) else None)
+            outer_rule_id = raw.get("rule_id")
+            if outer_rule_id is not None and nested_rule_id is not None and \
+               outer_rule_id != nested_rule_id:
+                raise ValueError(
+                    f"conflicting rule_id: edit={outer_rule_id!r}, rule={nested_rule_id!r}"
+                )
+            rule_id = outer_rule_id if outer_rule_id is not None else nested_rule_id
             if rule_id is not None and (not isinstance(rule_id, str) or not RULE_ID_RE.fullmatch(rule_id)):
                 raise ValueError("invalid edit rule_id")
             if operation == "add":

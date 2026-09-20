@@ -42,6 +42,27 @@ def test_stage_scope_and_edit_limits():
         rules.apply_edits([{**replacement, "rule_id": "R99"}], stage="retrieval")
 
 
+def test_nested_rule_id_is_accepted_and_conflicts_are_rejected():
+    rules = store()
+    nested_only = {
+        "operation": "replace", "section": "recovery_policy",
+        "rule": {"rule_id": "R05", "title": "nested id", "when": "no progress",
+                  "action_sequence": ["READ"], "stop_or_recovery": "change path",
+                  "exceptions": []},
+    }
+    candidate, audit = rules.apply_edits([nested_only], stage="retrieval")
+    assert candidate.rule_index()["R05"].title == "nested id"
+    assert audit["changed_rule_ids"] == ["R05"]
+
+    matching = dict(nested_only, rule_id="R05")
+    candidate, _ = rules.apply_edits([matching], stage="retrieval")
+    assert candidate.rule_index()["R05"].title == "nested id"
+
+    conflicting = dict(nested_only, rule_id="R06")
+    with pytest.raises(ValueError, match="conflicting rule_id"):
+        rules.apply_edits([conflicting], stage="retrieval")
+
+
 def test_add_duplicate_and_semantic_duplicate_are_rejected():
     rules = store()
     duplicate_id = {"operation": "add", "rule_id": "R05", "section": "recovery_policy",
@@ -50,7 +71,7 @@ def test_add_duplicate_and_semantic_duplicate_are_rejected():
     with pytest.raises(ValueError, match="existing"):
         rules.apply_edits([duplicate_id], stage="retrieval")
     duplicate_content = {"operation": "add", "rule_id": "R08", "section": "recovery_policy",
-                         "rule": rules.rule_index()["R05"].to_mapping()}
+                         "rule": {**rules.rule_index()["R05"].to_mapping(), "rule_id": "R08"}}
     with pytest.raises(ValueError, match="duplicate semantic"):
         rules.apply_edits([duplicate_content], stage="retrieval")
 
