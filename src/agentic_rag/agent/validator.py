@@ -178,10 +178,10 @@ class DecisionValidator:
                     return "reference_not_evidence", "FINISH Sentence is not eligible evidence"
             elif isinstance(ref, ChunkRef):
                 if (
-                    ref.id not in state.read_chunk_ids
+                    ref.id not in state.visible_chunk_ids
                     or ref.id not in self.substrate.chunk_ids_by_scope[scope_id]
                 ):
-                    return "reference_not_evidence", "FINISH Chunk has not been READ"
+                    return "reference_not_evidence", "FINISH Chunk has not been shown"
         return None
 
     @staticmethod

@@ -19,6 +19,7 @@ def test_interface_capability_isolation(built_substrate: Path) -> None:
         ("C1", {"DENSE->CHUNK", "DENSE->SENTENCE"}, []),
         ("C2", {"DENSE->CHUNK"}, ["ENTITY_MENTIONED_IN_CHUNK"]),
         ("C3", {"DENSE->CHUNK"}, ["ENTITY_MENTIONED_IN_SENTENCE"]),
+        ("C5", {"DENSE->CHUNK", "DENSE->SENTENCE"}, ["ENTITY_MENTIONED_IN_CHUNK"]),
         ("C4", {"DENSE->CHUNK", "DENSE->SENTENCE"}, ["ENTITY_MENTIONED_IN_SENTENCE"]),
         ("A1", {"DENSE->CHUNK", "DENSE->SENTENCE"}, []),
     ):

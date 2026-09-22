@@ -59,6 +59,7 @@ class AgentHarness:
             enabled_expansions,
             show_available_action_options=config.show_available_action_options,
             use_state_conditioned_schema=config.use_state_conditioned_schema,
+            require_evidence_assessment=config.require_evidence_assessment,
             interface_contract=self.interface_contract,
         )
         self.controller = AgentController(
@@ -198,6 +199,9 @@ class AgentHarness:
                         else None
                     ),
                     "decision_schema_sha256": step.decision_schema_sha256,
+                    "decision_schema": step.decision_schema,
+                    "tool_schema_sha256": step.provider_metadata.get("tool_schema_sha256"),
+                    "tool_definitions": step.tool_definitions,
                     "validation_status": step.validation_status.value,
                     "validation_error": step.validation_error,
                     "observation": (
@@ -206,6 +210,8 @@ class AgentHarness:
                         else None
                     ),
                     "agent_visible_observation": step.agent_visible_observation,
+                    "visible_source_spans": step.visible_source_spans,
+                    "telemetry": step.telemetry,
                     "usage": step.usage.model_dump(mode="json"),
                 }
             )
@@ -245,7 +251,9 @@ class AgentHarness:
                     "question",
                     "action_protocol",
                     *(
-                        ["available_action_options"]
+                        ["available_actions_this_turn", "reference_rules", "decision_format"]
+                        if self.interface_contract is not None
+                        else ["available_action_options"]
                         if self.config.show_available_action_options
                         else []
                     ),
@@ -257,11 +265,18 @@ class AgentHarness:
                     "remaining_budget",
                 ],
                 "budget_representation": "compact_text",
+                "action_guide_version": (
+                    "sectioned-context-v5-action-guide"
+                    if self.interface_contract is not None
+                    else None
+                ),
                 "stable_node_ids_visible_to_policy": False,
                 "selection_semantics": "automatic_semantic_memory",
             },
             "runtime_components": {
                 "policy_client": type(self.policy).__name__,
+                "policy_protocol": "constrained_single_decision_v4",
+                "one_decision_per_turn": True,
                 "state_manager": "EpisodeStateManager",
                 "controller_role": "stateless_loop_orchestrator",
             },
@@ -278,11 +293,16 @@ class AgentHarness:
 
 
 def _messages_for_role(messages: list[Message], role: str) -> str:
-    return "\n\n".join(message.content for message in messages if message.role == role)
+    return "\n\n".join(
+        message.content or "" for message in messages if message.role == role
+    )
 
 
 def _first_message_for_role(messages: list[Message], role: str) -> str:
-    return next((message.content for message in messages if message.role == role), "")
+    return next(
+        (message.content or "" for message in messages if message.role == role),
+        "",
+    )
 
 
 def _policy_from_config(config: AgentConfig) -> PolicyClient:

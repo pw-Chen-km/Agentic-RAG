@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 
 from agentic_rag.evaluation.graphrag_bench import GraphRAGSemanticEvaluator, OllamaSemanticJudge
+from agentic_rag.evaluation.question_identity import question_lookup
 from agentic_rag.substrate.storage import EvaluationSidecars
 
 
@@ -28,7 +29,7 @@ def main() -> None:
         raw = yaml.safe_load(args.judge_config.read_text(encoding="utf-8")) or {}
         args.model = raw.get("model", args.model); args.host = raw.get("host", args.host); args.embedding_model = raw.get("embedding_model", args.embedding_model)
     sidecars = EvaluationSidecars.open(args.substrate)
-    questions = {key: item for item in sidecars.benchmark_questions for key in (item.question_id, item.source_question_id or item.question_id)}
+    questions = question_lookup(sidecars.benchmark_questions)
     judge = GraphRAGSemanticEvaluator(OllamaSemanticJudge(model=args.model, host=args.host, embedding_model=args.embedding_model))
     args.output.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -40,7 +41,7 @@ def main() -> None:
         qid = episode_id.split("--", 1)[-1]
         question = questions.get(qid)
         if question is None:
-            continue
+            raise ValueError(f"unresolved or ambiguous episode question ID: {qid}")
         visible = [span for step in episode.get("trajectory", []) for span in step.get("visible_source_spans", []) if span.get("visible") is True]
         payload = judge.evaluate(question=asdict(question), answer=episode.get("answer"), contexts=[str(s.get("text") or s.get("source_text") or "") for s in visible], evidence=question.evidence)
         payload.update({"episode_id": episode_id, "question_id": qid, "condition": episode_id.split("--", 1)[0]})

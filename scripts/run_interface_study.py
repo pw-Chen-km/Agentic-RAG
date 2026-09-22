@@ -1,4 +1,4 @@
-"""Run the paired C0--C4 HotpotQA interface pilot with resume safety."""
+"""Run the paired Agentic RAG interface study with resume safety."""
 
 from __future__ import annotations
 
@@ -17,10 +17,11 @@ from agentic_rag.agent.harness import _policy_from_config
 from agentic_rag.agent.interface import get_interface_contract
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.evaluation.interface_study import aggregate, evaluate_episode
+from agentic_rag.evaluation.question_identity import IDENTITY_VERSION, prepare_question_rows
 from agentic_rag.substrate.storage import EvaluationSidecars, Substrate
 
 
-CONDITIONS = ("C0", "C1", "C2", "C3", "C4")
+CONDITIONS = ("C0", "C1", "C2", "C3", "C5", "C4", "A1")
 
 
 def sha256(path: Path) -> str:
@@ -40,10 +41,25 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         for item in (
             Path("src/agentic_rag/agent/observation_projection.py"),
             Path("src/agentic_rag/agent/interface.py"),
+            Path("src/agentic_rag/agent/interface_action_catalog.py"),
+            Path("src/agentic_rag/agent/context.py"),
+            Path("src/agentic_rag/agent/context_rendering.py"),
+            Path("src/agentic_rag/agent/state_management.py"),
         )
     )
-    return {
-        "manifest_version": "interface-study-run-v1",
+    provider_protocol_bytes = b"".join(
+        (repo_root / item).read_bytes()
+        for item in (
+            Path("src/agentic_rag/agent/tool_calling.py"),
+            Path("src/agentic_rag/agent/action_schema.py"),
+            Path("src/agentic_rag/agent/models.py"),
+            Path("src/agentic_rag/agent/providers/openai_compatible.py"),
+            Path("src/agentic_rag/agent/providers/ollama.py"),
+        )
+    )
+    substrate_manifest_data = json.loads((args.substrate / "manifest.json").read_text(encoding="utf-8"))
+    manifest = {
+        "manifest_version": "interface-study-run-v2",
         "dataset": args.dataset,
         "seed": args.seed,
         "question_limit": args.limit,
@@ -59,8 +75,22 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         "skill": args.skill.resolve().as_posix(),
         "skill_sha256": sha256(args.skill),
         "judge_config_sha256": sha256(args.judge_config) if args.judge_config else None,
-        "renderer_version": "observation-projector-v1",
+        "evaluator_code_sha256": sha256(repo_root / "src/agentic_rag/evaluation/graphrag_bench.py"),
+        "semantic_metric_version": "graphrag-benchmark-logic-v1",
+        "prompt_template_digest": hashlib.sha256(
+            (repo_root / "src/agentic_rag/evaluation/graphrag_bench.py").read_bytes()
+        ).hexdigest(),
+        "embedding_model_identity": substrate_manifest_data.get("embedding_model"),
+        "renderer_version": "sectioned-context-v5-action-guide",
         "renderer_sha256": hashlib.sha256(renderer_bytes).hexdigest(),
+        "provider_protocol": "constrained-single-decision-v4",
+        "require_evidence_assessment": config.require_evidence_assessment,
+        "target_prompt_digest": hashlib.sha256(
+            (repo_root / "src/agentic_rag/agent/interface.py").read_bytes()
+            + (repo_root / "src/agentic_rag/agent/interface_action_catalog.py").read_bytes()
+            + args.skill.read_bytes()
+        ).hexdigest(),
+        "provider_protocol_sha256": hashlib.sha256(provider_protocol_bytes).hexdigest(),
         "budget": {
             "normal_policy_decisions": 15,
             "finalize_calls": 1,
@@ -70,6 +100,13 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         },
         "contracts": {name: get_interface_contract(name).compile() for name in conditions},
     }
+    if args.dataset in {"novel", "medical"}:
+        manifest["question_identity_version"] = IDENTITY_VERSION
+        manifest["question_identity_sha256"] = sha256(
+            repo_root / "src/agentic_rag/evaluation/question_identity.py"
+        )
+        manifest["runner_sha256"] = sha256(Path(__file__))
+    return manifest
 
 
 def _load_progress(path: Path) -> dict[str, dict[str, Any]]:
@@ -89,9 +126,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("at least one condition is required")
     for name in conditions:
         get_interface_contract(name)
+    questions = json.loads(args.questions.read_text(encoding="utf-8"))
+    if not isinstance(questions, list):
+        raise ValueError("pilot questions must be a JSON array")
+    sidecars = EvaluationSidecars.open(args.substrate)
+    substrate_manifest = json.loads((args.substrate / "manifest.json").read_text(encoding="utf-8"))
+    embedding_model = substrate_manifest.get("embedding_model")
+    embedding_name = embedding_model.get("name") if isinstance(embedding_model, dict) else embedding_model
+    if embedding_name != "qwen3-embedding:4b":
+        raise ValueError(
+            "v2 run requires a substrate built with qwen3-embedding:4b; "
+            f"found {embedding_name!r}. Validate/rebuild the remote substrate first."
+        )
+    questions = prepare_question_rows(questions, sidecars.benchmark_questions, args.dataset)
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = _manifest(args, AgentConfig.from_yaml(args.config), conditions)
     manifest_path = args.output / "run_manifest.json"
+    if args.resume and not manifest_path.exists():
+        raise ValueError("resume requested but run_manifest.json does not exist")
     if manifest_path.exists():
         previous = json.loads(manifest_path.read_text(encoding="utf-8"))
         if previous != manifest:
@@ -99,10 +151,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     else:
         write_json(manifest_path, manifest)
 
-    questions = json.loads(args.questions.read_text(encoding="utf-8"))
-    if not isinstance(questions, list):
-        raise ValueError("pilot questions must be a JSON array")
-    sidecars = EvaluationSidecars.open(args.substrate)
     gold = [asdict(item) for item in sidecars.gold_support]
     base_config = AgentConfig.from_yaml(args.config)
     if (
@@ -176,6 +224,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "error_message": str(exc),
                 "wall_time_seconds": time.perf_counter() - started,
             }
+        if args.dataset in {"novel", "medical"}:
+            scored.update({key: row[key] for key in (
+                "source_question_id", "source_row_index", "substrate_question_id"
+            )})
         with progress_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(scored, ensure_ascii=False, sort_keys=True) + "\n")
         summaries.append(scored)
@@ -193,11 +245,15 @@ def main() -> None:
     parser.add_argument("--substrate", type=Path, required=True)
     parser.add_argument("--questions", type=Path, required=True)
     parser.add_argument("--source-manifest", type=Path, required=True)
-    parser.add_argument("--config", type=Path, default=Path("configs/interface_study_qwen.yaml"))
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/interface_study_v2_qwen38_vllm.yaml"),
+    )
     parser.add_argument("--skill", type=Path, default=Path("skills/interface_study.md"))
-    parser.add_argument("--output", type=Path, default=Path("runs/interface-study-v1"))
+    parser.add_argument("--output", type=Path, default=Path("runs/interface-study-v2"))
     parser.add_argument("--seed", type=int, default=20260805)
-    parser.add_argument("--conditions", nargs="+", default=list(CONDITIONS), choices=("C0", "C1", "C2", "C3", "C4", "A1"))
+    parser.add_argument("--conditions", nargs="+", default=list(CONDITIONS), choices=CONDITIONS)
     parser.add_argument("--dataset", default="hotpotqa")
     parser.add_argument("--semantic-eval", action="store_true")
     parser.add_argument("--judge-model", default="qwen3.5:4b")

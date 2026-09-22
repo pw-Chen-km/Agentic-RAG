@@ -26,7 +26,7 @@ from agentic_rag.substrate.models import (
     EntityHit,
     SearchHit,
     SentenceHit,
-    SentencePreview,
+    SentenceResult,
 )
 from agentic_rag.substrate.storage import Substrate
 from agentic_rag.substrate.ranking import RankingService
@@ -238,23 +238,23 @@ class Retriever:
     ) -> ChunkHit:
         chunk = self.substrate.chunk_by_id[chunk_id]
         document = self.substrate.document_by_id[chunk.doc_id]
-        contained = self.substrate.sentences_by_chunk.get(chunk_id, [])
-        ranked_sentences = sorted(
-            contained,
-            key=lambda item: (
-                -float(sentence_scores.get(item.sentence_id, 0.0)),
-                item.sentence_id,
-            ),
-        )[:2]
+        sentences = [
+            SentenceResult(
+                sentence_id=item.sentence_id,
+                text=item.text,
+                parent_chunk_id=chunk.chunk_id,
+                document_id=document.doc_id,
+                title=document.title,
+            )
+            for item in self.substrate.sentences_by_chunk.get(chunk_id, [])
+        ]
         return ChunkHit(
             chunk_id=chunk_id,
             score=score,
             doc_id=document.doc_id,
             title=document.title,
-            previews=[
-                SentencePreview(sentence_id=item.sentence_id, text=item.text)
-                for item in ranked_sentences
-            ],
+            text=chunk.text,
+            sentences=sentences,
         )
 
     def _entity_hit(

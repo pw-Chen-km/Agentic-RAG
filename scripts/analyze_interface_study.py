@@ -12,7 +12,7 @@ from agentic_rag.evaluation.interface_study import aggregate
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run", type=Path, default=Path("runs/interface-study-v1"))
+    parser.add_argument("--run", type=Path, default=Path("runs/interface-study-v2"))
     args = parser.parse_args()
     progress = args.run / "progress.jsonl"
     rows = [json.loads(line) for line in progress.read_text(encoding="utf-8").splitlines() if line.strip()]

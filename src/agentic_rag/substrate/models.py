@@ -249,7 +249,8 @@ class ChunkHit(ManifestModel):
     score: float
     doc_id: str
     title: str | None
-    previews: list[SentencePreview]
+    text: str
+    sentences: list[SentenceResult]
 
 
 class EntityHit(ManifestModel):

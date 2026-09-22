@@ -14,6 +14,7 @@ from enum import StrEnum
 from typing import Any, Literal
 
 from agentic_rag.agent.models import ExpansionKind, SearchMethod, SearchTarget
+from agentic_rag.agent.interface_action_catalog import COMMON_SEARCH_MECHANISM
 
 
 class EntityContinuation(StrEnum):
@@ -33,6 +34,7 @@ class InterfaceContract:
     entity_continuation: EntityContinuation
     top_k: int = 5
     read_full_chunk: bool = True
+    expose_read_action: bool = False
 
     @classmethod
     def from_name(cls, name: str) -> "InterfaceContract":
@@ -43,7 +45,7 @@ class InterfaceContract:
         return get_interface_contract(name)
 
     def __post_init__(self) -> None:
-        if self.name not in {"C0", "C1", "C2", "C3", "C4", "A1"}:
+        if self.name not in {"C0", "C1", "C2", "C3", "C4", "C5", "A1"}:
             raise ValueError(f"unknown interface condition: {self.name}")
         if self.top_k != 5:
             raise ValueError("the interface study fixes top_k=5")
@@ -82,22 +84,12 @@ class InterfaceContract:
             "enabled_expansions": [item.value for item in self.enabled_expansions],
             "top_k": self.top_k,
             "read_full_chunk": self.read_full_chunk,
+            "expose_read_action": self.expose_read_action,
         }
 
     @property
     def protocol(self) -> str:
-        search = [f"{m.value} -> {t.value}" for m, t in sorted(self.legal_search_pairs, key=lambda p: (p[0].value, p[1].value))]
-        expand = ", ".join(item.value for item in self.enabled_expansions) or "none"
-        annotation = "visible offline entity mentions" if self.entity_annotation else "no entity annotations"
-        return (
-            "Agentic RAG interface study contract " + self.name + ".\n"
-            "Return exactly one structured PolicyDecision with an Assessment and one action.\n"
-            f"SEARCH pairs: {', '.join(search)}. top_k is fixed at 5.\n"
-            f"Entity annotations: {annotation}. EXPAND kinds: {expand}.\n"
-            "READ returns a complete chunk and may be used only once per chunk.\n"
-            "FINISH evidence must copy visible S# references or a complete READ C# reference.\n"
-            "Never invent references, entity IDs, hidden evidence, or unsupported actions."
-        )
+        return COMMON_SEARCH_MECHANISM
 
     def compile(self) -> dict[str, Any]:
         """Return the single serializable contract source used by all layers."""
@@ -106,7 +98,7 @@ class InterfaceContract:
             "capabilities": self.capability_view,
             "protocol": self.protocol,
             "validator_allowlist": self.capability_view["legal_search_pairs"],
-            "artifact_contract": "agentic-rag-interface-study-v1",
+            "artifact_contract": "agentic-rag-interface-study-v2",
         }
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         return {**payload, "digest": hashlib.sha256(encoded).hexdigest()}
@@ -125,6 +117,7 @@ INTERFACE_CONTRACTS: dict[str, InterfaceContract] = {
     "C1": InterfaceContract("C1", True, False, EntityContinuation.NONE),
     "C2": InterfaceContract("C2", False, True, EntityContinuation.CHUNK),
     "C3": InterfaceContract("C3", False, True, EntityContinuation.SENTENCE),
+    "C5": InterfaceContract("C5", True, True, EntityContinuation.CHUNK),
     "C4": InterfaceContract("C4", True, True, EntityContinuation.SENTENCE),
     "A1": InterfaceContract("A1", True, True, EntityContinuation.ANNOTATION_ONLY),
 }

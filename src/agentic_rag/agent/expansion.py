@@ -115,17 +115,18 @@ class EntityResult(ExpansionRecord):
 
 
 class ChunkResult(ExpansionRecord):
-    """An unread Chunk handle plus at most two navigation-only previews."""
+    """A complete passage returned by local navigation."""
 
     target: Literal["CHUNK"] = "CHUNK"
     chunk_id: str
     score: float
     document_id: str
     title: str | None
-    navigation_only: Literal[True] = True
-    evidence_eligible: Literal[False] = False
-    content_read: Literal[False] = False
-    previews: list[NavigationSentencePreview] = Field(default_factory=list)
+    text: str
+    sentences: list[SentenceResult] = Field(default_factory=list)
+    navigation_only: Literal[False] = False
+    evidence_eligible: Literal[True] = True
+    content_read: Literal[True] = True
     paths: list[ExpansionPath] = Field(default_factory=list)
 
 
@@ -813,31 +814,26 @@ class ExpansionEngine:
             sentence.sentence_id
             for sentence in self.substrate.sentences_by_chunk.get(chunk_id, [])
         ]
-        ranked_previews = self._rank_candidates(
-            {
-                sentence_id: self._sentence_ranking_text(sentence_id)
-                for sentence_id in sentence_ids
-            },
-            query,
-        )[:2]
+        sentences = [
+            self._sentence_result(
+                sentence_id,
+                0.0,
+                [
+                    ExpansionPath(
+                        relation="CONTAINS",
+                        node_ids=[chunk_id, sentence_id],
+                    )
+                ],
+            )
+            for sentence_id in sentence_ids
+        ]
         return ChunkResult(
             chunk_id=chunk.chunk_id,
             score=score,
             document_id=document.doc_id,
             title=document.title,
-            previews=[
-                self._sentence_preview(
-                    sentence_id,
-                    sentence_score,
-                    [
-                        ExpansionPath(
-                            relation="CONTAINS",
-                            node_ids=[chunk_id, sentence_id],
-                        )
-                    ],
-                )
-                for sentence_id, sentence_score in ranked_previews
-            ],
+            text=chunk.text,
+            sentences=sentences,
             paths=list(paths),
         )
 

@@ -118,6 +118,7 @@ class AgentConfig(ConfigModel):
     enabled_expansions: tuple[ExpansionKind, ...] = DEFAULT_ENABLED_EXPANSIONS
     show_available_action_options: bool = True
     use_state_conditioned_schema: bool = True
+    require_evidence_assessment: bool = True
     interface: str | None = None
     policy: PolicyProviderConfig = Field(default_factory=OllamaPolicyConfig)
 

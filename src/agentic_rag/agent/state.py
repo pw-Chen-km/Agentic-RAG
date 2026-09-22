@@ -12,6 +12,7 @@ _VISIBILITY_FIELDS = (
     "visible_entity_ids",
     "visible_sentence_ids",
     "visible_chunk_ids",
+    "visible_passage_ids",
     "eligible_sentence_ids",
     "read_chunk_ids",
 )

@@ -68,9 +68,9 @@ class EvidenceResolver:
                 raise NodeNotFoundError(
                     f"Chunk {ref.id} is not present in scope {scope_id}"
                 )
-            if ref.id not in state.read_chunk_ids:
+            if ref.id not in state.visible_chunk_ids:
                 raise EvidenceEligibilityError(
-                    f"Chunk must be READ before evidence resolution: {ref.id}"
+                    f"Chunk must be shown before evidence resolution: {ref.id}"
                 )
             chunk = self.substrate.chunk_by_id[ref.id]
             document = self.substrate.document_by_id[chunk.doc_id]

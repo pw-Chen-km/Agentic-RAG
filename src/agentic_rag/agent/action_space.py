@@ -57,10 +57,12 @@ class AvailableActionSpaceBuilder:
             for ref, item in references.typed_refs.items()
             if item.can_use_as_evidence
         )
+        finish_available = self.interface_contract is not None or bool(evidence_refs)
         if mode is ActionSpaceMode.BUDGET_FINALIZE:
             return AvailableActionSpace(
                 mode=mode,
                 finish_evidence_refs=tuple(evidence_refs),
+                finish_available=finish_available,
             )
 
         retrieval_open = (
@@ -72,6 +74,7 @@ class AvailableActionSpaceBuilder:
             return AvailableActionSpace(
                 mode=mode,
                 finish_evidence_refs=tuple(evidence_refs),
+                finish_available=finish_available,
             )
 
         pairs = (
@@ -107,8 +110,13 @@ class AvailableActionSpaceBuilder:
                 )
             )
 
-        read_refs = _sorted_refs(
-            ref for ref, item in references.typed_refs.items() if item.can_read
+        read_refs = (
+            _sorted_refs(
+                ref for ref, item in references.typed_refs.items() if item.can_read
+            )
+            if self.interface_contract is None
+            or self.interface_contract.expose_read_action
+            else []
         )
         return AvailableActionSpace(
             mode=mode,
@@ -116,6 +124,7 @@ class AvailableActionSpaceBuilder:
             expand_options=tuple(expand_options),
             read_refs=tuple(read_refs),
             finish_evidence_refs=tuple(evidence_refs),
+            finish_available=finish_available,
         )
 
 

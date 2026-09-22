@@ -36,6 +36,10 @@ class PolicyResponseError(PolicyError):
     pass
 
 
+class PolicyStateError(PolicyResponseError):
+    """Well-formed native call refers to a value outside the current state."""
+
+
 class PolicyTransportError(PolicyError):
     pass
 
@@ -49,9 +53,10 @@ class PolicyClient(Protocol):
 
     def decide(
         self,
-        messages: Sequence[Message | dict[str, str]],
+        messages: Sequence[Message | dict[str, Any]],
         *,
         decision_format: type[BaseModel] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> PolicyDecision:
         """Return exactly one assessment-and-action decision."""
 
@@ -95,7 +100,7 @@ class _WireFinishAction(AgentModel):
     type: Literal["FINISH"]
     answer: str = Field(min_length=1)
     evidence_refs: list[str] = Field(
-        min_length=1,
+        min_length=0,
         max_length=20,
         description="Visible complete S# or read C# refs",
     )
@@ -119,9 +124,10 @@ class ScriptedPolicy:
 
     def decide(
         self,
-        messages: Sequence[Message | dict[str, str]],
+        messages: Sequence[Message | dict[str, Any]],
         *,
         decision_format: type[BaseModel] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> PolicyDecision:
         self.last_usage = Usage(policy_calls=1)
         self.calls.append(list(messages))

@@ -25,6 +25,7 @@ from agentic_rag.agent.policy import (
     PolicyClient,
     PolicyConfigurationError,
     PolicyResponseError,
+    PolicyStateError,
     PolicyTransportError,
 )
 from agentic_rag.agent.references import ReferenceResolutionError, resolve_decision
@@ -116,14 +117,20 @@ class AgentController:
                 decision = self.policy.decide(
                     built.messages,
                     decision_format=built.decision_format,
+                    tools=built.provider_tools,
                 )
             except PolicyResponseError as exc:
                 usage = self._policy_usage()
                 observation = Observation(
                     action_id=manager.next_action_id,
                     status=ObservationStatus.INVALID_ACTION,
-                    error_code="invalid_policy_response",
+                    error_code=(
+                        "state_invalid"
+                        if isinstance(exc, PolicyStateError)
+                        else "protocol_invalid"
+                    ),
                     message=str(exc),
+                    metadata={"failure_category": "protocol_invalid"},
                 )
                 manager.record_attempt(
                     AttemptEvent(
@@ -139,11 +146,22 @@ class AgentController:
                         context_reference_map=built.reference_map,
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
+                        decision_schema=built.decision_schema,
                         commit_assessment=False,
                         consume_step=True,
                         invalid_attempt=True,
                         messages=tuple(built.messages),
-                        provider_metadata=self._provider_metadata(built.messages),
+                        tool_definitions=built.tool_definitions,
+                        visible_source_spans=built.visible_source_spans,
+                        provider_metadata={
+                            **self._provider_metadata(built.messages),
+                            "failure_category": (
+                                "state_invalid"
+                                if isinstance(exc, PolicyStateError)
+                                else "protocol_invalid"
+                            ),
+                            "legacy_error_code": "invalid_policy_response",
+                        },
                     )
                 )
                 continue
@@ -171,6 +189,7 @@ class AgentController:
                     status=ObservationStatus.INVALID_ACTION,
                     error_code=exc.code,
                     message=exc.message,
+                    metadata={"failure_category": "state_invalid"},
                 )
                 manager.record_attempt(
                     AttemptEvent(
@@ -186,11 +205,17 @@ class AgentController:
                         context_reference_map=built.reference_map,
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
+                        decision_schema=built.decision_schema,
                         commit_assessment=False,
                         consume_step=True,
                         invalid_attempt=True,
                         messages=tuple(built.messages),
-                        provider_metadata=self._provider_metadata(built.messages),
+                        tool_definitions=built.tool_definitions,
+                        visible_source_spans=built.visible_source_spans,
+                        provider_metadata={
+                            **self._provider_metadata(built.messages),
+                            "failure_category": "state_invalid",
+                        },
                     )
                 )
                 continue
@@ -207,6 +232,7 @@ class AgentController:
                     action=resolved.action,
                     error_code=validation.code,
                     message=validation.message,
+                    metadata={"failure_category": "state_invalid"},
                 )
                 manager.record_attempt(
                     AttemptEvent(
@@ -222,11 +248,17 @@ class AgentController:
                         context_reference_map=built.reference_map,
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
+                        decision_schema=built.decision_schema,
                         commit_assessment=False,
                         consume_step=True,
                         invalid_attempt=True,
                         messages=tuple(built.messages),
-                        provider_metadata=self._provider_metadata(built.messages),
+                        tool_definitions=built.tool_definitions,
+                        visible_source_spans=built.visible_source_spans,
+                        provider_metadata={
+                            **self._provider_metadata(built.messages),
+                            "failure_category": "state_invalid",
+                        },
                     )
                 )
                 continue
@@ -249,6 +281,12 @@ class AgentController:
                     question=question,
                     scope_id=scope_id,
                     action_id=manager.next_action_id,
+                )
+                observation.metadata.setdefault(
+                    "selected_tool", _tool_name_for_action(decision.action)
+                )
+                observation.metadata.setdefault(
+                    "parsed_arguments", decision.action.model_dump(mode="json")
                 )
             except Exception as exc:
                 self._record_runtime_error(
@@ -281,7 +319,10 @@ class AgentController:
                     context_reference_map=built.reference_map,
                     available_action_space=built.available_action_space,
                     decision_schema_sha256=built.decision_schema_sha256,
+                    decision_schema=built.decision_schema,
                     messages=tuple(built.messages),
+                    tool_definitions=built.tool_definitions,
+                    visible_source_spans=built.visible_source_spans,
                     provider_metadata=self._provider_metadata(built.messages),
                 )
             )
@@ -323,7 +364,7 @@ class AgentController:
         metadata.setdefault(
             "visible_payload_token_estimate",
             sum(
-                len(re.findall(r"(?u)\b\w+\b|[^\w\s]", message.content))
+                len(re.findall(r"(?u)\b\w+\b|[^\w\s]", message.content or ""))
                 for message in messages
             ),
         )
@@ -353,7 +394,11 @@ class AgentController:
         messages = [*built.messages, Message(role="user", content=BUDGET_FINALIZE_INSTRUCTION)]
         manager.mark_budget_finalize_used()
         try:
-            decision = self.policy.decide(messages, decision_format=built.decision_format)
+            decision = self.policy.decide(
+                messages,
+                decision_format=built.decision_format,
+                tools=built.provider_tools,
+            )
             usage = self._policy_usage()
             resolved = resolve_decision(decision, built.reference_map)
             validation = self.validator.validate(resolved, state, manager.scope_id)
@@ -370,7 +415,14 @@ class AgentController:
                         status=ObservationStatus.INVALID_ACTION,
                         error_code="budget_finalize_failed",
                         message=str(exc),
-                        metadata={"budget_finalize": True},
+                        metadata={
+                            "budget_finalize": True,
+                            "failure_category": (
+                                "protocol_invalid"
+                                if isinstance(exc, PolicyResponseError)
+                                else "state_invalid"
+                            ),
+                        },
                     ),
                     assessment=(locals().get("decision").assessment if locals().get("decision") is not None else None),
                     action_signature=None,
@@ -379,11 +431,21 @@ class AgentController:
                     context_reference_map=built.reference_map,
                     available_action_space=built.available_action_space,
                     decision_schema_sha256=built.decision_schema_sha256,
+                    decision_schema=built.decision_schema,
                     commit_assessment=False,
                     consume_step=False,
                     consume_policy_attempt=False,
                     messages=tuple(messages),
-                    provider_metadata=self._provider_metadata(messages),
+                    tool_definitions=built.tool_definitions,
+                    visible_source_spans=built.visible_source_spans,
+                    provider_metadata={
+                        **self._provider_metadata(messages),
+                        "failure_category": (
+                            "protocol_invalid"
+                            if isinstance(exc, PolicyResponseError)
+                            else "state_invalid"
+                        ),
+                    },
                 )
             )
             return manager.result(
@@ -415,7 +477,10 @@ class AgentController:
                     action=resolved.action,
                     error_code="budget_finalize_requires_finish",
                     message=validation.message or "Budget finalization requires FINISH",
-                    metadata={"budget_finalize": True},
+                    metadata={
+                        "budget_finalize": True,
+                        "failure_category": "state_invalid",
+                    },
                 ),
                 assessment=resolved.assessment,
                 action_signature=None,
@@ -424,11 +489,17 @@ class AgentController:
                 context_reference_map=built.reference_map,
                 available_action_space=built.available_action_space,
                 decision_schema_sha256=built.decision_schema_sha256,
+                decision_schema=built.decision_schema,
                 commit_assessment=False,
                 consume_step=False,
                 consume_policy_attempt=False,
                 messages=tuple(messages),
-                provider_metadata=self._provider_metadata(messages or built.messages),
+                tool_definitions=built.tool_definitions,
+                visible_source_spans=built.visible_source_spans,
+                provider_metadata={
+                    **self._provider_metadata(messages or built.messages),
+                    "failure_category": "state_invalid",
+                },
             )
         )
         return manager.result(
@@ -457,7 +528,12 @@ class AgentController:
             status=ObservationStatus.OK,
             action=resolved.action,
             results=[item.model_dump(mode="json") for item in evidence],
-            metadata={"finish": True, "budget_finalize": not consume_step},
+            metadata={
+                "finish": True,
+                "budget_finalize": not consume_step,
+                "selected_tool": "finish",
+                "parsed_arguments": resolved.action.model_dump(mode="json"),
+            },
         )
         manager.record_attempt(
             AttemptEvent(
@@ -473,9 +549,12 @@ class AgentController:
                 context_reference_map=built.reference_map,
                 available_action_space=built.available_action_space,
                 decision_schema_sha256=built.decision_schema_sha256,
+                decision_schema=built.decision_schema,
                 consume_step=consume_step,
                 consume_policy_attempt=consume_step,
                 messages=tuple(messages or built.messages),
+                tool_definitions=built.tool_definitions,
+                visible_source_spans=built.visible_source_spans,
                 provider_metadata=self._provider_metadata(messages or built.messages),
             )
         )
@@ -510,6 +589,7 @@ class AgentController:
                     action=resolved.action,
                     error_code=error_code,
                     message=error_message,
+                    metadata={"failure_category": "execution_error"},
                 ),
                 assessment=resolved.assessment,
                 action_signature=signature,
@@ -518,7 +598,39 @@ class AgentController:
                 context_reference_map=built.reference_map,
                 available_action_space=built.available_action_space,
                 decision_schema_sha256=built.decision_schema_sha256,
+                decision_schema=built.decision_schema,
                 messages=tuple(built.messages),
-                provider_metadata=self._provider_metadata(built.messages),
+                tool_definitions=built.tool_definitions,
+                visible_source_spans=built.visible_source_spans,
+                provider_metadata={
+                    **self._provider_metadata(built.messages),
+                    "failure_category": "execution_error",
+                },
             )
         )
+
+
+def _tool_name_for_action(action) -> str:
+    """Stable native-tool label retained alongside the legacy action model."""
+
+    action_type = getattr(action, "type", None)
+    if action_type == "SEARCH":
+        method = getattr(getattr(action, "method", None), "value", "").lower()
+        target = getattr(getattr(action, "target", None), "value", "").lower()
+        if (method, target) == ("dense", "chunk"):
+            return "find_passages"
+        if (method, target) == ("dense", "sentence"):
+            return "find_sentences"
+        return f"search_{method}_{target}"
+    if action_type == "EXPAND":
+        kind = getattr(getattr(action, "kind", None), "value", "")
+        if kind == "ENTITY_MENTIONED_IN_CHUNK":
+            return "follow_entity_to_passages"
+        if kind == "ENTITY_MENTIONED_IN_SENTENCE":
+            return "follow_entity_to_sentences"
+        return f"follow_{kind.lower()}"
+    if action_type == "READ":
+        return "read_passage"
+    if action_type == "FINISH":
+        return "finish"
+    return "unknown"

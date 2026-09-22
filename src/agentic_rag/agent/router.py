@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -65,6 +66,7 @@ class ActionRouter:
         scope_id: str,
         action_id: str,
     ) -> Observation:
+        started = time.perf_counter()
         if isinstance(action, SearchAction):
             if self.interface_contract is not None and not self.interface_contract.allows_search(
                 action.method, action.target
@@ -134,6 +136,7 @@ class ActionRouter:
             delta = {
                 **projected_delta,
                 "visible_chunk_ids": [read.chunk_id],
+                "visible_passage_ids": [read.chunk_id],
                 "read_chunk_ids": [read.chunk_id],
                 "visible_sentence_ids": [
                     item.sentence_id for item in read.sentences
@@ -153,6 +156,7 @@ class ActionRouter:
                 already_seen_node_ids=already,
                 metadata={
                     "visibility_delta": delta,
+                    "wall_time_ms": (time.perf_counter() - started) * 1000,
                     **projection_audit,
                 },
             )
@@ -161,12 +165,8 @@ class ActionRouter:
                 f"ActionRouter cannot execute {type(action).__name__}"
             )
 
-        projected_results, visibility_delta, projection_audit = self.projector.project(
-            raw_results,
-            action_type=("SEARCH" if isinstance(action, SearchAction) else "EXPAND"),
-        )
         kept, retrieved_tokens, truncated = _fit_results(
-            projected_results, state.remaining_retrieved_token_budget
+            raw_results, state.remaining_retrieved_token_budget
         )
         if raw_results and not kept:
             return Observation(
@@ -184,6 +184,10 @@ class ActionRouter:
                 },
             )
 
+        kept, visibility_delta, projection_audit = self.projector.project(
+            kept, action_type=action.type,
+        )
+        metadata["candidate_count"] = len(raw_results)
         # Projection has already decided which source spans are visible.  Do
         # not infer new references from hidden backend payloads.
         delta = {
@@ -200,6 +204,10 @@ class ActionRouter:
                 item for item in visibility_delta["visible_chunk_ids"]
                 if _result_contains_id(kept, item)
             ],
+            "visible_passage_ids": [
+                item for item in visibility_delta.get("visible_passage_ids", [])
+                if _result_contains_id(kept, item)
+            ],
             "eligible_sentence_ids": [
                 item for item in visibility_delta["eligible_sentence_ids"]
                 if _result_contains_id(kept, item)
@@ -208,6 +216,7 @@ class ActionRouter:
         novel, already = _novelty(delta, state)
         metadata["visibility_delta"] = delta
         metadata["truncated_by_retrieved_token_budget"] = truncated
+        metadata["wall_time_ms"] = (time.perf_counter() - started) * 1000
         metadata.update(projection_audit)
         return Observation(
             action_id=action_id,
@@ -277,6 +286,7 @@ def _count_result_tokens(value: Any, *, key: str | None = None) -> int:
         return sum(
             _count_result_tokens(child, key=str(child_key))
             for child_key, child in value.items()
+            if not (child_key == "sentences" and isinstance(value.get("text"), str))
         )
     if isinstance(value, list):
         return sum(_count_result_tokens(child, key=key) for child in value)
@@ -289,6 +299,7 @@ def _visibility_delta(
     visible_entities: set[str] = set()
     visible_sentences: set[str] = set()
     visible_chunks: set[str] = set()
+    visible_passages: set[str] = set()
     eligible_sentences: set[str] = set()
 
     for result in results:
@@ -300,10 +311,17 @@ def _visibility_delta(
             eligible_sentences=eligible_sentences,
             navigation_only=bool(result.get("navigation_only", False)),
         )
+        chunk_id = result.get("chunk_id") or result.get("parent_chunk_id")
+        if (
+            result.get("target") == "CHUNK"
+            and isinstance(chunk_id, str)
+        ):
+            visible_passages.add(chunk_id)
     return {
         "visible_entity_ids": sorted(visible_entities),
         "visible_sentence_ids": sorted(visible_sentences),
         "visible_chunk_ids": sorted(visible_chunks),
+        "visible_passage_ids": sorted(visible_passages),
         "eligible_sentence_ids": sorted(eligible_sentences),
         "read_chunk_ids": [],
     }

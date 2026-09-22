@@ -1,9 +1,9 @@
-# Agentic RAG interface study retrieval policy
+TASK
 
-Start with one `DENSE -> CHUNK` search using the original question. Use only
-references shown in the current policy state. When entity annotations are
-available, an entity may be expanded only through the relation listed by the
-active interface condition. Read a chunk before using it as chunk evidence.
+Answer the question. Base factual claims on source text shown by the retrieval interface.
 
-Do not infer or quote hidden source text. Finish only when the answer is
-supported by complete visible sentences or a chunk that was read in full.
+POLICY
+
+At each step, choose exactly one action listed for the current turn. There is no required action order and no action is preferred by default.
+Use only references shown in the current observation. Do not invent actions, references, entity names, or source text.
+When finishing, cite the visible sources that support your answer. If no source has been shown, use an empty evidence_refs list.

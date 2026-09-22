@@ -148,7 +148,10 @@ class ReadAction(AgentModel):
 class FinishAction(AgentModel):
     type: Literal["FINISH"] = "FINISH"
     answer: str = Field(min_length=1)
-    evidence_refs: list[TypedReference] = Field(min_length=1, max_length=20)
+    # A finish call is always available.  An empty list records an answer for
+    # which the agent found no eligible citation; the evaluator can then
+    # distinguish "no evidence cited" from a protocol failure.
+    evidence_refs: list[TypedReference] = Field(min_length=0, max_length=20)
 
     @field_validator("answer")
     @classmethod
@@ -179,7 +182,7 @@ AgentAction = Annotated[
 
 
 class PolicyDecision(AgentModel):
-    assessment: Assessment
+    assessment: Assessment | None = None
     action: AgentAction
 
 
@@ -213,7 +216,7 @@ class ResolvedReadAction(AgentModel):
 class ResolvedFinishAction(AgentModel):
     type: Literal["FINISH"] = "FINISH"
     answer: str = Field(min_length=1)
-    evidence_refs: list[EvidenceRef] = Field(min_length=1, max_length=20)
+    evidence_refs: list[EvidenceRef] = Field(min_length=0, max_length=20)
 
 
 ResolvedAction = Annotated[
@@ -223,7 +226,7 @@ ResolvedAction = Annotated[
 
 
 class ResolvedDecision(AgentModel):
-    assessment: Assessment
+    assessment: Assessment | None = None
     action: ResolvedAction
 
 
@@ -358,6 +361,10 @@ class EpisodeState(AgentModel):
     visible_entity_ids: set[str] = Field(default_factory=set)
     visible_sentence_ids: set[str] = Field(default_factory=set)
     visible_chunk_ids: set[str] = Field(default_factory=set)
+    # Chunks that were actually returned as complete passages.  A sentence
+    # result still records its parent chunk for provenance, but that parent is
+    # not exposed as a passage unless it was itself returned.
+    visible_passage_ids: set[str] = Field(default_factory=set)
     eligible_sentence_ids: set[str] = Field(default_factory=set)
     read_chunk_ids: set[str] = Field(default_factory=set)
     action_signatures: set[str] = Field(default_factory=set)
@@ -388,6 +395,7 @@ class EpisodeState(AgentModel):
         "visible_entity_ids",
         "visible_sentence_ids",
         "visible_chunk_ids",
+        "visible_passage_ids",
         "eligible_sentence_ids",
         "read_chunk_ids",
         "action_signatures",
@@ -454,6 +462,7 @@ class AvailableActionSpace(AgentModel):
     expand_options: tuple[ExpandActionOption, ...] = ()
     read_refs: tuple[TypedReference, ...] = ()
     finish_evidence_refs: tuple[TypedReference, ...] = ()
+    finish_available: bool = False
 
     @property
     def has_actions(self) -> bool:
@@ -461,7 +470,7 @@ class AvailableActionSpace(AgentModel):
             self.search_options
             or self.expand_options
             or self.read_refs
-            or self.finish_evidence_refs
+            or self.finish_available
         )
 
 
@@ -517,14 +526,66 @@ class PolicyStateView(AgentModel):
 class PolicyView(AgentModel):
     instruction: Literal["Produce the next PolicyDecision."] = "Produce the next PolicyDecision."
     policy_state: PolicyStateView
+    context_audit: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolFunctionCall(AgentModel):
+    name: str
+    arguments: dict[str, Any] | str
+
+
+class ToolCall(AgentModel):
+    id: str = Field(min_length=1)
+    type: Literal["function"] = "function"
+    function: ToolFunctionCall
 
 
 class Message(AgentModel):
-    role: Literal["system", "user", "assistant"]
-    content: str
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str | None = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
+    tool_name: str | None = None
 
-    def as_openai_input(self) -> dict[str, str]:
-        return {"role": self.role, "content": self.content}
+    def as_openai_input(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "role": self.role,
+            "content": None if self.tool_calls and not self.content else self.content,
+        }
+        if self.tool_calls:
+            payload["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": call.type,
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": (
+                            call.function.arguments
+                            if isinstance(call.function.arguments, str)
+                            else json.dumps(call.function.arguments, ensure_ascii=False, separators=(",", ":"))
+                        ),
+                    },
+                }
+                for call in self.tool_calls
+            ]
+        if self.tool_call_id is not None:
+            payload["tool_call_id"] = self.tool_call_id
+        return payload
+
+    def as_ollama_input(self) -> dict[str, Any]:
+        payload = self.as_openai_input()
+        if self.tool_calls and not self.content:
+            payload.pop("content", None)
+        else:
+            payload["content"] = self.content or ""
+        payload.pop("tool_call_id", None)
+        if self.tool_name:
+            payload["tool_name"] = self.tool_name
+        for call in payload.get("tool_calls", []):
+            arguments = call["function"]["arguments"]
+            if isinstance(arguments, str):
+                call["function"]["arguments"] = json.loads(arguments)
+        return payload
 
 
 class StepRecord(AgentModel):
@@ -546,9 +607,15 @@ class StepRecord(AgentModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    decision_schema: dict[str, Any] = Field(default_factory=dict)
+    tool_definitions: list[dict[str, Any]] = Field(default_factory=list)
     messages: list[Message] = Field(default_factory=list)
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
     visible_source_spans: list[dict[str, Any]] = Field(default_factory=list)
+    visibility_contract: str = "policy-input-v2"
+    telemetry: dict[str, Any] = Field(default_factory=dict)
+    context_audit: dict[str, Any] = Field(default_factory=dict)
+    assessment_status: Literal["provided", "not_requested", "unavailable"] = "unavailable"
 
 
 class TerminationReason(StrEnum):
