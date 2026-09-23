@@ -207,6 +207,10 @@ class BuildManifest(ManifestModel):
     abbreviation_detector: ModelVersion | None
     embedding_model: ModelVersion
     embedding_dimension: int
+    # Newer prebuilt substrates may record a remote embedding service.  Keep
+    # these optional so older locally-built manifests remain compatible.
+    embedding_backend: str | None = None
+    embedding_host: str | None = None
     bm25_backend: ModelVersion
     bm25_tokenizer: str
     chunk_tokenizer: str
