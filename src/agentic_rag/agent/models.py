@@ -546,6 +546,10 @@ class StepRecord(AgentModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    # Optional fields used by the independent Options v1 runtime.  Legacy
+    # episodes leave them unset and remain byte-compatible when serialized.
+    option_id: str | None = None
+    option_status: str | None = None
 
 
 class TerminationReason(StrEnum):
@@ -569,6 +573,7 @@ class EpisodeResult(AgentModel):
     final_state: EpisodeState | None = None
     error_code: str | None = None
     error_message: str | None = None
+    option_trace: dict[str, Any] | None = None
 
     @property
     def question(self) -> str:

@@ -71,7 +71,7 @@ class OpenAIResponsesPolicy:
         messages: Sequence[Message | dict[str, str]],
         *,
         decision_format: type[BaseModel] | None = None,
-    ) -> PolicyDecision:
+    ) -> BaseModel:
         response_model = decision_format or self.decision_format
         self.last_usage = Usage()
         provider_input = [
@@ -97,6 +97,8 @@ class OpenAIResponsesPolicy:
             )
         payload = parsed.model_dump(mode="json") if isinstance(parsed, BaseModel) else parsed
         try:
+            if decision_format is not None:
+                return decision_format.model_validate(payload)
             return PolicyDecision.model_validate(payload)
         except Exception as exc:
             raise PolicyResponseError(

@@ -63,6 +63,13 @@ def resolve_decision(
 ) -> ResolvedDecision:
     """Resolve one decision without consulting a newer context snapshot."""
 
+    # State-conditioned schemas are dynamically generated Pydantic models.
+    # Normalize their wire payload into the canonical action classes before
+    # the resolver performs isinstance checks.  The legacy controller and the
+    # Options controller therefore share one reference-resolution boundary.
+    if not isinstance(decision, PolicyDecision):
+        decision = PolicyDecision.model_validate(decision.model_dump(mode="json"))
+
     action = decision.action
     if isinstance(action, SearchAction):
         resolved = action

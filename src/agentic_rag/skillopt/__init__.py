@@ -32,6 +32,12 @@ from agentic_rag.skillopt.trainer import (
     run_skillopt_training,
     summarize_rollout_usage,
 )
+from agentic_rag.skillopt.options import (
+    OptionSkillOptCoordinator,
+    OptionSpec,
+    OptionStore,
+    apply_edits as apply_option_edits,
+)
 
 __all__ = [
     "SKILLOPT_AVAILABLE",
@@ -57,4 +63,8 @@ __all__ = [
     "smoke_type_quotas",
     "split_manifest_profile",
     "validate_benchmark_lineage",
+    "OptionSkillOptCoordinator",
+    "OptionSpec",
+    "OptionStore",
+    "apply_option_edits",
 ]

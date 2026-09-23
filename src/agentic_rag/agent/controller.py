@@ -12,6 +12,7 @@ from agentic_rag.agent.models import (
     EpisodeResult,
     EpisodeState,
     Message,
+    PolicyDecision,
     Observation,
     ObservationStatus,
     ResolvedFinishAction,
@@ -108,6 +109,12 @@ class AgentController:
                 decision = self.policy.decide(
                     built.messages,
                     decision_format=built.decision_format,
+                )
+                # A state-conditioned provider schema is a dynamic wire
+                # model.  Persist and validate the canonical PolicyDecision
+                # so legacy artifacts remain stable.
+                decision = PolicyDecision.model_validate(
+                    decision.model_dump(mode="json")
                 )
             except PolicyResponseError as exc:
                 usage = self._policy_usage()
@@ -315,6 +322,9 @@ class AgentController:
         messages = [*built.messages, Message(role="user", content=BUDGET_FINALIZE_INSTRUCTION)]
         try:
             decision = self.policy.decide(messages, decision_format=built.decision_format)
+            decision = PolicyDecision.model_validate(
+                decision.model_dump(mode="json")
+            )
             usage = self._policy_usage()
             resolved = resolve_decision(decision, built.reference_map)
             validation = self.validator.validate(resolved, state, manager.scope_id)

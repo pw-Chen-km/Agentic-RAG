@@ -1,0 +1,137 @@
+{
+  "version": "options-v1-seed",
+  "fixed_runtime_guidance": "You are an evidence-retrieval agent. At the start of an episode and whenever an option completes or is blocked, choose the option whose stated initiation conditions best match the current state. After an option is selected, follow only that option's procedure. Each primitive action is executed by the environment and its result must be considered on the next turn. Options solve subgoals; they do not directly call another option. O5_ANSWER is the only option that may finish the episode. FALLBACK executes exactly one legal retrieval action and then returns to option selection. Use only references and actions exposed in the current context.",
+  "fixed_answer_contract": "The final answer must be supported by legal evidence visible to the agent. Do not guess or add information that the evidence does not provide.",
+  "options": [
+    {
+      "option_id": "O1_START_SEARCH",
+      "name": "Start search",
+      "goal": "Find the first useful clue when the episode has little or no usable evidence.",
+      "initiation": [
+        "There is no usable evidence for the unresolved question.",
+        "No existing clue gives a reliable next subgoal."
+      ],
+      "primitive_actions": ["SEARCH", "EXPAND", "READ"],
+      "policy": {
+        "direct_evidence_found": "Mark the first subgoal as complete and return to option selection.",
+        "useful_clue_found": "Keep the clue in state and continue only if this option can still find the first subgoal.",
+        "unread_chunk_available": "Read it only when its preview is relevant to the unresolved information.",
+        "no_progress": "Report BLOCKED so the selector can choose another path."
+      },
+      "termination": {
+        "subgoal_complete": "A useful clue or direct evidence for the first subgoal is available.",
+        "blocked": "The initial path returns no new useful information.",
+        "budget_low": "The remaining budget is too small for another safe retrieval step."
+      },
+      "interrupt_when": "Another option has a clearer initiation match, such as a known bridge or unread relevant chunk."
+    },
+    {
+      "option_id": "O2_RESOLVE_FACT",
+      "name": "Resolve direct fact",
+      "goal": "Turn a known unresolved information gap into legal supporting evidence.",
+      "initiation": [
+        "The missing information is a direct fact rather than a new bridge.",
+        "A visible sentence or relevant chunk can be searched, expanded, or read."
+      ],
+      "primitive_actions": ["SEARCH", "EXPAND", "READ"],
+      "policy": {
+        "direct_evidence_found": "Mark the direct fact subgoal as complete and return to option selection.",
+        "candidate_found": "Read or expand the candidate when it can resolve the missing fact.",
+        "unread_chunk_available": "Read a relevant unread chunk before repeating a similar search.",
+        "no_progress": "Report BLOCKED and let the selector choose recovery or another option."
+      },
+      "termination": {
+        "subgoal_complete": "The direct fact is supported by legal evidence.",
+        "blocked": "Available candidates are exhausted or do not address the gap.",
+        "budget_low": "The remaining budget is too small to verify another candidate."
+      },
+      "interrupt_when": "A newly found entity or relation becomes the more useful unresolved subgoal."
+    },
+    {
+      "option_id": "O3_RESOLVE_BRIDGE",
+      "name": "Resolve bridge",
+      "goal": "Follow an intermediate person, work, place, or relation to obtain the next required information.",
+      "initiation": [
+        "A visible clue identifies a possible intermediate entity or relation.",
+        "The question still has an unresolved part after the clue."
+      ],
+      "primitive_actions": ["SEARCH", "EXPAND", "READ"],
+      "policy": {
+        "direct_evidence_found": "Complete this bridge subgoal and return to option selection.",
+        "new_bridge_found": "Continue with the newly identified bridge only while it advances the unresolved subgoal.",
+        "unread_chunk_available": "Read a relevant unread chunk when it can verify the bridge or its next relation.",
+        "no_progress": "Report BLOCKED; do not repeat a semantically similar search."
+      },
+      "termination": {
+        "subgoal_complete": "The next bridge or its required relation is supported by legal evidence.",
+        "blocked": "The bridge path yields no new information or its candidates are exhausted.",
+        "budget_low": "The remaining budget is too small to continue the bridge safely."
+      },
+      "interrupt_when": "The bridge is resolved, or recovery is needed because the current path has no progress."
+    },
+    {
+      "option_id": "O4_RECOVER",
+      "name": "Recover from no progress",
+      "goal": "Find a new legal retrieval path after an empty, repeated, invalid, or failed action.",
+      "initiation": [
+        "The last action produced no new information or was rejected or failed.",
+        "At least one unread chunk, expandable clue, or untried retrieval path remains."
+      ],
+      "primitive_actions": ["SEARCH", "EXPAND", "READ"],
+      "policy": {
+        "unread_chunk_available": "Prefer a relevant READ or EXPAND before repeating a similar SEARCH.",
+        "expandable_evidence_available": "Use a compatible expansion path that addresses the missing information.",
+        "alternative_search_available": "Change the retrieval path, not only the wording of a repeated query.",
+        "no_progress": "Report BLOCKED and return to option selection."
+      },
+      "termination": {
+        "subgoal_complete": "A new path supplies a useful clue or legal evidence.",
+        "blocked": "No untried path, readable chunk, or expandable clue remains.",
+        "budget_low": "Recovery would consume the remaining safe budget."
+      },
+      "interrupt_when": "A recovered clue clearly belongs to direct fact or bridge resolution."
+    },
+    {
+      "option_id": "O5_ANSWER",
+      "name": "Answer",
+      "goal": "Select legal evidence and form the final answer after retrieval subgoals are sufficiently supported.",
+      "initiation": [
+        "The visible evidence supports the information requested by the question.",
+        "No unresolved retrieval subgoal is necessary before answering."
+      ],
+      "primitive_actions": ["FINISH"],
+      "policy": {
+        "evidence_sufficient": "Choose the smallest complete set of legal evidence and answer directly.",
+        "evidence_incomplete": "Do not finish; report BLOCKED so the selector can return to retrieval.",
+        "ambiguous_evidence": "Keep retrieval open unless the ambiguity can be resolved with visible evidence."
+      },
+      "termination": {
+        "subgoal_complete": "A FINISH action with supported evidence is accepted.",
+        "blocked": "The answer cannot be supported by currently legal evidence.",
+        "budget_low": "Use FINISH only when legal evidence is already sufficient."
+      },
+      "interrupt_when": "The evidence is not sufficient and a retrieval option is needed."
+    },
+    {
+      "option_id": "FALLBACK",
+      "name": "Primitive fallback",
+      "goal": "Execute one legal primitive retrieval action when no option clearly fits.",
+      "initiation": [
+        "No option has a clear initiation match.",
+        "At least one legal primitive retrieval action is available."
+      ],
+      "primitive_actions": ["SEARCH", "EXPAND", "READ"],
+      "policy": {
+        "action_available": "Execute exactly one legal primitive retrieval action.",
+        "action_result": "Return to option selection after the environment reports the result.",
+        "no_progress": "Return to option selection; do not repeat the same action automatically."
+      },
+      "termination": {
+        "subgoal_complete": "The one primitive action has executed and its result is recorded.",
+        "blocked": "No legal primitive retrieval action is available.",
+        "budget_low": "Do not execute a primitive action when the remaining budget cannot support it."
+      },
+      "interrupt_when": "Always return to option selection after one primitive action."
+    }
+  ]
+}

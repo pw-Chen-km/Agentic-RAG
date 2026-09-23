@@ -147,6 +147,39 @@ contain accuracy because their answers are long-form.
 The standard metrics are exact match, contain accuracy, Luna-as-judge,
 invalid attempts, Policy calls/tokens, retrieved tokens, and action counts.
 
+### Options v1 (two-level closed-loop runtime)
+
+Options v1 is a separate runtime from the legacy one-action controller.  The
+model first selects a short-lived sub-goal (`O1`–`O5` or `FALLBACK`), then the
+selected option chooses one legal primitive action.  `COMPLETE` and `BLOCKED`
+always return to the selector; only `O5_ANSWER` can execute `FINISH`.  The
+catalogue in `skills/options_v1.json` is the source of truth and is rendered
+progressively, so the selector sees summaries while the selected policy sees
+only its full procedure.
+
+Prepare the fixed first smoke sample without rebuilding any substrate:
+
+```bash
+python scripts/options_v1_smoke.py --config configs/options_v1_smoke.json --dry-run
+python scripts/options_v1_smoke.py --config configs/options_v1_smoke.json
+```
+
+Run the three 20-question target batches (the Ollama host, model, budgets and
+substrate paths are pinned in `runtime_config.json`):
+
+```bash
+python scripts/run_options_v1_smoke.py \
+  --runtime-config /path/to/options_v1_smoke20_seed42/runtime_config.json \
+  --resume
+```
+
+The run writes one episode artifact and one resumable `results.jsonl` per
+dataset.  `normalized_exact_match` is only an offline smoke metric; it is not
+a replacement for the later judge/evaluation protocol.  Option SkillOpt
+reflection is an independent package under
+`src/agentic_rag/skillopt/options/`; it accepts only constrained edits to the
+structured option JSON, never a free-form replacement Skill.
+
 ## Verification
 
 ```powershell

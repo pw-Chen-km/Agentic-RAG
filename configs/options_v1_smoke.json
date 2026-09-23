@@ -1,0 +1,48 @@
+{
+  "schema_version": "agentic-rag-options-v1-smoke-1",
+  "description": "Small three-dataset smoke evaluation for Options v1; preparation is offline and never rebuilds a substrate.",
+  "seed": 42,
+  "questions_per_dataset": 20,
+  "datasets": {
+    "hotpotqa": {
+      "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/hotpotqa_provenance/substrate",
+      "scope_id": "hotpotqa:benchmark_exact:dev"
+    },
+    "novel": {
+      "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/novel_benchmark_exact",
+      "scope_id": "novel:benchmark_exact:dev"
+    },
+    "medical": {
+      "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/medical_benchmark_exact",
+      "scope_id": "medical:benchmark_exact:dev"
+    }
+  },
+  "options_v1": {
+    "option_store": "skills/options_v1.json",
+    "max_steps": 10,
+    "max_policy_attempts": 12,
+    "max_retrieved_tokens": 12000
+  },
+  "model": {
+    "provider": "ollama",
+    "model": "qwen3.8:27b-q4_K_M",
+    "host": "http://127.0.0.1:11440",
+    "temperature": 0,
+    "think": false,
+    "timeout_seconds": 900,
+    "num_ctx": 65536
+  },
+  "execution": {
+    "sequential_datasets": true,
+    "workers_per_dataset": 1,
+    "do_not_overwrite_outputs": true,
+    "agent_receives_gold_answer": false,
+    "gold_answer_is_evaluation_only": true
+  },
+  "paths": {
+    "output": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/options_v1_smoke20_seed42",
+    "sample_manifest": "sample_manifest.json",
+    "questions_dir": "questions",
+    "results_dir": "results"
+  }
+}

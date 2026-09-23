@@ -83,7 +83,7 @@ class OllamaChatPolicy:
         messages: Sequence[Message | dict[str, str]],
         *,
         decision_format: type[BaseModel] | None = None,
-    ) -> PolicyDecision:
+    ) -> BaseModel:
         response_model = decision_format or self.decision_format
         self.last_usage = Usage()
         request: dict[str, Any] = {
@@ -107,7 +107,10 @@ class OllamaChatPolicy:
             raise PolicyResponseError("Ollama response did not contain structured output")
         try:
             parsed = response_model.model_validate_json(content)
-            return PolicyDecision.model_validate(parsed.model_dump(mode="json"))
+            payload = parsed.model_dump(mode="json")
+            if decision_format is not None:
+                return decision_format.model_validate(payload)
+            return PolicyDecision.model_validate(payload)
         except (ValidationError, ValueError, TypeError) as exc:
             raise PolicyResponseError(
                 "Ollama response failed PolicyDecision validation"

@@ -52,8 +52,14 @@ class PolicyClient(Protocol):
         messages: Sequence[Message | dict[str, str]],
         *,
         decision_format: type[BaseModel] | None = None,
-    ) -> PolicyDecision:
-        """Return exactly one assessment-and-action decision."""
+    ) -> BaseModel:
+        """Return one provider-validated structured decision.
+
+        The legacy format is still ``PolicyDecision``.  Options v1 passes a
+        selector or option-policy model through the same interface, so the
+        provider must return that requested model rather than forcing every
+        structured response into the legacy decision type.
+        """
 
 
 class _WireAssessment(AgentModel):
@@ -122,7 +128,7 @@ class ScriptedPolicy:
         messages: Sequence[Message | dict[str, str]],
         *,
         decision_format: type[BaseModel] | None = None,
-    ) -> PolicyDecision:
+    ) -> BaseModel:
         self.last_usage = Usage(policy_calls=1)
         self.calls.append(list(messages))
         if not self._decisions:
@@ -138,6 +144,8 @@ class ScriptedPolicy:
         try:
             if decision_format is not None:
                 decision_format.model_validate(payload)
+            if decision_format is not None:
+                return decision_format.model_validate(payload)
             return PolicyDecision.model_validate(payload)
         except (ValidationError, TypeError, ValueError) as exc:
             raise PolicyResponseError(

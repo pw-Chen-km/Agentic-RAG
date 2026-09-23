@@ -42,6 +42,8 @@ class AttemptEvent:
     commit_assessment: bool = True
     consume_step: bool = True
     invalid_attempt: bool = False
+    option_id: str | None = None
+    option_status: str | None = None
 
 
 class EpisodeStateManager:
@@ -139,12 +141,36 @@ class EpisodeStateManager:
             policy_view=event.policy_view,
             context_reference_map=event.context_reference_map,
             available_action_space=event.available_action_space,
-            decision_schema_sha256=event.decision_schema_sha256,
-        )
+                decision_schema_sha256=event.decision_schema_sha256,
+                option_id=event.option_id,
+                option_status=event.option_status,
+            )
         self._state = updated
         self._trajectory.append(record)
         self._total_usage = self._total_usage + event.usage
         return record
+
+    def consume_policy_attempt(self, usage: Usage | None = None) -> None:
+        """Consume a model call that selects an option but no primitive step.
+
+        Selector and COMPLETE/BLOCKED calls are still part of the episode
+        policy budget, but do not fabricate a retrieval observation or step.
+        """
+        updated = self._state.model_copy(deep=True)
+        updated.policy_attempts += 1
+        updated.remaining_policy_attempt_budget = max(
+            0, updated.remaining_policy_attempt_budget - 1
+        )
+        self._state = updated
+        if usage is not None:
+            self._total_usage = self._total_usage + usage
+
+    def commit_assessment(self, assessment: Assessment | None) -> None:
+        if assessment is None:
+            return
+        updated = self._state.model_copy(deep=True)
+        updated.last_assessment = assessment.model_copy(deep=True)
+        self._state = updated
 
     def add_usage(self, usage: Usage) -> None:
         self._total_usage = self._total_usage + usage
