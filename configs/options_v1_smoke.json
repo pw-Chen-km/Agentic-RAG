@@ -5,15 +5,15 @@
   "questions_per_dataset": 20,
   "datasets": {
     "hotpotqa": {
-      "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/hotpotqa_provenance/substrate",
+      "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/interface_study_v2/substrates/hotpotqa",
       "scope_id": "hotpotqa:benchmark_exact:dev"
     },
     "novel": {
-      "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/novel_benchmark_exact",
+      "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/interface_study_v2/substrates/novel",
       "scope_id": "novel:benchmark_exact:dev"
     },
     "medical": {
-      "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/medical_benchmark_exact",
+      "substrate": "/home/jj/Large_Space_A/chiu/PW/Agentic-RAG-data/interface_study_v2/substrates/medical",
       "scope_id": "medical:benchmark_exact:dev"
     }
   },
