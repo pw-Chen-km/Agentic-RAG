@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from agentic_rag.agent.context import PolicyContextBuilder
+from agentic_rag.agent.entity_visibility import EXCLUDED_NER_TYPES
 from agentic_rag.agent.interface import get_interface_contract
 from agentic_rag.agent.models import EpisodeState, Message
 from agentic_rag.agent.skill import SkillDocument
@@ -46,7 +47,32 @@ def calibrate(
     rows: list[dict[str, Any]] = []
     static_valid = 0
     scope_id = next(iter(substrate.doc_ids_by_scope))
-    entity_id = sorted(substrate.entity_ids_by_scope[scope_id])[0]
+    # Pick a synthetic entity that can actually be navigated in the state
+    # below.  The v6.2 policy intentionally hides excluded NER types and
+    # entities with no linked target, so selecting the first substrate ID can
+    # produce a false calibration failure (for example, when it is a DATE).
+    def pick_entity(landing: str | None) -> str | None:
+        for candidate in sorted(substrate.entity_ids_by_scope[scope_id]):
+            entity = substrate.entity_by_id.get(candidate)
+            if entity is None or (entity.entity_type or "").upper() in EXCLUDED_NER_TYPES:
+                continue
+            linked_sentences = {
+                mention.sentence_id
+                for mention in substrate.mentions
+                if mention.entity_id == candidate
+                and mention.sentence_id in substrate.sentence_ids_by_scope[scope_id]
+            }
+            linked_passages = {
+                substrate.sentence_by_id[sentence_id].chunk_id
+                for sentence_id in linked_sentences
+            }
+            if landing == "chunk" and linked_passages:
+                return candidate
+            if landing == "sentence" and linked_sentences:
+                return candidate
+            if landing is None and (linked_sentences or linked_passages):
+                return candidate
+        return None
     for name in conditions:
         policy = None
         if live:
@@ -92,9 +118,17 @@ def calibrate(
         # only EpisodeState.initial() would incorrectly report C2/C3/C4/C5 as
         # missing their navigation tools.
         entity_state = EpisodeState.initial()
-        entity_state.visible_entity_ids.add(entity_id)
-        entity_state.semantic_memory_node_ids.append(entity_id)
-        entity_state.reference_registry.register(entity_id, "ENTITY")
+        landing = {
+            "chunk": "chunk",
+            "sentence": "sentence",
+            "annotation-only": None,
+            "none": None,
+        }.get(contract.entity_continuation.value)
+        entity_id = pick_entity(landing)
+        if entity_id is not None:
+            entity_state.visible_entity_ids.add(entity_id)
+            entity_state.semantic_memory_node_ids.append(entity_id)
+            entity_state.reference_registry.register(entity_id, "ENTITY")
         entity_visible = builder.build(
             "Calibration question",
             study_skill,
@@ -107,9 +141,9 @@ def calibrate(
             for item in entity_visible.tool_definitions
         ]
         expected_entity = set(expected_initial)
-        if contract.entity_continuation.value == "chunk":
+        if contract.entity_continuation.value == "chunk" and entity_id is not None:
             expected_entity.add("follow_entity_to_passages")
-        elif contract.entity_continuation.value == "sentence":
+        elif contract.entity_continuation.value == "sentence" and entity_id is not None:
             expected_entity.add("follow_entity_to_sentences")
         if set(entity_names) != expected_entity:
             raise ValueError(
