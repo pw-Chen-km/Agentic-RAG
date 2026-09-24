@@ -35,38 +35,44 @@ def calibrate(
     timeout_seconds: float = 600.0,
     max_output_tokens: int = 512,
     repetitions: int = 1,
+    seed: int | None = 20260805,
 ) -> dict[str, Any]:
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
     substrate = Substrate.open(substrate_path)
-    policy = None
-    if live:
-        from agentic_rag.agent.providers.ollama import OllamaChatPolicy
-
-        policy = OllamaChatPolicy(
-            model=model,
-            host=host,
-            temperature=0,
-            think=False,
-            num_ctx=32768,
-            timeout_seconds=timeout_seconds,
-            max_retries=0,
-            max_output_tokens=max_output_tokens,
-        )
+    study_skill = SkillDocument.load(
+        Path(__file__).resolve().parents[1] / "skills" / "interface_study.md"
+    )
     rows: list[dict[str, Any]] = []
     static_valid = 0
     scope_id = next(iter(substrate.doc_ids_by_scope))
     entity_id = sorted(substrate.entity_ids_by_scope[scope_id])[0]
     for name in conditions:
+        policy = None
+        if live:
+            from agentic_rag.agent.providers.ollama import OllamaChatPolicy
+
+            # Formal runs create one provider instance per condition.  Keep
+            # calibration's model lifecycle identical so a previous condition
+            # cannot affect the next condition's tool-call probe.
+            policy = OllamaChatPolicy(
+                model=model,
+                host=host,
+                temperature=0,
+                think=False,
+                num_ctx=32768,
+                timeout_seconds=timeout_seconds,
+                max_retries=0,
+                max_output_tokens=max_output_tokens,
+                seed=seed,
+            )
         contract = get_interface_contract(name)
         builder = PolicyContextBuilder(
             substrate, interface_contract=contract
         )
         initial = builder.build(
             "Calibration question",
-            SkillDocument.from_text(
-                "Answer the question using information made available by the interface."
-            ),
+            study_skill,
             EpisodeState.initial(),
             [],
             scope_id=scope_id,
@@ -91,9 +97,7 @@ def calibrate(
         entity_state.reference_registry.register(entity_id, "ENTITY")
         entity_visible = builder.build(
             "Calibration question",
-            SkillDocument.from_text(
-                "Answer the question using information made available by the interface."
-            ),
+            study_skill,
             entity_state,
             [],
             scope_id=scope_id,
@@ -173,9 +177,10 @@ def calibrate(
                             "selected_tool_allowed": selected in available,
                             "decision_count": policy.last_usage_metadata.get("decision_count"),
                             "selected_action": policy.last_usage_metadata.get("selected_action"),
-                            "constrained_single_decision": policy.last_usage_metadata.get(
-                                "constrained_single_decision"
+                            "native_tool_calling": policy.last_usage_metadata.get(
+                                "native_tool_calling"
                             ),
+                            "tool_call_count": policy.last_usage_metadata.get("tool_call_count"),
                             "usage": {
                                 "input_tokens": policy.last_usage_metadata.get(
                                     "provider_input_tokens"
@@ -222,8 +227,8 @@ def calibrate(
         check
         for check in live_checks
         if check.get("provider_status") == "ok"
-        and check.get("constrained_single_decision") is True
-        and check.get("decision_count") == 1
+        and check.get("native_tool_calling") is True
+        and check.get("tool_call_count") == 1
         and check.get("selected_tool_allowed") is True
         and check.get("selected_action") == check.get("selected_tool")
     ]
@@ -239,7 +244,7 @@ def calibrate(
     else:
         gate = "static_contracts_passed"
     return {
-        "calibration_version": "interface-study-v2-single-decision-v4",
+        "calibration_version": "interface-study-native-tool-calling-v1",
         "substrate": substrate.root.as_posix(),
         "conditions": rows,
         "schema_valid_rate": static_valid / len(conditions) if conditions else None,
@@ -258,6 +263,7 @@ def calibrate(
             "host": host if live else None,
             "think": False if live else None,
             "repetitions_per_state": repetitions if live else None,
+            "seed": seed if live else None,
         },
         "gate": gate,
         "gate_scope": (
@@ -283,6 +289,7 @@ def main() -> None:
         default=1,
         help="number of live provider probes per condition and context state",
     )
+    parser.add_argument("--seed", type=int, default=20260805)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     report = calibrate(
@@ -294,6 +301,7 @@ def main() -> None:
         timeout_seconds=args.timeout_seconds,
         max_output_tokens=args.max_output_tokens,
         repetitions=args.repetitions,
+        seed=args.seed,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

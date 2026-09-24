@@ -196,6 +196,9 @@ def _conversation(trajectory: Any) -> list[dict[str, Any]]:
                 "action": decision.get("action"),
                 "reasoning": decision.get("assessment"),
                 "env_feedback": step.get("agent_visible_observation"),
+                "tool_calls": (step.get("provider_metadata") or {}).get("raw_tool_calls", []),
+                "tool_call_names": (step.get("provider_metadata") or {}).get("tool_call_names", []),
+                "provider_native_tool_calling": (step.get("provider_metadata") or {}).get("native_tool_calling"),
             }
         )
     return conversation

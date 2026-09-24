@@ -52,6 +52,7 @@ from agentic_rag.agent.protocol import (
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.agent.tool_calling import build_tool_definitions, tool_schema_sha256
 from agentic_rag.agent.context_rendering import render_context
+from agentic_rag.agent.entity_visibility import EntityVisibilityPolicy
 from agentic_rag.substrate.storage import Substrate
 
 
@@ -101,6 +102,7 @@ class PolicyContextBuilder:
         self.use_state_conditioned_schema = use_state_conditioned_schema
         self.interface_contract = interface_contract
         self.require_evidence_assessment = require_evidence_assessment
+        self.entity_visibility_policy = EntityVisibilityPolicy(substrate)
         self.action_space_builder = AvailableActionSpaceBuilder(
             self.enabled_expansions,
             interface_contract,
@@ -121,7 +123,7 @@ class PolicyContextBuilder:
         if scope_id is not None:
             self.substrate.require_scope(scope_id)
         skill_text = skill.content if isinstance(skill, SkillDocument) else skill
-        display_ids = self._display_ids(state)
+        display_ids, entity_filter_audit = self._display_ids(state, scope_id)
         reference_map = self._reference_map(display_ids, state)
         if self.interface_contract is not None:
             # Keep previously displayed sentence labels usable after their text
@@ -138,8 +140,11 @@ class PolicyContextBuilder:
             mode=action_space_mode,
         )
         if self.interface_contract is not None:
-            return self._build_native(query, skill_text, state, trajectory,
-                                      display_ids, reference_map, available_action_space)
+            return self._build_native_tool_context(
+                query, skill_text, state, trajectory,
+                display_ids, reference_map, available_action_space,
+                entity_filter_audit,
+            )
         tool_definitions = build_tool_definitions(available_action_space)
         decision_format = (
             self.action_schema_builder.build(available_action_space)
@@ -245,18 +250,41 @@ class PolicyContextBuilder:
             provider_tools=tool_definitions,
         )
 
-    def _display_ids(self, state: EpisodeState) -> list[str]:
+    def _display_ids(
+        self, state: EpisodeState, scope_id: str | None
+    ) -> tuple[list[str], list[dict[str, Any]]]:
         visible = (
             state.visible_entity_ids
             | state.visible_sentence_ids
             | state.visible_chunk_ids
         )
+        entity_filter_audit: list[dict[str, Any]] = []
+        navigable_entities: set[str] | None = None
+        if (
+            self.interface_contract is not None
+            and self.interface_contract.entity_annotation
+            and scope_id is not None
+        ):
+            landing = {
+                "chunk": "chunk",
+                "sentence": "sentence",
+                "annotation-only": None,
+                "none": None,
+            }.get(self.interface_contract.entity_continuation.value)
+            navigable_entities, entity_filter_audit = self.entity_visibility_policy.evaluate(
+                state, scope_id, landing=landing
+            )
         ordered = [item for item in state.semantic_memory_node_ids if item in visible]
         seen = set(ordered)
         ordered.extend(sorted(visible - seen, key=self._node_sort_key))
-        return [
+        display_ids = [
             node_id
             for node_id in ordered
+            if not (
+                node_id in state.visible_entity_ids
+                and navigable_entities is not None
+                and node_id not in navigable_entities
+            )
             if not (
                 node_id in state.visible_sentence_ids
                 and node_id not in state.eligible_sentence_ids
@@ -274,17 +302,23 @@ class PolicyContextBuilder:
                 in (state.visible_passage_ids | state.read_chunk_ids)
             )
         ]
+        return display_ids, entity_filter_audit
 
-    def _build_native(self, query, skill_text, state, trajectory, display_ids, references, space):
-        """One cumulative observation, no raw backend payload or repeated source text.
+    def _build_native_tool_context(
+        self, query, skill_text, state, trajectory, display_ids, references,
+        space, entity_filter_audit,
+    ):
+        """Build the native-tool conversation and cumulative observation.
 
-        Earlier calls are summarized in attempted_actions.  Only the latest
-        native call/result pair is retained, with the current cumulative visible
-        state as its result.  This is the same memory policy for every condition.
+        Earlier calls are retained as the provider-required assistant/tool
+        pairing and summarized in the cumulative observation.  Source text is
+        rendered once by the observation projector; tool results contain only
+        the safe execution summary.
         """
-        # Retain a plain capability registry for audit only. The provider receives
-        # the single decision schema below, not native tool definitions.
-        tools = build_tool_definitions(space, require_evidence_assessment=False)
+        tools = build_tool_definitions(
+            space,
+            require_evidence_assessment=self.require_evidence_assessment,
+        )
         memory, spans, entity_cards = [], [], []
         names = {}
         for node_id in display_ids:
@@ -345,6 +379,7 @@ class PolicyContextBuilder:
         content, audit, attempted = render_context(
             memory, spans, entity_cards, trajectory, state,
             require_assessment=self.require_evidence_assessment,
+            entity_filter_audit=entity_filter_audit,
         )
         guide = render_action_guide(
             space,
@@ -352,11 +387,45 @@ class PolicyContextBuilder:
             entity_navigation_possible=bool(self.interface_contract.enabled_expansions),
             require_evidence_assessment=self.require_evidence_assessment,
         )
-        messages = [Message(role="system", content=skill_text.strip() + "\n\n" + self.interface_contract.protocol + "\n\n" + guide),
-                    Message(role="user", content=f"Original question:\n{query}")]
-        # The study protocol uses one schema-constrained decision per turn.
-        # Prior actions are rendered in the cumulative observation rather than
-        # replayed as provider-native assistant/tool messages.
+        messages = [
+            Message(
+                role="system",
+                content=skill_text.strip() + "\n\n" + self.interface_contract.protocol + "\n\n" + guide,
+            ),
+            Message(role="user", content=f"Original question:\n{query}"),
+        ]
+        # Native providers require the assistant tool-call/tool-result pairing
+        # on subsequent turns. The compact cumulative observation remains the
+        # authoritative source presentation and avoids repeating full text.
+        for record in trajectory:
+            raw_calls = record.provider_metadata.get("raw_tool_calls", [])
+            if not isinstance(raw_calls, list):
+                continue
+            calls: list[ToolCall] = []
+            for raw_call in raw_calls:
+                try:
+                    call = ToolCall.model_validate(raw_call)
+                except Exception:
+                    continue
+                calls.append(call)
+            if not calls:
+                continue
+            messages.append(Message(role="assistant", content="", tool_calls=calls))
+            result_payload = project_observation_for_audit(record.observation, self.substrate)
+            for call in calls:
+                messages.append(
+                    Message(
+                        role="tool",
+                        tool_call_id=call.id,
+                        tool_name=call.function.name,
+                        content=json.dumps(
+                            result_payload,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    )
+                )
         messages.append(Message(role="user", content=content))
         view = PolicyView(context_audit=audit, policy_state=PolicyStateView(
             step=state.step, policy_attempts=state.policy_attempts,
@@ -378,7 +447,7 @@ class PolicyContextBuilder:
                                   decision_schema_sha256=decision_schema_sha256(decision_format),
                                   decision_schema=decision_format.model_json_schema(),
                                   tool_definitions=tools, tool_schema_sha256=tool_schema_sha256(tools),
-                                  provider_tools=None, visible_source_spans=spans)
+                                  provider_tools=tools, visible_source_spans=spans)
 
     def _reference_map(
         self, display_ids: Sequence[str], state: EpisodeState
@@ -619,6 +688,11 @@ def project_observation_for_audit(
         }
     elif isinstance(action, ResolvedExpandAction):
         summary = {"type": "EXPAND", "kind": action.kind.value, "query": action.query}
+        if action.kind.value in {
+            "ENTITY_MENTIONED_IN_CHUNK",
+            "ENTITY_MENTIONED_IN_SENTENCE",
+        }:
+            summary["query_source"] = "original_question"
     elif isinstance(action, ResolvedReadAction):
         summary = {"type": "READ"}
     elif isinstance(action, ResolvedFinishAction):

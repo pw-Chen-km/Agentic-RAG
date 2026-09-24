@@ -24,7 +24,7 @@ def test_spans_describe_input_not_new_retrieval(
         count = 0
 
         def decide(self, messages, *, tools=None, **kwargs):
-            assert tools is None
+            assert tools
             self.count += 1
             if self.count == 1:
                 decision = PolicyDecision(

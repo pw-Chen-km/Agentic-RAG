@@ -36,7 +36,7 @@ def main():
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     repo = Path(__file__).resolve().parents[1]
-    config = yaml.safe_load((repo / "configs/interface_study_v2_qwen38_vllm.yaml").read_text())
+    config = yaml.safe_load((repo / "configs/interface_study_v62_qwen27b_ollama.yaml").read_text())
     config["agent"]["require_evidence_assessment"] = a.assessment == "on"
     config["policy"] = dict(provider="ollama", model="qwen3.8:27b-q4_K_M",
         host="http://127.0.0.1:11440", temperature=0, think=False,

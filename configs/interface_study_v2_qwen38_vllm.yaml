@@ -5,6 +5,7 @@ agent:
   episode_timeout_seconds: 3600
   show_available_action_options: true
   use_state_conditioned_schema: true
+  protocol: native_tool_calling
   interface: C0
 policy:
   provider: openai_compatible
@@ -16,3 +17,4 @@ policy:
   max_retries: 2
   num_ctx: 32768
   max_output_tokens: 2048
+  seed: 20260805

@@ -11,7 +11,7 @@ FILES = {"episode.json", "conversation.json", "target_system_prompt.txt",
          "target_user_prompt.txt", "skill.md", "effective_config.json"}
 
 
-def audit(root):
+def audit(root, *, expected=21):
     rows, violations, tools_used = [], [], Counter()
     for ds in ("hotpotqa", "novel", "medical"):
         for path in sorted((root / ds / "episodes").glob("*/episode.json")):
@@ -39,17 +39,24 @@ def audit(root):
                 if condition == "A1" and any(k.startswith("follow_") for k in available):
                     errors.append(f"step_{index}:A1_navigation_leak")
                 provider = step.get("provider_metadata") or {}
-                structured = provider.get("raw_structured_decision")
                 native_calls = provider.get("raw_tool_calls") or []
-                if native_calls:
-                    errors.append(f"step_{index}:unexpected_native_tool_calls")
-                if provider.get("constrained_single_decision") is not True:
-                    errors.append(f"step_{index}:not_constrained_single_decision")
+                if provider.get("native_tool_calling") is not True:
+                    errors.append(f"step_{index}:not_native_tool_calling")
+                if step.get("validation_status") == "valid" and len(native_calls) != 1:
+                    errors.append(f"step_{index}:native_tool_call_count_not_one")
                 calls = []
-                if isinstance(structured, dict) and isinstance(structured.get("action"), dict):
-                    calls = [structured["action"]]
+                for raw_call in native_calls:
+                    function = raw_call.get("function") or {}
+                    arguments = function.get("arguments") or {}
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            arguments = {}
+                    if isinstance(arguments, dict):
+                        calls.append({"name": function.get("name"), **arguments})
                 if step.get("validation_status") == "valid" and (
-                    provider.get("decision_count") != 1 or len(calls) != 1
+                    provider.get("tool_call_count") != 1 or len(calls) != 1
                 ):
                     errors.append(f"step_{index}:decision_count_not_one")
                 for action in calls:
@@ -94,9 +101,9 @@ def audit(root):
         actual = {r["condition"] for r in rows if r["dataset"] == ds}
         if actual != CONDITIONS:
             violations.append(f"{ds}:missing_conditions:{sorted(CONDITIONS - actual)}")
-    return dict(status="artifact_checks_passed" if completed == 21 and not violations else "pending_or_failed",
-        episodes=completed, expected=21, tool_uptake=dict(tools_used), violations=violations, results=rows,
-        limitations=["21 episodes do not establish 99% reliability or all-tool branch coverage",
+    return dict(status="artifact_checks_passed" if completed == expected and not violations else "pending_or_failed",
+        episodes=completed, expected=expected, tool_uptake=dict(tools_used), violations=violations, results=rows,
+        limitations=[f"{expected} episodes do not establish 99% reliability or all-tool branch coverage",
             "Gold provenance must be checked structurally; answer substring matches alone cannot establish leakage",
             "Semantic judge is separate; this audit makes no claim of live judge success"])
 
@@ -105,8 +112,9 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--run", type=Path, required=True)
     p.add_argument("--output", type=Path)
+    p.add_argument("--expected", type=int, default=21)
     a = p.parse_args()
-    result = audit(a.run)
+    result = audit(a.run, expected=a.expected)
     if a.output:
         a.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))

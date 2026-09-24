@@ -17,6 +17,7 @@ from agentic_rag.agent.harness import _policy_from_config
 from agentic_rag.agent.interface import get_interface_contract
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.evaluation.interface_study import aggregate, evaluate_episode
+from agentic_rag.evaluation.gold_sidecars import sha256 as file_sha256, validate_gold_sidecars
 from agentic_rag.evaluation.question_identity import IDENTITY_VERSION, prepare_question_rows
 from agentic_rag.substrate.storage import EvaluationSidecars, Substrate
 
@@ -44,6 +45,8 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
             Path("src/agentic_rag/agent/interface_action_catalog.py"),
             Path("src/agentic_rag/agent/context.py"),
             Path("src/agentic_rag/agent/context_rendering.py"),
+            Path("src/agentic_rag/agent/entity_visibility.py"),
+            Path("src/agentic_rag/agent/router.py"),
             Path("src/agentic_rag/agent/state_management.py"),
         )
     )
@@ -53,16 +56,24 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
             Path("src/agentic_rag/agent/tool_calling.py"),
             Path("src/agentic_rag/agent/action_schema.py"),
             Path("src/agentic_rag/agent/models.py"),
+            Path("src/agentic_rag/agent/validator.py"),
+            Path("src/agentic_rag/agent/expansion.py"),
             Path("src/agentic_rag/agent/providers/openai_compatible.py"),
             Path("src/agentic_rag/agent/providers/ollama.py"),
         )
     )
+    action_catalog_sha256 = sha256(repo_root / "src/agentic_rag/agent/interface_action_catalog.py")
+    entity_schema_sha256 = hashlib.sha256(
+        (repo_root / "src/agentic_rag/agent/tool_calling.py").read_bytes()
+        + (repo_root / "src/agentic_rag/agent/action_schema.py").read_bytes()
+    ).hexdigest()
     substrate_manifest_data = json.loads((args.substrate / "manifest.json").read_text(encoding="utf-8"))
     manifest = {
         "manifest_version": "interface-study-run-v2",
         "dataset": args.dataset,
         "seed": args.seed,
         "question_limit": args.limit,
+        "question_indices": getattr(args, "question_indices", None),
         "conditions": list(conditions),
         "question_file": args.questions.resolve().as_posix(),
         "question_sha256": sha256(args.questions),
@@ -81,9 +92,23 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
             (repo_root / "src/agentic_rag/evaluation/graphrag_bench.py").read_bytes()
         ).hexdigest(),
         "embedding_model_identity": substrate_manifest_data.get("embedding_model"),
-        "renderer_version": "sectioned-context-v5-action-guide",
+        "model_identity": config.policy.model,
+        "provider_name": config.policy.provider,
+        "decoding": {
+            "temperature": config.policy.temperature,
+            "seed": getattr(config.policy, "seed", None),
+            "think": getattr(config.policy, "think", None),
+            "num_ctx": config.policy.num_ctx,
+            "max_output_tokens": config.policy.max_output_tokens,
+        },
+        "embedding_validation_override": bool(
+            getattr(args, "allow_substrate_embedding_mismatch", False)
+        ),
+        "renderer_version": "sectioned-context-v6.2-entity-navigation-filter",
         "renderer_sha256": hashlib.sha256(renderer_bytes).hexdigest(),
-        "provider_protocol": "constrained-single-decision-v4",
+        "protocol_type": "native_tool_calling",
+        "native_tool_calling": True,
+        "provider_protocol": "native-tool-calling-v1.1-original-question-hop",
         "require_evidence_assessment": config.require_evidence_assessment,
         "target_prompt_digest": hashlib.sha256(
             (repo_root / "src/agentic_rag/agent/interface.py").read_bytes()
@@ -91,6 +116,19 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
             + args.skill.read_bytes()
         ).hexdigest(),
         "provider_protocol_sha256": hashlib.sha256(provider_protocol_bytes).hexdigest(),
+        "tool_schema_sha256": {
+            name: hashlib.sha256(
+                json.dumps(get_interface_contract(name).compile(), ensure_ascii=False,
+                           sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            for name in conditions
+        },
+        "action_catalog_sha256": action_catalog_sha256,
+        "entity_schema_sha256": entity_schema_sha256,
+        "entity_schema_version": "entity-navigation-filter-v1",
+        "entity_filter_policy_sha256": sha256(
+            repo_root / "src/agentic_rag/agent/entity_visibility.py"
+        ),
         "budget": {
             "normal_policy_decisions": 15,
             "finalize_calls": 1,
@@ -100,6 +138,12 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         },
         "contracts": {name: get_interface_contract(name).compile() for name in conditions},
     }
+    sidecar_manifest_path = args.substrate / "evaluation" / "gold_evidence_manifest.json"
+    manifest["gold_sidecar_manifest_sha256"] = (
+        sha256(sidecar_manifest_path) if sidecar_manifest_path.exists() else None
+    )
+    manifest["embedding_backend"] = substrate_manifest_data.get("embedding_backend")
+    manifest["embedding_dimension"] = substrate_manifest_data.get("embedding_dimension")
     if args.dataset in {"novel", "medical"}:
         manifest["question_identity_version"] = IDENTITY_VERSION
         manifest["question_identity_sha256"] = sha256(
@@ -131,16 +175,31 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("pilot questions must be a JSON array")
     sidecars = EvaluationSidecars.open(args.substrate)
     substrate_manifest = json.loads((args.substrate / "manifest.json").read_text(encoding="utf-8"))
+    if getattr(args, "allow_substrate_embedding_mismatch", False):
+        raise ValueError("embedding mismatch override is diagnostic-only and cannot be used for formal runs")
     embedding_model = substrate_manifest.get("embedding_model")
     embedding_name = embedding_model.get("name") if isinstance(embedding_model, dict) else embedding_model
-    if embedding_name != "qwen3-embedding:4b":
-        raise ValueError(
-            "v2 run requires a substrate built with qwen3-embedding:4b; "
-            f"found {embedding_name!r}. Validate/rebuild the remote substrate first."
-        )
+    embedding_backend = str(substrate_manifest.get("embedding_backend") or "")
+    embedding_dimension = int(substrate_manifest.get("embedding_dimension") or 0)
     questions = prepare_question_rows(questions, sidecars.benchmark_questions, args.dataset)
+    if getattr(args, "question_indices", None) is not None:
+        if args.limit is not None:
+            raise ValueError("--question-indices and --limit cannot be combined")
+        if len(set(args.question_indices)) != len(args.question_indices):
+            raise ValueError("--question-indices must be unique")
+        if any(index < 0 or index >= len(questions) for index in args.question_indices):
+            raise ValueError("--question-indices contains an out-of-range source row")
+        questions = [questions[index] for index in args.question_indices]
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = _manifest(args, AgentConfig.from_yaml(args.config), conditions)
+    sidecar_manifest_path = args.substrate / "evaluation" / "gold_evidence_manifest.json"
+    sidecar_report = None
+    if sidecar_manifest_path.exists():
+        sidecar_report = validate_gold_sidecars(args.substrate, args.dataset)
+        manifest["gold_sidecar_manifest_sha256"] = file_sha256(sidecar_manifest_path)
+    manifest["gold_sidecar_report"] = sidecar_report
+    manifest["embedding_backend"] = embedding_backend or manifest.get("embedding_backend")
+    manifest["embedding_dimension"] = embedding_dimension or manifest.get("embedding_dimension")
     manifest_path = args.output / "run_manifest.json"
     if args.resume and not manifest_path.exists():
         raise ValueError("resume requested but run_manifest.json does not exist")
@@ -148,11 +207,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         previous = json.loads(manifest_path.read_text(encoding="utf-8"))
         if previous != manifest:
             raise ValueError("resume refused: source/config/substrate/renderer manifest changed")
-    else:
+    if not sidecar_manifest_path.exists():
+        raise ValueError("gold evidence sidecar is missing; run repair_gold_sidecars.py")
+    if not embedding_name or not embedding_backend or embedding_dimension <= 0:
+        raise ValueError("substrate manifest must declare embedding model, backend, and positive dimension")
+    if sidecar_report is None:
+        raise ValueError("gold evidence sidecar validation did not run")
+    if not manifest_path.exists():
         write_json(manifest_path, manifest)
 
     gold = [asdict(item) for item in sidecars.gold_support]
     base_config = AgentConfig.from_yaml(args.config)
+    if base_config.protocol != "native_tool_calling":
+        raise ValueError("formal interface study requires protocol: native_tool_calling")
     if (
         base_config.max_steps != 15
         or base_config.max_policy_attempts != 15
@@ -262,6 +329,13 @@ def main() -> None:
     parser.add_argument("--judge-config", type=Path, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--limit", type=int, default=None, help="limit questions for a smoke run")
+    parser.add_argument("--question-indices", nargs="+", type=int, default=None,
+                        help="source row indices to run after full source/sidecar validation")
+    parser.add_argument(
+        "--allow-substrate-embedding-mismatch",
+        action="store_true",
+        help="diagnostic only: run with the substrate's recorded embedding backend; never use for formal runs",
+    )
     args = parser.parse_args()
     run(args)
 

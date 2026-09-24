@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from agentic_rag.agent.models import Assessment, EpisodeState, Observation, SentencePreview
+from agentic_rag.agent.entity_visibility import EntityVisibilityPolicy
+from agentic_rag.agent.interface import InterfaceContract
 from agentic_rag.substrate.storage import Substrate
 
 _VISIBILITY_FIELDS = (
@@ -22,8 +24,12 @@ _SUMMARY_LIMIT = 160
 class StateUpdater:
     """Pure transition logic used only by the episode State Manager."""
 
-    def __init__(self, substrate: Substrate) -> None:
+    def __init__(
+        self, substrate: Substrate, interface_contract: InterfaceContract | None = None
+    ) -> None:
         self.substrate = substrate
+        self.interface_contract = interface_contract
+        self.entity_visibility_policy = EntityVisibilityPolicy(substrate)
 
     def apply(
         self,
@@ -32,6 +38,7 @@ class StateUpdater:
         assessment: Assessment | None,
         observation: Observation,
         action_signature: str | None,
+        scope_id: str | None = None,
         commit_assessment: bool = True,
         consume_step: bool = True,
         consume_policy_attempt: bool = True,
@@ -81,14 +88,25 @@ class StateUpdater:
         if commit_assessment and assessment is not None:
             updated.last_assessment = assessment.model_copy(deep=True)
         updated.newest_observation = observation
-        self._update_references_and_previews(updated, observation)
+        self._update_references_and_previews(updated, observation, scope_id=scope_id)
         return updated
 
     def _update_references_and_previews(
-        self, state: EpisodeState, observation: Observation
+        self, state: EpisodeState, observation: Observation, *, scope_id: str | None
     ) -> None:
         registry = state.reference_registry
-        for entity_id in sorted(state.visible_entity_ids):
+        entity_ids = state.visible_entity_ids
+        interface_contract = getattr(self, "interface_contract", None)
+        if interface_contract is not None:
+            if not interface_contract.entity_annotation:
+                entity_ids = set()
+            elif scope_id is not None:
+                landing = interface_contract.entity_continuation.value
+                entity_ids, _ = self.entity_visibility_policy.evaluate(
+                    state, scope_id,
+                    landing=landing if landing in {"chunk", "sentence"} else None,
+                )
+        for entity_id in sorted(entity_ids):
             registry.register(entity_id, "ENTITY")
         for chunk_id in sorted(state.visible_chunk_ids):
             registry.register(chunk_id, "CHUNK")

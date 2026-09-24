@@ -75,7 +75,9 @@ class AgentController:
         self.max_retrieved_tokens = max_retrieved_tokens
         self.episode_timeout_seconds = episode_timeout_seconds
         self.state_manager_factory = EpisodeStateManagerFactory(
-            state_updater or StateUpdater(router.substrate)
+            state_updater or StateUpdater(
+                router.substrate, context_builder.interface_contract
+            )
         )
 
     def run_episode(
@@ -121,16 +123,15 @@ class AgentController:
                 )
             except PolicyResponseError as exc:
                 usage = self._policy_usage()
+                failure_category = (
+                    "state_invalid" if isinstance(exc, PolicyStateError) else "protocol_invalid"
+                )
                 observation = Observation(
                     action_id=manager.next_action_id,
                     status=ObservationStatus.INVALID_ACTION,
-                    error_code=(
-                        "state_invalid"
-                        if isinstance(exc, PolicyStateError)
-                        else "protocol_invalid"
-                    ),
+                    error_code=failure_category,
                     message=str(exc),
-                    metadata={"failure_category": "protocol_invalid"},
+                    metadata={"failure_category": failure_category},
                 )
                 manager.record_attempt(
                     AttemptEvent(
@@ -155,11 +156,7 @@ class AgentController:
                         visible_source_spans=built.visible_source_spans,
                         provider_metadata={
                             **self._provider_metadata(built.messages),
-                            "failure_category": (
-                                "state_invalid"
-                                if isinstance(exc, PolicyStateError)
-                                else "protocol_invalid"
-                            ),
+                            "failure_category": failure_category,
                             "legacy_error_code": "invalid_policy_response",
                         },
                     )

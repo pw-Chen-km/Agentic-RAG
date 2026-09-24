@@ -253,6 +253,8 @@ class ExpansionEngine:
         action: Any,
         question: str,
         scope_id: str,
+        *,
+        excluded_target_ids: frozenset[str] = frozenset(),
     ) -> ExpansionObservation:
         """Execute one expansion action within ``scope_id``.
 
@@ -292,10 +294,21 @@ class ExpansionEngine:
         )
 
         action_query = self._action_value(action, "query", None)
+        entity_navigation = kind in {
+            ENTITY_MENTIONED_IN_CHUNK,
+            ENTITY_MENTIONED_IN_SENTENCE,
+        }
+        # Interface-study entity hops deliberately have no policy-controlled
+        # query. The original question is the only ranking query, so the
+        # action isolates the structural hop from query rewriting.
         query_used = (
-            str(action_query)
-            if action_query is not None and str(action_query).strip()
-            else question
+            question
+            if entity_navigation
+            else (
+                str(action_query)
+                if action_query is not None and str(action_query).strip()
+                else question
+            )
         )
 
         dispatch = {
@@ -308,9 +321,15 @@ class ExpansionEngine:
             CHUNK_CONTAINS_SENTENCE: self._chunk_contains_sentence,
             CHUNK_MENTIONS_ENTITY: self._chunk_mentions_entity,
         }
-        source_degree, candidate_count, results = dispatch[kind](
-            source_id, query_used, scope_id, direction
-        )
+        if entity_navigation:
+            source_degree, candidate_count, results = dispatch[kind](
+                source_id, query_used, scope_id, direction,
+                excluded_target_ids=excluded_target_ids,
+            )
+        else:
+            source_degree, candidate_count, results = dispatch[kind](
+                source_id, query_used, scope_id, direction
+            )
         return ExpansionObservation(
             kind=kind,
             source_id=source_id,
@@ -327,11 +346,14 @@ class ExpansionEngine:
         query: str,
         scope_id: str,
         _direction: str | None,
+        *,
+        excluded_target_ids: frozenset[str] = frozenset(),
     ) -> tuple[int, int, list[ExpansionResult]]:
         sentence_ids = [
             sentence_id
             for sentence_id in self._entity_to_sentences.get(source_id, ())
             if sentence_id in self.substrate.sentence_ids_by_scope[scope_id]
+            and sentence_id not in excluded_target_ids
         ]
         ranked = self._rank_candidates(
             {
@@ -492,6 +514,8 @@ class ExpansionEngine:
         query: str,
         scope_id: str,
         _direction: str | None,
+        *,
+        excluded_target_ids: frozenset[str] = frozenset(),
     ) -> tuple[int, int, list[ExpansionResult]]:
         sentence_ids = [
             sentence_id
@@ -501,6 +525,8 @@ class ExpansionEngine:
         support_sentences: dict[str, list[str]] = defaultdict(list)
         for sentence_id in sentence_ids:
             chunk_id = self.substrate.sentence_by_id[sentence_id].chunk_id
+            if chunk_id in excluded_target_ids:
+                continue
             support_sentences[chunk_id].append(sentence_id)
         ranked = self._rank_candidates(
             {

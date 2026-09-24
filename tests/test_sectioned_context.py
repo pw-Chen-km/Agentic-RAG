@@ -4,7 +4,7 @@ import pytest
 
 from agentic_rag.agent.config import AgentConfig
 from agentic_rag.agent.context import PolicyContextBuilder
-from agentic_rag.agent.context_rendering import action_summary, render_context
+from agentic_rag.agent.context_rendering import action_summary, output_delivery, render_context
 from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.agent.interface import get_interface_contract
 from agentic_rag.agent.models import (Assessment, EpisodeState, FinishAction, Usage, StepRecord, Observation,
@@ -23,7 +23,7 @@ def test_live_shaped_duplicate_feedback_and_assessment_modes(built_substrate, fa
         last_usage = Usage(policy_calls=1)
         last_usage_metadata = {}
         def decide(self, messages, *, tools=None, **kwargs):
-            assert tools is None
+            assert tools
             self.count += 1
             if self.count <= 2:
                 action = SearchAction(query="Marie Curie", method=SearchMethod.DENSE, target=SearchTarget.CHUNK)
@@ -44,6 +44,9 @@ def test_live_shaped_duplicate_feedback_and_assessment_modes(built_substrate, fa
     assert duplicate.observation.error_code == "duplicate_action"
     content = final.messages[-1].content
     assert "This request was not executed. No new source text was added." in content
+    assert "returned 0; new text 0" in content
+    assert "EARLIER ACTION HISTORY\n1. find_passages(query=\"Marie Curie\")" in content
+    assert '"new_source_references"' not in content
     assert "NEW SOURCE TEXT\nNone." in content
     assert "PREVIOUSLY SHOWN SOURCE TEXT" in content
     assert final.context_audit["newly_visible_source_spans"] == []
@@ -67,7 +70,7 @@ def test_duplicate_loop_is_bounded_and_finalize_retains_gaps(built_substrate, fa
         last_usage_metadata = {}
         count = 0
         def decide(self, messages, *, tools=None, **kwargs):
-            assert tools is None
+            assert tools
             self.count += 1
             if self.count <= 15:
                 action = SearchAction(query="Marie Curie", method=SearchMethod.DENSE, target=SearchTarget.CHUNK)
@@ -86,6 +89,28 @@ def test_duplicate_loop_is_bounded_and_finalize_retains_gaps(built_substrate, fa
     assert sum(s.observation.error_code == "duplicate_action" for s in result.trajectory) == 14
     if assessment:
         assert result.trajectory[-1].decision.assessment.missing_information == ["Unresolved gap"]
+
+
+def test_same_query_with_different_search_tool_is_allowed(built_substrate, fake_embedder, tmp_path):
+    actions = [SearchAction(query="Marie Curie", method=SearchMethod.DENSE,
+                            target=SearchTarget.CHUNK),
+               SearchAction(query="Marie Curie", method=SearchMethod.DENSE,
+                            target=SearchTarget.SENTENCE),
+               FinishAction(answer="Insufficient evidence", evidence_refs=[])]
+    class Policy:
+        last_usage = Usage(policy_calls=1)
+        last_usage_metadata = {"constrained_single_decision": True, "decision_count": 1}
+        def decide(self, messages, *, tools=None, **kwargs):
+            return PolicyDecision(action=actions.pop(0))
+    harness = AgentHarness(substrate=Substrate.open(built_substrate),
+        config=AgentConfig(interface="C1", require_evidence_assessment=False),
+        skill=SkillDocument.from_text("Answer using sources."), policy=Policy(),
+        output_root=tmp_path / "cross-tool", embedding_backend=fake_embedder)
+    result = harness.run("Where was Marie Curie born?", "q1")
+    assert result.termination_reason.value == "finish"
+    assert [step.observation.status for step in result.trajectory[:2]] == [
+        ObservationStatus.OK, ObservationStatus.OK]
+    assert all(step.observation.error_code != "duplicate_action" for step in result.trajectory)
 
 
 def test_sentence_passage_promotion_preserves_alias_and_only_new_spans(built_substrate):
@@ -170,6 +195,35 @@ def test_success_with_no_new_source_and_reorganized_source():
     assert "NEW SOURCE TEXT\nNone." in text
     assert audit["newly_visible_source_spans"] == []
     assert audit["old_section_references"] == ["C1"]
+
+
+def test_new_reference_without_new_text_is_separate_from_source_gain():
+    state = EpisodeState.initial()
+    state.visible_passage_ids.add("c1")
+    state.eligible_sentence_ids.add("s1")
+    state.reference_registry.register("s1", "SENTENCE")
+    state.reference_registry.register("c1", "CHUNK")
+    span = {"span_type": "sentence", "sentence_id": "s1", "chunk_id": "c1",
+            "start": 0, "end": 4, "text": "Text", "visible": True, "complete": True}
+    observation = Observation(status=ObservationStatus.OK,
+        results=[{"chunk_id": "c1", "text": "Text"}],
+        metadata={"projected_source_spans": [span]})
+    delivery = output_delivery(observation, state, [span], {"S1"})
+    assert delivery["returned_references"] == ["C1"]
+    assert delivery["first_visible_references"] == ["C1"]
+    assert delivery["new_source_references"] == []
+    assert delivery["newly_projected_source_spans"] == []
+
+
+def test_compact_history_is_shorter_than_previous_json_record():
+    import json
+    from agentic_rag.agent.context_rendering import format_action_summary
+    attempt = {"turn": 2, "tool": "find_passages", "query": "Kate Bosworth known for",
+               "status": "completed", "returned_count": 5, "new_text_source_count": 5,
+               "new_source_references": ["C6", "C9", "C10", "C7", "C8"]}
+    old = {k: v for k, v in attempt.items()
+           if k in {"turn", "tool", "query", "status", "new_source_references"}}
+    assert len(format_action_summary(attempt)) < len(json.dumps(old, ensure_ascii=False))
 
 
 @pytest.mark.parametrize("field", ["renderer_sha256", "provider_protocol_sha256", "require_evidence_assessment"])

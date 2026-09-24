@@ -18,6 +18,7 @@ from agentic_rag.agent.models import (
     SearchMethod,
     SearchTarget,
 )
+from agentic_rag.agent.interface_action_catalog import ACTION_CARDS
 from agentic_rag.agent.policy import PolicyResponseError, PolicyStateError
 
 
@@ -36,10 +37,10 @@ def build_tool_definitions(
         target = option.target.value.lower()
         if option.method is SearchMethod.DENSE and option.target is SearchTarget.CHUNK:
             name = "find_passages"
-            description = "Search the collection and return complete passages related to a query."
+            description = ACTION_CARDS[name].schema_description
         elif option.method is SearchMethod.DENSE and option.target is SearchTarget.SENTENCE:
             name = "find_sentences"
-            description = "Search the collection and return complete sentences related to a query."
+            description = ACTION_CARDS[name].schema_description
         else:
             name = f"search_{method}_{target}"
             description = f"Search the collection and return complete {target.lower()} results related to a query."
@@ -53,18 +54,18 @@ def build_tool_definitions(
     for option in action_space.expand_options:
         if option.kind is ExpansionKind.ENTITY_MENTIONED_IN_CHUNK:
             name = "follow_entity_to_passages"
-            description = "Return up to five complete passages that mention the displayed name. Select its entity reference from the visible name list. An optional query ranks these passages; null uses the original question."
+            description = ACTION_CARDS[name].schema_description
         elif option.kind is ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE:
             name = "follow_entity_to_sentences"
-            description = "Return up to five complete sentences that mention the displayed name. Select its entity reference from the visible name list. An optional query ranks these sentences; null uses the original question."
+            description = ACTION_CARDS[name].schema_description
         else:
             name = f"follow_{option.kind.value.lower()}"
             description = "Follow the displayed structural reference and return the available connected units."
         properties: dict[str, Any] = {
             "entity_ref": {
                 "type": "string",
-                "enum": list(option.source_refs),
-                "description": "A reference displayed with an entity name in the current observation.",
+                "minLength": 2,
+                "description": "An E# reference displayed with an entity name in the current observation.",
             }
         }
         if option.kind not in {
@@ -78,7 +79,11 @@ def build_tool_definitions(
                     "description": "A reference displayed in the current observation.",
                 }
             }
-        if option.kind is not ExpansionKind.CHUNK_ADJACENT_CHUNK:
+        if option.kind not in {
+            ExpansionKind.CHUNK_ADJACENT_CHUNK,
+            ExpansionKind.ENTITY_MENTIONED_IN_CHUNK,
+            ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
+        }:
             properties["query"] = {"type": ["string", "null"], "minLength": 1}
         else:
             properties["direction"] = {"type": "string", "enum": list(item.value for item in option.directions)}
@@ -111,7 +116,7 @@ def build_tool_definitions(
         )
         tools.append(_function(
             "finish",
-            "Return the answer supported by references shown in the current observation.",
+            ACTION_CARDS["finish"].schema_description,
             {
                 "type": "object",
                 "properties": {
@@ -179,13 +184,13 @@ def decision_from_tool_call(tool_call: Mapping[str, Any], tools=None) -> PolicyD
             action = ExpandAction(
                 kind=ExpansionKind.ENTITY_MENTIONED_IN_CHUNK,
                 source_ref=str(args["entity_ref"]),
-                query=args.get("query"),
+                query=None,
             )
         elif name == "follow_entity_to_sentences":
             action = ExpandAction(
                 kind=ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
                 source_ref=str(args["entity_ref"]),
-                query=args.get("query"),
+                query=None,
             )
         elif name == "read_passage":
             from agentic_rag.agent.models import ReadAction
@@ -244,7 +249,9 @@ def _function(name: str, description: str, parameters: dict[str, Any]) -> dict[s
                 "description": (
                     "Before selecting the tool, summarize what the shown source text "
                     "already supports and what information is still needed. Use exactly "
-                    "supported_facts and missing_information as keys, with lists of strings as values."
+                    "supported_facts and missing_information as keys, with lists of strings as values. "
+                    "This object is only the assessment: do not put query, entity_ref, answer, "
+                    "or any other tool argument inside it; those arguments belong at the top level."
                 ),
                 "properties": {
                     "supported_facts": {

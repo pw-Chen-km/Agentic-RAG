@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from agentic_rag.agent.models import ExpansionKind, SearchMethod, SearchTarget
 from agentic_rag.agent.interface_action_catalog import COMMON_SEARCH_MECHANISM
+from agentic_rag.agent.entity_visibility import EXCLUDED_NER_TYPES, EntityVisibilityPolicy
 
 
 class EntityContinuation(StrEnum):
@@ -85,6 +86,9 @@ class InterfaceContract:
             "top_k": self.top_k,
             "read_full_chunk": self.read_full_chunk,
             "expose_read_action": self.expose_read_action,
+            "entity_visibility_policy": EntityVisibilityPolicy.version,
+            "excluded_entity_types": sorted(EXCLUDED_NER_TYPES),
+            "entity_hop_query_policy": "original_question_only",
         }
 
     @property
@@ -98,7 +102,7 @@ class InterfaceContract:
             "capabilities": self.capability_view,
             "protocol": self.protocol,
             "validator_allowlist": self.capability_view["legal_search_pairs"],
-            "artifact_contract": "agentic-rag-interface-study-v2",
+            "artifact_contract": "agentic-rag-interface-study-v6.2-entity-navigation-filter",
         }
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         return {**payload, "digest": hashlib.sha256(encoded).hexdigest()}

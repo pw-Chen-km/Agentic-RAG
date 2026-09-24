@@ -266,7 +266,7 @@ class AgentHarness:
                 ],
                 "budget_representation": "compact_text",
                 "action_guide_version": (
-                    "sectioned-context-v5-action-guide"
+                    "sectioned-context-v6.2-entity-navigation-filter"
                     if self.interface_contract is not None
                     else None
                 ),
@@ -275,7 +275,8 @@ class AgentHarness:
             },
             "runtime_components": {
                 "policy_client": type(self.policy).__name__,
-                "policy_protocol": "constrained_single_decision_v4",
+                "policy_protocol": "native-tool-calling-v1.1-original-question-hop",
+                "native_tool_calling": True,
                 "one_decision_per_turn": True,
                 "state_manager": "EpisodeStateManager",
                 "controller_role": "stateless_loop_orchestrator",
@@ -319,6 +320,7 @@ def _policy_from_config(config: AgentConfig) -> PolicyClient:
             max_retries=config.policy.max_retries,
             num_ctx=config.policy.num_ctx,
             max_output_tokens=config.policy.max_output_tokens,
+            seed=config.policy.seed,
             enabled_expansions=(
                 get_interface_contract(config.interface).enabled_expansions
                 if config.interface
@@ -332,6 +334,7 @@ def _policy_from_config(config: AgentConfig) -> PolicyClient:
             temperature=config.policy.temperature, timeout_seconds=config.policy.timeout_seconds,
             max_retries=config.policy.max_retries, num_ctx=config.policy.num_ctx,
             max_output_tokens=config.policy.max_output_tokens,
+            seed=config.policy.seed,
             enabled_expansions=(get_interface_contract(config.interface).enabled_expansions if config.interface else config.enabled_expansions),
         )
     raise TypeError("unsupported Policy provider")

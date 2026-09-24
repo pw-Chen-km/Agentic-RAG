@@ -32,6 +32,7 @@ class OllamaPolicyConfig(ConfigModel):
     max_retries: int = Field(default=2, ge=0, le=10)
     num_ctx: int = Field(default=32_768, ge=2_048)
     max_output_tokens: int = Field(default=2_048, ge=1)
+    seed: int | None = None
 
     @field_validator("model", "host")
     @classmethod
@@ -92,6 +93,7 @@ class OpenAICompatiblePolicyConfig(ConfigModel):
     max_retries: int = Field(default=2, ge=0, le=10)
     num_ctx: int = Field(default=32_768, ge=2_048)
     max_output_tokens: int = Field(default=2_048, ge=1)
+    seed: int | None = None
 
     @field_validator("model", "base_url")
     @classmethod
@@ -119,6 +121,7 @@ class AgentConfig(ConfigModel):
     show_available_action_options: bool = True
     use_state_conditioned_schema: bool = True
     require_evidence_assessment: bool = True
+    protocol: Literal["native_tool_calling"] = "native_tool_calling"
     interface: str | None = None
     policy: PolicyProviderConfig = Field(default_factory=OllamaPolicyConfig)
 

@@ -95,12 +95,12 @@ def policy_decision_from_constrained(value: BaseModel | dict[str, Any]) -> Polic
     elif name == "follow_entity_to_passages":
         action = ExpandAction(
             kind=ExpansionKind.ENTITY_MENTIONED_IN_CHUNK,
-            source_ref=raw_action["entity_ref"], query=raw_action["query"],
+            source_ref=raw_action["entity_ref"], query=None,
         )
     elif name == "follow_entity_to_sentences":
         action = ExpandAction(
             kind=ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
-            source_ref=raw_action["entity_ref"], query=raw_action["query"],
+            source_ref=raw_action["entity_ref"], query=None,
         )
     elif name == "read_passage":
         action = ReadAction(chunk_ref=raw_action["passage_ref"])
@@ -147,11 +147,15 @@ def _interface_decision_model(cache_key: str) -> type[BaseModel]:
             name = "follow_entity_to_sentences"
         else:
             raise ValueError("the study decision schema does not expose this navigation path")
-        ref_type = _literal(*(str(ref) for ref in option.source_refs))
+        # Entity references are validated against the current observation by
+        # the state validator.  Keeping the full E# list in the provider
+        # schema makes the schema grow with every visible mention and does
+        # not add semantic information beyond the entity card already shown
+        # in the observation.
+        ref_type = str
         fields: dict[str, Any] = {
             "name": (Literal[name], Field(description=ACTION_CARDS[name].schema_description)),
             "entity_ref": (ref_type, Field(description="A currently visible entity label and its displayed name.")),
-            "query": (str | None, Field(description="Optional text used only to rank linked results; null uses the original question.")),
         }
         action_types.append(create_model(
             f"InterfaceExpand_{digest}_{name}", __base__=AgentModel, **fields,

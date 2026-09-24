@@ -14,10 +14,10 @@ from agentic_rag.agent.policy import PolicyConfigurationError, PolicyResponseErr
 from agentic_rag.agent.tool_calling import decision_from_tool_call, tool_schema_sha256
 
 class OpenAICompatibleChatPolicy:
-    def __init__(self, *, model: str, base_url: str, api_key: str = "EMPTY", enabled_expansions=DEFAULT_ENABLED_EXPANSIONS, temperature: float = 0.0, timeout_seconds: float = 600.0, max_retries: int = 2, num_ctx: int = 32768, max_output_tokens: int = 2048) -> None:
+    def __init__(self, *, model: str, base_url: str, api_key: str = "EMPTY", enabled_expansions=DEFAULT_ENABLED_EXPANSIONS, temperature: float = 0.0, timeout_seconds: float = 600.0, max_retries: int = 2, num_ctx: int = 32768, max_output_tokens: int = 2048, seed: int | None = None) -> None:
         self.model, self.base_url, self.api_key = model.strip(), base_url.rstrip("/"), api_key
         self.temperature, self.timeout_seconds, self.max_retries = float(temperature), timeout_seconds, max_retries
-        self.num_ctx, self.max_output_tokens = num_ctx, max_output_tokens
+        self.num_ctx, self.max_output_tokens, self.seed = num_ctx, max_output_tokens, seed
         try:
             self.enabled_expansions = tuple(ExpansionKind(x) for x in enabled_expansions)
             self.decision_format = policy_decision_model(self.enabled_expansions)
@@ -30,6 +30,8 @@ class OpenAICompatibleChatPolicy:
         response_model = decision_format or self.decision_format
         wire_messages = [m.as_openai_input() if isinstance(m, Message) else dict(m) for m in messages]
         payload = {"model": self.model, "messages": wire_messages, "temperature": self.temperature, "top_p": 1, "max_tokens": self.max_output_tokens, "stream": False, "chat_template_kwargs": {"enable_thinking": False, "preserve_thinking": False}}
+        if self.seed is not None:
+            payload["seed"] = self.seed
         if tools:
             payload["tools"] = list(tools)
             payload["tool_choice"] = "required"
@@ -48,7 +50,9 @@ class OpenAICompatibleChatPolicy:
                 self.last_usage_metadata.update({"tool_call_count": len(calls), "raw_tool_calls": calls, "tool_call_names": [str((call.get("function") or {}).get("name") or "") for call in calls]})
                 if len(calls) != 1:
                     raise PolicyResponseError(f"OpenAI-compatible native tool response must contain exactly one tool call; got {len(calls)}")
-                return decision_from_tool_call(calls[0], tools)
+                decision = decision_from_tool_call(calls[0], tools)
+                self.last_usage_metadata["selected_action"] = calls[0]["function"]["name"]
+                return decision
             content = raw["choices"][0]["message"]["content"]
             parsed = response_model.model_validate_json(content)
             payload = parsed.model_dump(mode="json")

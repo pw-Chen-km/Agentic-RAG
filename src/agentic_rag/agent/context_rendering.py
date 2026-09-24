@@ -19,7 +19,9 @@ def action_summary(record):
     elif action.type == "EXPAND":
         name = {"ENTITY_MENTIONED_IN_CHUNK": "follow_entity_to_passages",
                 "ENTITY_MENTIONED_IN_SENTENCE": "follow_entity_to_sentences"}.get(action.kind.value, "follow")
-        arguments = {"entity_ref": getattr(action, "source_ref", None), "query": action.query}
+        arguments = {"entity_ref": getattr(action, "source_ref", None)}
+        if action.kind.value not in {"ENTITY_MENTIONED_IN_CHUNK", "ENTITY_MENTIONED_IN_SENTENCE"}:
+            arguments["query"] = action.query
     else:
         name, arguments = ("finish" if action.type == "FINISH" else "read_passage"), {}
     observation = record.observation
@@ -50,13 +52,15 @@ def action_summary(record):
         executed, outcome = True, "completed"
         explanation = "The tool completed. Completion does not establish that the question is answered."
     delivery = record.context_audit.get("output_delivery", {})
+    returned = delivery.get("returned_references", [])
+    new_text = delivery.get("new_source_references", [])
     return {"turn": record.policy_attempt, "tool": name, **arguments,
             "status": outcome, "executed": executed, "explanation": explanation,
-            "returned_references": delivery.get("returned_references", []),
-            "new_source_references": delivery.get("new_source_references", [])}
+            "returned_references": returned, "new_source_references": new_text,
+            "returned_count": len(returned), "new_text_source_count": len(new_text)}
 
 
-def output_delivery(observation, state, input_spans):
+def output_delivery(observation, state, input_spans, input_references=()):
     """Record output projection separately from next-turn actual exposure."""
     seen = {span_key(s) for s in input_spans}
     spans = [s for s in observation.metadata.get("projected_source_spans", [])
@@ -91,11 +95,36 @@ def output_delivery(observation, state, input_spans):
         ref = next((r for r in candidates if r in returned), None)
         if ref and ref not in refs:
             refs.append(ref)
+    first_visible = [ref for ref in returned if ref not in input_references]
     return {"returned_references": returned, "new_source_references": refs,
+            "first_visible_references": first_visible,
             "newly_projected_source_spans": new_spans}
 
 
-def render_context(blocks, spans, entity_cards, trajectory, state, *, require_assessment):
+def format_action_summary(attempt):
+    """One compact, source-free line for the latest action or earlier history."""
+    arguments = []
+    if "entity_ref" in attempt:
+        arguments.append("entity=" + str(attempt["entity_ref"]))
+    if "query" in attempt:
+        query = attempt["query"]
+        arguments.append("query=" + (json.dumps(query, ensure_ascii=False) if query is not None
+                                      else "original question"))
+    call = attempt["tool"] + ("(" + ", ".join(arguments) + ")" if arguments else "")
+    return (f'{attempt["turn"]}. {call} | {attempt["status"]} | '
+            f'returned {attempt["returned_count"]}; new text {attempt["new_text_source_count"]}')
+
+
+def render_context(
+    blocks,
+    spans,
+    entity_cards,
+    trajectory,
+    state,
+    *,
+    require_assessment,
+    entity_filter_audit=None,
+):
     previously_seen = {span_key(s) for record in trajectory for s in record.visible_source_spans}
     new_spans = [s for s in spans if span_key(s) not in previously_seen]
     new_ids = {s["sentence_id"] for s in new_spans}
@@ -116,7 +145,8 @@ def render_context(blocks, spans, entity_cards, trajectory, state, *, require_as
             json.dumps(previous, ensure_ascii=False) if previous else "No previous assessment is available."))
     if attempts:
         latest = attempts[-1]
-        sections.append("LAST ACTION AND RESULT\n" + json.dumps(latest, ensure_ascii=False) +
+        sections.append("LAST ACTION AND RESULT\n" + format_action_summary(latest) +
+                        "\n" + latest["explanation"] +
                         ("\nNew source text is shown below." if new_spans else "\nNo new source text was added."))
     else:
         sections.append("LAST ACTION AND RESULT\nNo action has been taken.")
@@ -127,26 +157,26 @@ def render_context(blocks, spans, entity_cards, trajectory, state, *, require_as
         "\n\n".join(b["text"] for b in old_blocks) if old_blocks else "None."))
     if entity_cards:
         sections.append("Visible entity references:\n" + "\n".join(entity_cards))
-    history = [{k: v for k, v in attempt.items() if k in
-                {"turn", "tool", "query", "entity_ref", "status", "new_source_references"}}
-               for attempt in attempts[:-1]]
     sections.append("EARLIER ACTION HISTORY\n" + (
-        "\n".join(json.dumps(item, ensure_ascii=False) for item in history) if history else "None."))
+        "\n".join(format_action_summary(item) for item in attempts[:-1])
+        if len(attempts) > 1 else "None."))
     sections.append(f"BUDGET\nRemaining decisions: {state.remaining_step_budget}\n"
                     f"Remaining retrieval token estimate: {state.remaining_retrieved_token_budget}")
     if require_assessment:
         sections.append('Return exactly one decision. At the top level, include "supported_facts" '
                         'and "missing_information", each as a list of strings, plus one "action". '
                         "Use these exact key names. Update the brief facts and information gaps from the source text now shown, "
-                        "then choose exactly one available action. You may revise your previous assessment. "
+                        "then choose exactly one operation from OPERATIONS AVAILABLE NOW, or finish. "
+                        "You may revise your previous assessment. "
                         "If finishing with unresolved gaps, keep those gaps in missing_information.")
     else:
-        sections.append("Return exactly one decision containing exactly one available action.")
-    audit = {"version": "sectioned-context-v5-action-guide", "assessment_requested": require_assessment,
+        sections.append("Return exactly one decision. Choose exactly one operation from OPERATIONS AVAILABLE NOW, or finish.")
+    audit = {"version": "sectioned-context-v6.2-entity-navigation-filter", "assessment_requested": require_assessment,
              "previous_assessment": previous,
              "newly_visible_source_spans": new_spans,
              "new_source_references": [b["ref"] for b in new_blocks],
              "new_section_references": [b["ref"] for b in new_blocks],
              "old_section_references": [b["ref"] for b in old_blocks],
-             "latest_action": attempts[-1] if attempts else None}
+             "latest_action": attempts[-1] if attempts else None,
+             "entity_filter_audit": list(entity_filter_audit or [])}
     return "\n\n".join(sections), audit, attempts

@@ -19,6 +19,7 @@ from agentic_rag.agent.models import (
     action_signature,
 )
 from agentic_rag.agent.interface import InterfaceContract
+from agentic_rag.agent.entity_visibility import EntityVisibilityPolicy
 from agentic_rag.agent.references import expected_expansion_source
 from agentic_rag.substrate.storage import Substrate
 
@@ -30,6 +31,8 @@ ValidationCode = Literal[
     "expansion_not_valid_for_node",
     "source_not_visible",
     "source_out_of_scope",
+    "entity_query_not_allowed",
+    "entity_not_navigable",
     "chunk_not_readable",
     "reference_not_evidence",
 ]
@@ -63,6 +66,7 @@ class DecisionValidator:
             if interface_contract is not None
             else enabled_expansions
         )
+        self.entity_visibility_policy = EntityVisibilityPolicy(substrate)
 
     def validate(
         self,
@@ -137,6 +141,32 @@ class DecisionValidator:
         }[expected]
         if action.source_id not in allowed:
             return "source_out_of_scope", f"{expected} source is outside the query scope"
+        if (
+            self.interface_contract is not None
+            and action.kind
+            in {
+                ExpansionKind.ENTITY_MENTIONED_IN_CHUNK,
+                ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
+            }
+        ):
+            if action.query is not None:
+                return (
+                    "entity_query_not_allowed",
+                    "Entity navigation uses the original question and does not accept a query",
+                )
+            landing = (
+                "chunk"
+                if action.kind is ExpansionKind.ENTITY_MENTIONED_IN_CHUNK
+                else "sentence"
+            )
+            navigable, _ = self.entity_visibility_policy.evaluate(
+                state, scope_id, landing=landing
+            )
+            if action.source_id not in navigable:
+                return (
+                    "entity_not_navigable",
+                    "The selected entity has no unseen linked target in this interface state",
+                )
         if expected == "SENTENCE" and action.source_id not in state.eligible_sentence_ids:
             return (
                 "expansion_not_valid_for_node",

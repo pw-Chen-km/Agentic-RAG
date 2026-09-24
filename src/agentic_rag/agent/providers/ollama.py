@@ -51,6 +51,7 @@ class OllamaChatPolicy:
         max_retries: int = 2,
         retry_backoff_seconds: float = 0.5,
         max_output_tokens: int = 2_048,
+        seed: int | None = None,
     ) -> None:
         self.model = _normalize_model(model)
         self.host = _resolve_host(host)
@@ -73,6 +74,7 @@ class OllamaChatPolicy:
         if isinstance(max_output_tokens, bool) or max_output_tokens < 1:
             raise PolicyConfigurationError("max_output_tokens must be positive")
         self.max_output_tokens = int(max_output_tokens)
+        self.seed = seed
         try:
             self.enabled_expansions = tuple(ExpansionKind(item) for item in enabled_expansions)
             self.decision_format = policy_decision_model(self.enabled_expansions)
@@ -103,6 +105,7 @@ class OllamaChatPolicy:
             "think": self.think,
             "num_ctx": self.num_ctx,
             "max_output_tokens": self.max_output_tokens,
+            "seed": self.seed,
             "reasoning_tokens": "unavailable",
             "native_tool_calling": bool(tools),
             "constrained_single_decision": not bool(tools),
@@ -123,6 +126,8 @@ class OllamaChatPolicy:
                 "num_predict": self.max_output_tokens,
             },
         }
+        if self.seed is not None:
+            request["options"]["seed"] = self.seed
         if tools:
             request["tools"] = list(tools)
             request.pop("format", None)
@@ -161,7 +166,9 @@ class OllamaChatPolicy:
                     f"Ollama native tool response must contain exactly one tool call; got {len(calls)}"
                 )
             try:
-                return decision_from_tool_call(calls[0], tools)
+                decision = decision_from_tool_call(calls[0], tools)
+                self.last_usage_metadata["selected_action"] = calls[0]["function"]["name"]
+                return decision
             except PolicyResponseError:
                 raise
             except Exception as exc:

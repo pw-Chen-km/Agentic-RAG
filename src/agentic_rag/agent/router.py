@@ -95,17 +95,35 @@ class ActionRouter:
                 raise NodeNotFoundError(
                     f"EXPAND kind is not enabled by {self.interface_contract.name}: {action.kind.value}"
                 )
+            excluded_target_ids = (
+                frozenset(state.visible_passage_ids)
+                if action.kind.value == "ENTITY_MENTIONED_IN_CHUNK"
+                else frozenset(state.visible_sentence_ids)
+                if action.kind.value == "ENTITY_MENTIONED_IN_SENTENCE"
+                else frozenset()
+            )
             expanded = self.expansion_engine.expand(
-                action, question, scope_id
+                action, question, scope_id,
+                excluded_target_ids=excluded_target_ids,
             )
             raw_results = _json_results(expanded.results)
             metadata = {
                 "kind": action.kind.value,
                 "query_used": expanded.query_used,
+                "query_source": (
+                    "original_question"
+                    if action.kind.value in {
+                        "ENTITY_MENTIONED_IN_CHUNK",
+                        "ENTITY_MENTIONED_IN_SENTENCE",
+                    }
+                    else "action_query_or_original_question"
+                ),
                 "source_degree": expanded.source_degree,
                 "candidate_count_before_truncation": (
                     expanded.candidate_count_before_truncation
                 ),
+                "previously_visible_target_count": len(excluded_target_ids),
+                "unseen_candidate_count": expanded.candidate_count,
                 "internal_request": _json_value(expanded.internal_request),
             }
         elif isinstance(action, ResolvedReadAction):
@@ -188,31 +206,10 @@ class ActionRouter:
             kept, action_type=action.type,
         )
         metadata["candidate_count"] = len(raw_results)
-        # Projection has already decided which source spans are visible.  Do
-        # not infer new references from hidden backend payloads.
-        delta = {
-            **visibility_delta,
-            "visible_entity_ids": [
-                item for item in visibility_delta["visible_entity_ids"]
-                if _result_contains_id(kept, item)
-            ],
-            "visible_sentence_ids": [
-                item for item in visibility_delta["visible_sentence_ids"]
-                if _result_contains_id(kept, item)
-            ],
-            "visible_chunk_ids": [
-                item for item in visibility_delta["visible_chunk_ids"]
-                if _result_contains_id(kept, item)
-            ],
-            "visible_passage_ids": [
-                item for item in visibility_delta.get("visible_passage_ids", [])
-                if _result_contains_id(kept, item)
-            ],
-            "eligible_sentence_ids": [
-                item for item in visibility_delta["eligible_sentence_ids"]
-                if _result_contains_id(kept, item)
-            ],
-        }
+        # The projector derives this delta solely from the kept, displayed
+        # results. Re-scanning nested result payloads does not add a visibility
+        # check and can be unsafe for large benchmark passages.
+        delta = visibility_delta
         novel, already = _novelty(delta, state)
         metadata["visibility_delta"] = delta
         metadata["truncated_by_retrieved_token_budget"] = truncated
@@ -247,21 +244,6 @@ def _json_results(values: Iterable[Any]) -> list[dict[str, Any]]:
             raise TypeError("Expansion results must serialize to JSON objects")
         results.append(converted)
     return results
-
-
-def _result_contains_id(results: list[dict[str, Any]], node_id: str) -> bool:
-    """Check that a projected result still carries a visible stable ID."""
-
-    def visit(value: Any) -> bool:
-        if isinstance(value, Mapping):
-            if any(value.get(key) == node_id for key in ("entity_id", "sentence_id", "chunk_id", "parent_chunk_id")):
-                return True
-            return any(visit(child) for child in value.values())
-        if isinstance(value, list):
-            return any(visit(child) for child in value)
-        return False
-
-    return any(visit(result) for result in results)
 
 
 def _fit_results(

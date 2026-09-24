@@ -1,4 +1,9 @@
-"""Plain-language action guide generated from the current study action space."""
+"""Neutral capability cards generated from the current study action space.
+
+The same cards are used to describe an operation in the prompt and in the
+constrained action schema.  A condition changes which cards are present, not
+the wording or the suggested retrieval policy.
+"""
 
 from __future__ import annotations
 
@@ -12,11 +17,13 @@ from agentic_rag.agent.models import (
 )
 
 
-COMMON_SEARCH_MECHANISM = """HOW SEARCH WORKS
+COMMON_SEARCH_MECHANISM = """HOW THE SEARCH OPERATIONS WORK
 
-The system turns your query into an embedding, a vector representing its meaning.
-It compares that vector with stored vectors for the text units searched by the selected action.
-Results need not contain the exact words in your query."""
+For a search operation, the system represents your query by its meaning and
+compares it with stored representations of the text units that operation can
+search.  The returned text therefore can be related to the query even when it
+does not repeat the query's exact words.  The operation description below
+states which text units are in its search scope and which text it returns."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +34,7 @@ class ActionCard:
     schema_description: str
 
     def render(self) -> str:
-        return f"{self.signature}\n\n{self.description}"
+        return f"Operation: {self.signature}\n{self.description}"
 
 
 ACTION_CARDS = {
@@ -35,55 +42,61 @@ ACTION_CARDS = {
         name="find_passages",
         signature="find_passages(query)",
         description=(
-            "Searches all passages in the collection for text related to your query.\n"
-            "Returns complete passages, including the sentences around a possible answer.\n"
-            "A passage usually adds more text to your context than a sentence."
+            "Search scope: all passages in the collection.\n"
+            "How it works: the meaning of query is compared with stored representations of passages.\n"
+            "Returns: complete passages.\n"
+            "Limitation: it is not restricted to a visible entity or a previously shown source."
         ),
-        schema_description="Search all passages by meaning and return complete passages.",
+        schema_description="Search all passages by query meaning and return complete passages.",
     ),
     "find_sentences": ActionCard(
         name="find_sentences",
         signature="find_sentences(query)",
         description=(
-            "Searches all sentences in the collection for text related to your query.\n"
-            "Returns individual sentences without their surrounding passage.\n"
-            "Each result usually adds less text, but surrounding context may be absent."
+            "Search scope: all sentences in the collection.\n"
+            "How it works: the meaning of query is compared with stored representations of sentences.\n"
+            "Returns: complete sentences.\n"
+            "Limitation: it is not restricted to a visible entity or a previously shown source."
         ),
-        schema_description="Search all sentences by meaning and return complete sentences.",
+        schema_description="Search all sentences by query meaning and return complete sentences.",
     ),
     "follow_entity_to_passages": ActionCard(
         name="follow_entity_to_passages",
-        signature="follow_entity_to_passages(entity_ref, query)",
+        signature="follow_entity_to_passages(entity_ref)",
         description=(
-            "Starts from a visible E# name and finds passages that mention the same entity.\n"
-            "Returns complete passages with their surrounding context.\n"
-            "The query orders these linked passages by meaning; it cannot bring in a passage\n"
-            "that is not linked to the selected entity. If query is null, the original question\n"
-            "is used for ordering."
+            "Search scope: passages linked to the selected visible E# name.\n"
+            "How it works: the system follows stored links from that entity to passages that mention it,\n"
+            "then ranks those linked passages using the original question.\n"
+            "Returns: complete passages from that linked candidate set.\n"
+            "Limitation: an unlinked passage cannot be returned. This operation does not search outside\n"
+            "the entity-linked candidate set."
         ),
-        schema_description="Follow a visible entity to passages mentioning it, then rank those passages by query meaning.",
+        schema_description="Follow a visible entity to linked passages and rank them using the original question.",
     ),
     "follow_entity_to_sentences": ActionCard(
         name="follow_entity_to_sentences",
-        signature="follow_entity_to_sentences(entity_ref, query)",
+        signature="follow_entity_to_sentences(entity_ref)",
         description=(
-            "Starts from a visible E# name and finds sentences that mention the same entity.\n"
-            "Returns individual sentences without their surrounding passage.\n"
-            "The query orders these linked sentences by meaning; it cannot bring in a sentence\n"
-            "that is not linked to the selected entity. If query is null, the original question\n"
-            "is used for ordering."
+            "Search scope: sentences linked to the selected visible E# name.\n"
+            "How it works: the system follows stored links from that entity to sentences that mention it,\n"
+            "then ranks those linked sentences using the original question.\n"
+            "Returns: complete sentences from that linked candidate set.\n"
+            "Limitation: an unlinked sentence cannot be returned. This operation does not search outside\n"
+            "the entity-linked candidate set."
         ),
-        schema_description="Follow a visible entity to sentences mentioning it, then rank those sentences by query meaning.",
+        schema_description="Follow a visible entity to linked sentences and rank them using the original question.",
     ),
     "finish": ActionCard(
         name="finish",
         signature="finish(answer, evidence_refs)",
         description=(
-            "Ends this episode without retrieving new text. Give your answer and cite visible\n"
-            "passage or sentence labels that support it. If no source is visible, evidence_refs\n"
-            "must be an empty list."
+            "Search scope: none.\n"
+            "How it works: ends the episode without retrieving new text.\n"
+            "Returns: no new source text.\n"
+            "Limitation: cite only visible passage or sentence labels that support the answer;\n"
+            "if no source is visible, evidence_refs must be an empty list."
         ),
-        schema_description="End the episode with an answer and any visible source citations.",
+        schema_description="End the episode with an answer and visible source citations.",
     ),
 }
 
@@ -128,7 +141,9 @@ def render_action_guide(
     if not names:
         raise ValueError("the study action guide needs at least one action")
     sections = [
-        "AVAILABLE ACTIONS THIS TURN\n\n"
+        "OPERATIONS AVAILABLE NOW\n\n"
+        "This is the complete list of operations available in the current state. "
+        "The order of this list has no meaning.\n\n"
         + "\n\n".join(ACTION_CARDS[name].render() for name in names),
     ]
     reference_rules = [

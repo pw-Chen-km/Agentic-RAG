@@ -24,10 +24,10 @@ EXPECTED_INITIAL = {
 
 
 def _action_names_in_prompt(prompt: str) -> list[str]:
-    action_section = prompt.split("AVAILABLE ACTIONS THIS TURN\n\n", 1)[1].split(
+    action_section = prompt.split("OPERATIONS AVAILABLE NOW\n\n", 1)[1].split(
         "\n\nREFERENCE RULES", 1
     )[0]
-    return re.findall(r"(?m)^(find_passages|find_sentences|follow_entity_to_passages|follow_entity_to_sentences|finish)\(", action_section)
+    return re.findall(r"(?m)^Operation: (find_passages|find_sentences|follow_entity_to_passages|follow_entity_to_sentences|finish)\(", action_section)
 
 
 def _action_names_in_schema(schema: dict) -> set[str]:
@@ -62,10 +62,12 @@ def test_initial_action_guide_matches_schema_without_backend_result_count(
     assert "up to five" not in prompt
     assert "top_k" not in prompt
     assert "DENSE" not in prompt
-    assert "HOW SEARCH WORKS" in prompt
+    assert "HOW THE SEARCH OPERATIONS WORK" in prompt
     if name == "C0":
         assert "stored vectors for sentences" not in prompt
-    assert "A passage usually adds more text" in prompt
+    assert "Search scope: all passages in the collection." in prompt
+    assert "Search scope: all sentences in the collection." not in prompt if name == "C0" else True
+    assert "The order of this list has no meaning." in prompt
     assert contract.compile()["protocol"] == contract.protocol
 
 
@@ -96,9 +98,10 @@ def test_entity_guide_explains_navigation_only_where_available(
     assert set(names) == _action_names_in_schema(built.decision_schema)
     if expected_follow:
         assert expected_follow in names
-        assert "The query orders these linked" in prompt
-        assert "it cannot bring in" in prompt
-        assert "If query is null, the original question" in prompt
+        assert "follows stored links" in prompt
+        assert "unlinked" in prompt
+        assert "using the original question" in prompt
+        assert "query is null" not in prompt
     else:
         assert not any(action.startswith("follow_entity_") for action in names)
         assert "E# labels are annotations only; no action can follow them." in prompt

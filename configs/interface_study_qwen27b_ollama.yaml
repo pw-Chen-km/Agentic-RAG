@@ -6,11 +6,12 @@ agent:
   episode_timeout_seconds: 3600
   show_available_action_options: true
   use_state_conditioned_schema: true
+  require_evidence_assessment: true
   protocol: native_tool_calling
 policy:
   provider: ollama
-  model: qwen3.5:4b
-  host: http://localhost:11434
+  model: qwen3.8:27b-q4_K_M
+  host: http://127.0.0.1:11440
   temperature: 0
   think: false
   timeout_seconds: 600

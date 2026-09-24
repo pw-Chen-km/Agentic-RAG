@@ -130,6 +130,7 @@ class EpisodeStateManager:
             assessment=event.assessment,
             observation=event.observation,
             action_signature=event.action_signature,
+            scope_id=self.scope_id,
             commit_assessment=event.commit_assessment,
             consume_step=event.consume_step,
             consume_policy_attempt=event.consume_policy_attempt,
@@ -169,7 +170,10 @@ class EpisodeStateManager:
             telemetry=_telemetry(event),
             context_audit={
                 **event.policy_view.context_audit,
-                "output_delivery": output_delivery(event.observation, updated, event.visible_source_spans or []),
+                "output_delivery": output_delivery(
+                    event.observation, updated, event.visible_source_spans or [],
+                    event.context_reference_map.typed_refs if event.context_reference_map else (),
+                ),
             },
             assessment_status=("provided" if event.assessment is not None else
                                "unavailable" if event.policy_view.context_audit.get("assessment_requested", True)

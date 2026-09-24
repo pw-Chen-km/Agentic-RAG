@@ -7,16 +7,18 @@ from pathlib import Path
 from typing import Any
 
 from agentic_rag.substrate.storage import Substrate
+from agentic_rag.evaluation.gold_sidecars import validate_gold_sidecars
 
 
-REQUIRED_EMBEDDING = "qwen3-embedding:4b"
+REQUIRED_EMBEDDING = None
 
 
-def validate(path: Path, *, expected_model: str = REQUIRED_EMBEDDING) -> dict[str, Any]:
+def validate(path: Path, *, expected_model: str | None = REQUIRED_EMBEDDING, require_gold_sidecar: bool = True) -> dict[str, Any]:
     substrate = Substrate.open(path)
     manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
     raw_model = manifest.get("embedding_model")
     model = raw_model.get("name") if isinstance(raw_model, dict) else raw_model
+    expected_model = expected_model or model
     if model != expected_model:
         raise ValueError(
             f"substrate embedding model is {model!r}; expected {expected_model!r}. "
@@ -31,11 +33,16 @@ def validate(path: Path, *, expected_model: str = REQUIRED_EMBEDDING) -> dict[st
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         if metadata.get("model") != expected_model:
             raise ValueError(f"dense_{target} uses {metadata.get('model')!r}")
+        if metadata.get("dimension") != manifest.get("embedding_dimension"):
+            raise ValueError(
+                f"dense_{target} dimension {metadata.get('dimension')!r} does not match manifest "
+                f"{manifest.get('embedding_dimension')!r}"
+            )
         dimensions.add(int(metadata.get("dimension") or 0))
         index_reports[target] = metadata
     if len(dimensions) != 1 or 0 in dimensions:
         raise ValueError(f"dense index dimensions disagree: {sorted(dimensions)}")
-    return {
+    result = {
         "substrate": path.resolve().as_posix(),
         "embedding_model": model,
         "embedding_dimension": next(iter(dimensions)),
@@ -46,15 +53,23 @@ def validate(path: Path, *, expected_model: str = REQUIRED_EMBEDDING) -> dict[st
         "indexes": index_reports,
         "status": "ok",
     }
+    if require_gold_sidecar:
+        result["gold_sidecar"] = validate_gold_sidecars(path, manifest.get("dataset", ""))
+    return result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--substrate", type=Path, required=True)
     parser.add_argument("--expected-model", default=REQUIRED_EMBEDDING)
+    parser.add_argument("--allow-missing-gold-sidecar", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    result = validate(args.substrate, expected_model=args.expected_model)
+    result = validate(
+        args.substrate,
+        expected_model=args.expected_model,
+        require_gold_sidecar=not args.allow_missing_gold_sidecar,
+    )
     payload = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
