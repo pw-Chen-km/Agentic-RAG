@@ -18,16 +18,21 @@ from agentic_rag.agent.models import (
     SentenceRef,
     action_signature,
 )
+from agentic_rag.agent.interface import InterfaceContract
+from agentic_rag.agent.entity_visibility import EntityVisibilityPolicy
 from agentic_rag.agent.references import expected_expansion_source
 from agentic_rag.substrate.storage import Substrate
 
 
 ValidationCode = Literal[
+    "search_pair_not_enabled",
     "duplicate_action",
     "expansion_not_enabled",
     "expansion_not_valid_for_node",
     "source_not_visible",
     "source_out_of_scope",
+    "entity_query_not_allowed",
+    "entity_not_navigable",
     "chunk_not_readable",
     "reference_not_evidence",
 ]
@@ -49,9 +54,19 @@ class DecisionValidator:
         self,
         substrate: Substrate,
         enabled_expansions: tuple[ExpansionKind, ...] = DEFAULT_ENABLED_EXPANSIONS,
+        interface_contract: InterfaceContract | None = None,
     ) -> None:
+        if isinstance(enabled_expansions, InterfaceContract) and interface_contract is None:
+            interface_contract = enabled_expansions
+            enabled_expansions = interface_contract.enabled_expansions
         self.substrate = substrate
-        self.enabled_expansions = tuple(enabled_expansions)
+        self.interface_contract = interface_contract
+        self.enabled_expansions = tuple(
+            interface_contract.enabled_expansions
+            if interface_contract is not None
+            else enabled_expansions
+        )
+        self.entity_visibility_policy = EntityVisibilityPolicy(substrate)
 
     def validate(
         self,
@@ -61,6 +76,14 @@ class DecisionValidator:
     ) -> ValidationResult:
         self.substrate.require_scope(scope_id)
         action = decision.action
+        if isinstance(action, SearchAction) and self.interface_contract is not None:
+            if not self.interface_contract.allows_search(action.method, action.target):
+                return self._invalid(
+                    "search_pair_not_enabled",
+                    f"SEARCH pair is not enabled by {self.interface_contract.name}: "
+                    f"{action.method.value}->{action.target.value}",
+                    decision,
+                )
         if isinstance(action, ResolvedExpandAction):
             invalid = self._validate_expand(action, state, scope_id)
             if invalid is not None:
@@ -118,6 +141,32 @@ class DecisionValidator:
         }[expected]
         if action.source_id not in allowed:
             return "source_out_of_scope", f"{expected} source is outside the query scope"
+        if (
+            self.interface_contract is not None
+            and action.kind
+            in {
+                ExpansionKind.ENTITY_MENTIONED_IN_CHUNK,
+                ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
+            }
+        ):
+            if action.query is not None:
+                return (
+                    "entity_query_not_allowed",
+                    "Entity navigation uses the original question and does not accept a query",
+                )
+            landing = (
+                "chunk"
+                if action.kind is ExpansionKind.ENTITY_MENTIONED_IN_CHUNK
+                else "sentence"
+            )
+            navigable, _ = self.entity_visibility_policy.evaluate(
+                state, scope_id, landing=landing
+            )
+            if action.source_id not in navigable:
+                return (
+                    "entity_not_navigable",
+                    "The selected entity has no unseen linked target in this interface state",
+                )
         if expected == "SENTENCE" and action.source_id not in state.eligible_sentence_ids:
             return (
                 "expansion_not_valid_for_node",
@@ -159,10 +208,10 @@ class DecisionValidator:
                     return "reference_not_evidence", "FINISH Sentence is not eligible evidence"
             elif isinstance(ref, ChunkRef):
                 if (
-                    ref.id not in state.read_chunk_ids
+                    ref.id not in state.visible_chunk_ids
                     or ref.id not in self.substrate.chunk_ids_by_scope[scope_id]
                 ):
-                    return "reference_not_evidence", "FINISH Chunk has not been READ"
+                    return "reference_not_evidence", "FINISH Chunk has not been shown"
         return None
 
     @staticmethod

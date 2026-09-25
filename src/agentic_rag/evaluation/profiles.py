@@ -66,8 +66,8 @@ class DatasetProfile(BaseModel):
     reference_unique_question_ids: int = Field(gt=0)
     reference_task_type_counts: tuple[tuple[str, int], ...]
     reported_metrics: tuple[EvaluationMetric, ...]
-    skillopt_hard_metric: EvaluationMetric = EvaluationMetric.LLM_ACC
-    skillopt_soft_metric: EvaluationMetric
+    hard_metric: EvaluationMetric = EvaluationMetric.LLM_ACC
+    soft_metric: EvaluationMetric
     answer_mode: AnswerMode
     task_type_strategy: TaskTypeStrategy = TaskTypeStrategy.FIELD
     duplicate_question_id_policy: DuplicateQuestionIdPolicy = (
@@ -94,10 +94,10 @@ class DatasetProfile(BaseModel):
             raise ValueError(
                 "unique question IDs cannot exceed the question count"
             )
-        if self.skillopt_hard_metric not in self.reported_metrics:
-            raise ValueError("SkillOpt hard metric must be a reported metric")
-        if self.skillopt_soft_metric not in self.reported_metrics:
-            raise ValueError("SkillOpt soft metric must be a reported metric")
+        if self.hard_metric not in self.reported_metrics:
+            raise ValueError("hard metric must be a reported metric")
+        if self.soft_metric not in self.reported_metrics:
+            raise ValueError("soft metric must be a reported metric")
         return self
 
     @property
@@ -144,7 +144,7 @@ def _profile(
         reference_unique_question_ids=unique_question_ids or questions,
         reference_task_type_counts=task_types,
         reported_metrics=metrics,
-        skillopt_soft_metric=soft_metric,
+        soft_metric=soft_metric,
         answer_mode=answer_mode,
         task_type_strategy=task_type_strategy,
         duplicate_question_id_policy=duplicate_policy,

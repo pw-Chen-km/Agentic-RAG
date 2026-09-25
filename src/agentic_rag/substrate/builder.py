@@ -27,7 +27,7 @@ from agentic_rag.substrate.adapters import (
 from agentic_rag.config import BuildConfig
 from agentic_rag.substrate.embedding import (
     EmbeddingBackend,
-    SentenceTransformerEmbeddingBackend,
+    create_embedding_backend,
     save_dense_index,
 )
 from agentic_rag.errors import BuildError
@@ -163,8 +163,10 @@ class SubstrateBuilder:
             self.config.spacy_model,
             enable_abbreviations=self.config.enable_abbreviations,
         )
-        backend = self.embedding_backend or SentenceTransformerEmbeddingBackend(
+        backend = self.embedding_backend or create_embedding_backend(
             self.config.embedding_model,
+            backend=self.config.embedding_backend,
+            host=self.config.embedding_host,
             batch_size=self.config.embedding_batch_size,
             device=self.config.embedding_device,
         )
@@ -1269,6 +1271,8 @@ class SubstrateBuilder:
                 else None
             ),
             embedding_model=ModelVersion(name=backend.name, version=backend.version),
+            embedding_backend=self.config.embedding_backend,
+            embedding_host=self.config.embedding_host,
             embedding_dimension=dense_dimension,
             bm25_backend=ModelVersion(name="bm25s", version=bm25_version),
             bm25_tokenizer="unicode-nfkc-casefold-regex-v1",

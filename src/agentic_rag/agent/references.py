@@ -134,7 +134,7 @@ def resolve_decision(
     else:  # pragma: no cover - discriminated union prevents this
         raise TypeError(f"unsupported action: {type(action).__name__}")
     return ResolvedDecision(
-        assessment=decision.assessment.model_copy(deep=True),
+        assessment=decision.assessment.model_copy(deep=True) if decision.assessment is not None else None,
         action=resolved,
     )
 

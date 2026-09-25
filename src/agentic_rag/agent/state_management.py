@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import re
 
 from agentic_rag.agent.context import project_observation_for_audit
+from agentic_rag.agent.tool_calling import build_tool_definitions
 from agentic_rag.agent.models import (
     Assessment,
     AvailableActionSpace,
@@ -21,8 +23,10 @@ from agentic_rag.agent.models import (
     TerminationReason,
     Usage,
     ValidationStatus,
+    Message,
 )
 from agentic_rag.agent.state import StateUpdater
+from agentic_rag.agent.context_rendering import output_delivery
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,9 +43,15 @@ class AttemptEvent:
     context_reference_map: ContextReferenceMap
     available_action_space: AvailableActionSpace
     decision_schema_sha256: str
+    decision_schema: dict = field(default_factory=dict)
     commit_assessment: bool = True
     consume_step: bool = True
     invalid_attempt: bool = False
+    consume_policy_attempt: bool = True
+    messages: tuple[Message, ...] = ()
+    provider_metadata: dict = field(default_factory=dict)
+    tool_definitions: list[dict] = field(default_factory=list)
+    visible_source_spans: list[dict] | None = None
 
 
 class EpisodeStateManager:
@@ -69,6 +79,7 @@ class EpisodeStateManager:
         )
         self._trajectory: list[StepRecord] = []
         self._total_usage = Usage()
+        self._finalize_used = False
 
     def snapshot(self) -> EpisodeState:
         return self._state.model_copy(deep=True)
@@ -99,10 +110,10 @@ class EpisodeStateManager:
 
     @property
     def can_attempt_budget_finalize(self) -> bool:
-        return (
-            self._state.remaining_policy_attempt_budget > 0
-            and bool(self._state.eligible_sentence_ids or self._state.read_chunk_ids)
-        )
+        return not self._finalize_used
+
+    def mark_budget_finalize_used(self) -> None:
+        self._finalize_used = True
 
     @property
     def policy_attempt_budget_exhausted(self) -> bool:
@@ -119,8 +130,10 @@ class EpisodeStateManager:
             assessment=event.assessment,
             observation=event.observation,
             action_signature=event.action_signature,
+            scope_id=self.scope_id,
             commit_assessment=event.commit_assessment,
             consume_step=event.consume_step,
+            consume_policy_attempt=event.consume_policy_attempt,
         )
         record = StepRecord(
             step=updated.step if event.consume_step else state_before.step + 1,
@@ -140,6 +153,31 @@ class EpisodeStateManager:
             context_reference_map=event.context_reference_map,
             available_action_space=event.available_action_space,
             decision_schema_sha256=event.decision_schema_sha256,
+            decision_schema=dict(event.decision_schema),
+            tool_definitions=(
+                list(event.tool_definitions)
+                if event.tool_definitions
+                else build_tool_definitions(event.available_action_space)
+            ),
+            messages=list(event.messages),
+            provider_metadata=dict(event.provider_metadata or {}),
+            visible_source_spans=list(
+                event.visible_source_spans
+                if event.visible_source_spans is not None
+                else (event.observation.metadata.get("visible_source_spans", [])
+                    if event.observation is not None else [])
+            ),
+            telemetry=_telemetry(event),
+            context_audit={
+                **event.policy_view.context_audit,
+                "output_delivery": output_delivery(
+                    event.observation, updated, event.visible_source_spans or [],
+                    event.context_reference_map.typed_refs if event.context_reference_map else (),
+                ),
+            },
+            assessment_status=("provided" if event.assessment is not None else
+                               "unavailable" if event.policy_view.context_audit.get("assessment_requested", True)
+                               else "not_requested"),
         )
         self._state = updated
         self._trajectory.append(record)
@@ -173,6 +211,33 @@ class EpisodeStateManager:
             error_code=error_code,
             error_message=error_message,
         )
+
+
+def _telemetry(event: AttemptEvent) -> dict:
+    observation = event.observation
+    metadata = dict(event.provider_metadata or {})
+    if observation is not None:
+        metadata.update(
+            {
+                "selected_tool": observation.metadata.get("selected_tool"),
+                "parsed_arguments": observation.metadata.get("parsed_arguments"),
+                "failure_category": observation.metadata.get("failure_category"),
+                "duplicate_or_noop_reason": observation.message
+                if observation.status.value == "duplicate_action"
+                else None,
+                "execution_wall_time_ms": observation.metadata.get("wall_time_ms"),
+                "annotation_lookup_ms": observation.metadata.get("annotation_lookup_ms"),
+            }
+        )
+    metadata["available_tools"] = [
+        item.get("function", {}).get("name")
+        for item in build_tool_definitions(event.available_action_space)
+    ]
+    metadata["decision_schema_token_estimate"] = len(
+        re.findall(r"(?u)\b\w+\b|[^\w\s]", str(event.decision_schema))
+    )
+    metadata["tool_schema_token_estimate"] = metadata["decision_schema_token_estimate"]
+    return metadata
 
 
 class EpisodeStateManagerFactory:

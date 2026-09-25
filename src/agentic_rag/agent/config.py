@@ -18,25 +18,21 @@ class ConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class OpenAIPolicyConfig(ConfigModel):
-    provider: Literal["openai"] = "openai"
-    model: str = Field(default="gpt-5.6-luna", min_length=1)
-    max_retries: int = Field(default=2, ge=0, le=10)
-
-
 OllamaThink = bool | Literal["low", "medium", "high"] | None
 
 
 class OllamaPolicyConfig(ConfigModel):
     provider: Literal["ollama"] = "ollama"
-    model: str = Field(default="qwen3.5:9b", min_length=1)
+    model: str = Field(default="qwen3.5:4b", min_length=1)
     host: str = Field(default="http://localhost:11434", min_length=1)
     temperature: float = Field(default=0.0, ge=0.0)
     think: OllamaThink = False
-    timeout_seconds: float = Field(default=300.0, gt=0.0)
+    timeout_seconds: float = Field(default=600.0, gt=0.0)
     keep_alive: str | int | float | None = None
     max_retries: int = Field(default=2, ge=0, le=10)
     num_ctx: int = Field(default=32_768, ge=2_048)
+    max_output_tokens: int = Field(default=2_048, ge=1)
+    seed: int | None = None
 
     @field_validator("model", "host")
     @classmethod
@@ -87,8 +83,29 @@ class OllamaPolicyConfig(ConfigModel):
         return value
 
 
+class OpenAICompatiblePolicyConfig(ConfigModel):
+    provider: Literal["openai_compatible"] = "openai_compatible"
+    model: str = Field(min_length=1)
+    base_url: str = Field(default="http://localhost:8000/v1", min_length=1)
+    api_key: str = "EMPTY"
+    temperature: float = Field(default=0.0, ge=0.0)
+    timeout_seconds: float = Field(default=600.0, gt=0.0)
+    max_retries: int = Field(default=2, ge=0, le=10)
+    num_ctx: int = Field(default=32_768, ge=2_048)
+    max_output_tokens: int = Field(default=2_048, ge=1)
+    seed: int | None = None
+
+    @field_validator("model", "base_url")
+    @classmethod
+    def text_fields_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value.rstrip("/") if value.startswith("http") else value
+
+
 PolicyProviderConfig = Annotated[
-    OpenAIPolicyConfig | OllamaPolicyConfig,
+    OllamaPolicyConfig | OpenAICompatiblePolicyConfig,
     Field(discriminator="provider"),
 ]
 
@@ -96,19 +113,23 @@ PolicyProviderConfig = Annotated[
 class AgentConfig(ConfigModel):
     """One configuration surface; no architecture selector exists."""
 
-    max_steps: int = Field(default=10, ge=1)
-    max_policy_attempts: int = Field(default=12, ge=1)
+    max_steps: int = Field(default=15, ge=1)
+    max_policy_attempts: int = Field(default=15, ge=1)
     max_retrieved_tokens: int = Field(default=12_000, ge=1)
+    episode_timeout_seconds: float = Field(default=3_600.0, gt=0.0)
     enabled_expansions: tuple[ExpansionKind, ...] = DEFAULT_ENABLED_EXPANSIONS
     show_available_action_options: bool = True
     use_state_conditioned_schema: bool = True
-    policy: PolicyProviderConfig = Field(default_factory=OpenAIPolicyConfig)
+    require_evidence_assessment: bool = True
+    protocol: Literal["native_tool_calling"] = "native_tool_calling"
+    interface: str | None = None
+    policy: PolicyProviderConfig = Field(default_factory=OllamaPolicyConfig)
 
     @field_validator("policy", mode="before")
     @classmethod
-    def omitted_provider_is_openai(cls, value: Any) -> Any:
+    def omitted_provider_is_ollama(cls, value: Any) -> Any:
         if isinstance(value, dict) and "provider" not in value:
-            return {"provider": "openai", **value}
+            return {"provider": "ollama", **value}
         return value
 
     @field_validator("enabled_expansions")
@@ -147,4 +168,4 @@ class AgentConfig(ConfigModel):
 
 
 # A concise alias for callers that prefer the provider-specific name.
-PolicyConfig = OpenAIPolicyConfig
+PolicyConfig = OllamaPolicyConfig

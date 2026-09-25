@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import urllib.request
 from functools import lru_cache
 from pathlib import Path
 from typing import Protocol, Sequence
@@ -59,6 +60,35 @@ class SentenceTransformerEmbeddingBackend:
                 f"Embedding model {self.name!r} failed to encode text: {exc}"
             ) from exc
         return np.asarray(result, dtype=np.float32)
+
+
+class OllamaEmbeddingBackend:
+    """Embedding backend backed by Ollama's /api/embed endpoint."""
+    def __init__(self, model_name: str, host: str = "http://localhost:11434", batch_size: int = 32) -> None:
+        self.name = model_name
+        self.version = "ollama-api-v1"
+        self.host = host.rstrip("/")
+        self.batch_size = batch_size
+
+    def encode(self, texts: Sequence[str]) -> np.ndarray:
+        if not texts:
+            return np.empty((0, 0), dtype=np.float32)
+        rows: list[list[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            payload = json.dumps({"model": self.name, "input": list(texts[start:start + self.batch_size])}).encode()
+            request = urllib.request.Request(f"{self.host}/api/embed", data=payload, headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=600) as response:
+                    rows.extend(json.loads(response.read().decode("utf-8"))["embeddings"])
+            except Exception as exc:
+                raise BuildError(f"Ollama embedding model {self.name!r} failed: {exc}") from exc
+        return normalize_embeddings(np.asarray(rows, dtype=np.float32))
+
+
+def create_embedding_backend(model_name: str, *, backend: str = "sentence_transformers", host: str = "http://localhost:11434", batch_size: int = 64, device: str | None = None) -> EmbeddingBackend:
+    if backend == "ollama":
+        return OllamaEmbeddingBackend(model_name, host=host, batch_size=batch_size)
+    return SentenceTransformerEmbeddingBackend(model_name, batch_size=batch_size, device=device)
 
 
 @lru_cache(maxsize=4)

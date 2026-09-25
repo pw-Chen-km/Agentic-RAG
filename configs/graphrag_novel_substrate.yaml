@@ -1,0 +1,12 @@
+corpus_id: graphrag-novel
+split: dev
+dataset: novel
+source_format: benchmark_exact
+validate_benchmark_profile: false
+max_chunk_tokens: 256
+spacy_model: en_core_web_sm
+enable_abbreviations: false
+embedding_model: qwen3-embedding:4b
+embedding_backend: ollama
+embedding_host: http://localhost:11434
+embedding_batch_size: 64

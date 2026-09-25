@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentic_rag.agent.artifacts import ArtifactWriter
-from agentic_rag.agent.config import AgentConfig, OllamaPolicyConfig, OpenAIPolicyConfig
+from agentic_rag.agent.config import AgentConfig, OllamaPolicyConfig, OpenAICompatiblePolicyConfig
 from agentic_rag.agent.context import PolicyContextBuilder
+from agentic_rag.agent.interface import InterfaceContract, get_interface_contract
 from agentic_rag.agent.controller import BUDGET_FINALIZE_INSTRUCTION, AgentController
 from agentic_rag.agent.evidence import EvidenceResolver
 from agentic_rag.agent.expansion import ExpansionEngine
@@ -17,6 +18,7 @@ from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.agent.validator import DecisionValidator
 from agentic_rag.substrate.embedding import EmbeddingBackend
 from agentic_rag.substrate.retrieval import Retriever
+from agentic_rag.substrate.ranking import RankingService
 from agentic_rag.substrate.storage import Substrate
 
 
@@ -36,25 +38,47 @@ class AgentHarness:
         self.skill = skill
         self.policy = policy
         self.output_root = Path(output_root)
-        retriever = Retriever(substrate, embedding_backend=embedding_backend)
-        expansion = ExpansionEngine(substrate, embedding_backend=embedding_backend)
+        self.interface_contract: InterfaceContract | None = (
+            get_interface_contract(config.interface) if config.interface else None
+        )
+        enabled_expansions = (
+            self.interface_contract.enabled_expansions
+            if self.interface_contract is not None
+            else config.enabled_expansions
+        )
+        ranking = RankingService(substrate, embedding_backend=embedding_backend)
+        retriever = Retriever(
+            substrate, embedding_backend=embedding_backend, ranking_service=ranking
+        )
+        expansion = ExpansionEngine(
+            substrate, embedding_backend=embedding_backend, ranking_service=ranking
+        )
         evidence = EvidenceResolver(substrate)
         self.context_builder = PolicyContextBuilder(
             substrate,
-            config.enabled_expansions,
+            enabled_expansions,
             show_available_action_options=config.show_available_action_options,
             use_state_conditioned_schema=config.use_state_conditioned_schema,
+            require_evidence_assessment=config.require_evidence_assessment,
+            interface_contract=self.interface_contract,
         )
         self.controller = AgentController(
             policy=policy,
             context_builder=self.context_builder,
-            validator=DecisionValidator(substrate, config.enabled_expansions),
-            router=ActionRouter(substrate, retriever, expansion),
+            validator=DecisionValidator(
+                substrate,
+                enabled_expansions,
+                interface_contract=self.interface_contract,
+            ),
+            router=ActionRouter(
+                substrate, retriever, expansion, self.interface_contract
+            ),
             evidence_resolver=evidence,
             skill=skill,
             max_steps=config.max_steps,
             max_policy_attempts=config.max_policy_attempts,
             max_retrieved_tokens=config.max_retrieved_tokens,
+            episode_timeout_seconds=config.episode_timeout_seconds,
         )
         self.artifact_writer = ArtifactWriter(self.output_root)
 
@@ -144,8 +168,12 @@ class AgentHarness:
                 scope_id=result.scope_id,
                 action_space_mode=action_space_mode,
             )
-            messages = list(built.messages)
-            if step.observation is not None and step.observation.metadata.get("budget_finalize") is True:
+            messages = list(step.messages) if step.messages else list(built.messages)
+            if (
+                not step.messages
+                and step.observation is not None
+                and step.observation.metadata.get("budget_finalize") is True
+            ):
                 messages.append(Message(role="user", content=BUDGET_FINALIZE_INSTRUCTION))
             policy_calls.append(
                 {
@@ -171,6 +199,9 @@ class AgentHarness:
                         else None
                     ),
                     "decision_schema_sha256": step.decision_schema_sha256,
+                    "decision_schema": step.decision_schema,
+                    "tool_schema_sha256": step.provider_metadata.get("tool_schema_sha256"),
+                    "tool_definitions": step.tool_definitions,
                     "validation_status": step.validation_status.value,
                     "validation_error": step.validation_error,
                     "observation": (
@@ -179,6 +210,8 @@ class AgentHarness:
                         else None
                     ),
                     "agent_visible_observation": step.agent_visible_observation,
+                    "visible_source_spans": step.visible_source_spans,
+                    "telemetry": step.telemetry,
                     "usage": step.usage.model_dump(mode="json"),
                 }
             )
@@ -201,6 +234,11 @@ class AgentHarness:
         return {
             "architecture": "semantic_memory_typed_refs_compact",
             "agent": self.config.effective_dict(),
+            "interface_contract": (
+                self.interface_contract.compile()
+                if self.interface_contract is not None
+                else None
+            ),
             "policy_context": {
                 "node_reference_scheme": "episode_local_typed_refs_with_frozen_visibility",
                 "show_available_action_options": (
@@ -213,7 +251,9 @@ class AgentHarness:
                     "question",
                     "action_protocol",
                     *(
-                        ["available_action_options"]
+                        ["available_actions_this_turn", "reference_rules", "decision_format"]
+                        if self.interface_contract is not None
+                        else ["available_action_options"]
                         if self.config.show_available_action_options
                         else []
                     ),
@@ -225,11 +265,19 @@ class AgentHarness:
                     "remaining_budget",
                 ],
                 "budget_representation": "compact_text",
+                "action_guide_version": (
+                    "sectioned-context-v6.2-entity-navigation-filter"
+                    if self.interface_contract is not None
+                    else None
+                ),
                 "stable_node_ids_visible_to_policy": False,
                 "selection_semantics": "automatic_semantic_memory",
             },
             "runtime_components": {
                 "policy_client": type(self.policy).__name__,
+                "policy_protocol": "native-tool-calling-v1.1-original-question-hop",
+                "native_tool_calling": True,
+                "one_decision_per_turn": True,
                 "state_manager": "EpisodeStateManager",
                 "controller_role": "stateless_loop_orchestrator",
             },
@@ -246,22 +294,19 @@ class AgentHarness:
 
 
 def _messages_for_role(messages: list[Message], role: str) -> str:
-    return "\n\n".join(message.content for message in messages if message.role == role)
+    return "\n\n".join(
+        message.content or "" for message in messages if message.role == role
+    )
 
 
 def _first_message_for_role(messages: list[Message], role: str) -> str:
-    return next((message.content for message in messages if message.role == role), "")
+    return next(
+        (message.content or "" for message in messages if message.role == role),
+        "",
+    )
 
 
 def _policy_from_config(config: AgentConfig) -> PolicyClient:
-    if isinstance(config.policy, OpenAIPolicyConfig):
-        from agentic_rag.agent.providers.openai import OpenAIResponsesPolicy
-
-        return OpenAIResponsesPolicy(
-            model=config.policy.model,
-            max_retries=config.policy.max_retries,
-            enabled_expansions=config.enabled_expansions,
-        )
     if isinstance(config.policy, OllamaPolicyConfig):
         from agentic_rag.agent.providers.ollama import OllamaChatPolicy
 
@@ -274,6 +319,22 @@ def _policy_from_config(config: AgentConfig) -> PolicyClient:
             keep_alive=config.policy.keep_alive,
             max_retries=config.policy.max_retries,
             num_ctx=config.policy.num_ctx,
-            enabled_expansions=config.enabled_expansions,
+            max_output_tokens=config.policy.max_output_tokens,
+            seed=config.policy.seed,
+            enabled_expansions=(
+                get_interface_contract(config.interface).enabled_expansions
+                if config.interface
+                else config.enabled_expansions
+            ),
         )
-    raise TypeError(f"unsupported policy provider: {config.policy.provider}")
+    if isinstance(config.policy, OpenAICompatiblePolicyConfig):
+        from agentic_rag.agent.providers.openai_compatible import OpenAICompatibleChatPolicy
+        return OpenAICompatibleChatPolicy(
+            model=config.policy.model, base_url=config.policy.base_url, api_key=config.policy.api_key,
+            temperature=config.policy.temperature, timeout_seconds=config.policy.timeout_seconds,
+            max_retries=config.policy.max_retries, num_ctx=config.policy.num_ctx,
+            max_output_tokens=config.policy.max_output_tokens,
+            seed=config.policy.seed,
+            enabled_expansions=(get_interface_contract(config.interface).enabled_expansions if config.interface else config.enabled_expansions),
+        )
+    raise TypeError("unsupported Policy provider")

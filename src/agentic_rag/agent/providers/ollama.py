@@ -6,12 +6,14 @@ import math
 import os
 import shlex
 import time
+import re
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ValidationError
 
+from agentic_rag.agent.action_schema import policy_decision_from_constrained
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
     ExpansionKind,
@@ -26,6 +28,7 @@ from agentic_rag.agent.policy import (
     is_transient_provider_error,
     policy_decision_model,
 )
+from agentic_rag.agent.tool_calling import decision_from_tool_call, tool_schema_sha256
 
 OllamaThink = bool | Literal["low", "medium", "high"] | None
 
@@ -47,6 +50,8 @@ class OllamaChatPolicy:
         timeout_seconds: float | None = 300.0,
         max_retries: int = 2,
         retry_backoff_seconds: float = 0.5,
+        max_output_tokens: int = 2_048,
+        seed: int | None = None,
     ) -> None:
         self.model = _normalize_model(model)
         self.host = _resolve_host(host)
@@ -66,6 +71,10 @@ class OllamaChatPolicy:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        if isinstance(max_output_tokens, bool) or max_output_tokens < 1:
+            raise PolicyConfigurationError("max_output_tokens must be positive")
+        self.max_output_tokens = int(max_output_tokens)
+        self.seed = seed
         try:
             self.enabled_expansions = tuple(ExpansionKind(item) for item in enabled_expansions)
             self.decision_format = policy_decision_model(self.enabled_expansions)
@@ -77,37 +86,109 @@ class OllamaChatPolicy:
             host=self.host, timeout_seconds=timeout_seconds
         )
         self.last_usage = Usage()
+        self.last_usage_metadata: dict[str, Any] = {}
 
     def decide(
         self,
-        messages: Sequence[Message | dict[str, str]],
+        messages: Sequence[Message | dict[str, Any]],
         *,
         decision_format: type[BaseModel] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> PolicyDecision:
         response_model = decision_format or self.decision_format
         self.last_usage = Usage()
+        self.last_usage_metadata = {
+            "provider": "ollama",
+            "model": self.model,
+            "host": self.host,
+            "temperature": self.temperature,
+            "think": self.think,
+            "num_ctx": self.num_ctx,
+            "max_output_tokens": self.max_output_tokens,
+            "seed": self.seed,
+            "reasoning_tokens": "unavailable",
+            "native_tool_calling": bool(tools),
+            "constrained_single_decision": not bool(tools),
+            "tool_schema_sha256": tool_schema_sha256(tools or []),
+            "tool_schema_token_estimate": _token_estimate(tools or []),
+        }
         request: dict[str, Any] = {
             "model": self.model,
             "messages": [
-                message.as_openai_input() if isinstance(message, Message) else dict(message)
+                message.as_ollama_input() if isinstance(message, Message) else dict(message)
                 for message in messages
             ],
             "stream": False,
             "format": response_model.model_json_schema(),
-            "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
+            "options": {
+                "temperature": self.temperature,
+                "num_ctx": self.num_ctx,
+                "num_predict": self.max_output_tokens,
+            },
         }
+        if self.seed is not None:
+            request["options"]["seed"] = self.seed
+        if tools:
+            request["tools"] = list(tools)
+            request.pop("format", None)
         if self.think is not None:
             request["think"] = self.think
         if self.keep_alive is not None:
             request["keep_alive"] = self.keep_alive
         response = self._call_with_retries(lambda: self._client.chat(**request))
         self.last_usage = _usage(response)
+        self.last_usage_metadata.update(
+            {
+                "raw_provider_output": _jsonable(response),
+                "provider_input_tokens": _optional_integer(response, "prompt_eval_count"),
+                "provider_output_tokens": _optional_integer(response, "eval_count"),
+                "provider_total_tokens": _optional_integer(response, "prompt_eval_count")
+                + (_optional_integer(response, "eval_count") or 0)
+                if _optional_integer(response, "prompt_eval_count") is not None
+                and _optional_integer(response, "eval_count") is not None
+                else None,
+            }
+        )
+        if tools:
+            calls = _native_tool_calls(response)
+            self.last_usage_metadata.update(
+                {
+                    "tool_call_count": len(calls),
+                    "raw_tool_calls": calls,
+                    "tool_call_names": [
+                        str((call.get("function") or {}).get("name") or "")
+                        for call in calls
+                    ],
+                }
+            )
+            if len(calls) != 1:
+                raise PolicyResponseError(
+                    f"Ollama native tool response must contain exactly one tool call; got {len(calls)}"
+                )
+            try:
+                decision = decision_from_tool_call(calls[0], tools)
+                self.last_usage_metadata["selected_action"] = calls[0]["function"]["name"]
+                return decision
+            except PolicyResponseError:
+                raise
+            except Exception as exc:
+                raise PolicyResponseError("Ollama native tool call could not be decoded") from exc
         content = _value(_value(response, "message"), "content")
         if not isinstance(content, str) or not content.strip():
             raise PolicyResponseError("Ollama response did not contain structured output")
         try:
             parsed = response_model.model_validate_json(content)
-            return PolicyDecision.model_validate(parsed.model_dump(mode="json"))
+            payload = parsed.model_dump(mode="json")
+            self.last_usage_metadata.update(
+                {
+                    "decision_count": 1,
+                    "raw_structured_decision": payload,
+                    "selected_action": (payload.get("action") or {}).get("name"),
+                }
+            )
+            if "name" in (payload.get("action") or {}):
+                return policy_decision_from_constrained(parsed)
+            return PolicyDecision.model_validate(payload)
         except (ValidationError, ValueError, TypeError) as exc:
             raise PolicyResponseError(
                 "Ollama response failed PolicyDecision validation"
@@ -149,8 +230,57 @@ def _integer(value: Any, name: str) -> int:
         return 0
 
 
+def _optional_integer(value: Any, name: str) -> int | None:
+    raw = _value(value, name)
+    if raw is None:
+        return None
+    try:
+        return max(int(raw), 0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _value(value: Any, name: str) -> Any:
     return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _jsonable(model_dump(mode="json"))
+    return str(value)
+
+
+def _native_tool_calls(response: Any) -> list[dict[str, Any]]:
+    message = _value(response, "message")
+    raw_calls = _value(message, "tool_calls") or []
+    calls: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_calls, start=1):
+        function = _value(raw, "function")
+        calls.append(
+            {
+                "id": str(_value(raw, "id") or f"ollama-call-{index}"),
+                "type": "function",
+                "function": {
+                    "name": str(_value(function, "name") or ""),
+                    "arguments": _value(function, "arguments") or {},
+                },
+            }
+        )
+    return calls
+
+
+def _token_estimate(value: Any) -> int:
+    """Small deterministic audit estimate; provider token counts remain canonical."""
+
+    text = str(value)
+    return len(re.findall(r"(?u)\b\w+\b|[^\w\s]", text))
 
 
 def _is_transient(exc: Exception) -> bool:

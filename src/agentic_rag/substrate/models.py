@@ -37,6 +37,9 @@ class BenchmarkQuestion:
     question_type: str | None
     source_question_id: str | None = None
     source_row_index: int | None = None
+    evidence: tuple[str, ...] = ()
+    evidence_triple: str | None = None
+    evidence_relations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +209,8 @@ class BuildManifest(ManifestModel):
     ner_model: ModelVersion
     abbreviation_detector: ModelVersion | None
     embedding_model: ModelVersion
+    embedding_backend: str = "sentence_transformers"
+    embedding_host: str = "http://localhost:11434"
     embedding_dimension: int
     bm25_backend: ModelVersion
     bm25_tokenizer: str
@@ -244,7 +249,8 @@ class ChunkHit(ManifestModel):
     score: float
     doc_id: str
     title: str | None
-    previews: list[SentencePreview]
+    text: str
+    sentences: list[SentenceResult]
 
 
 class EntityHit(ManifestModel):

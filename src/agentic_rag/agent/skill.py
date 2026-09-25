@@ -71,12 +71,10 @@ class SkillDocument(BaseModel):
             raise ValueError("fixed answer contract has an invalid heading")
         index = candidate_content.find(FIXED_ANSWER_CONTRACT_HEADING)
         if index < 0:
-            raise ValueError(
-                "SkillOpt candidate removed the fixed answer contract heading"
-            )
+            raise ValueError("candidate removed the fixed answer contract heading")
         workflow = candidate_content[:index].rstrip()
         if not workflow:
-            raise ValueError("SkillOpt candidate removed the retrieval workflow")
+            raise ValueError("candidate removed the retrieval workflow")
         return f"{workflow}\n\n{fixed_answer_contract}\n"
 
     def write_snapshot(self, path: str | Path) -> Path:
