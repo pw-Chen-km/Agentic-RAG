@@ -125,6 +125,8 @@ def main() -> None:
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--per-type", type=int, default=5)
+    parser.add_argument("--require-assessment", action="store_true",
+                        help="include the optional evidence assessment in tool arguments")
     args = parser.parse_args()
     if args.per_type != 5:
         raise ValueError("this smoke is intentionally fixed at five questions per type")
@@ -143,7 +145,7 @@ def main() -> None:
             raise ValueError(f"required Ollama model not installed: {name}")
 
     config = yaml.safe_load((repo / "configs/interface_study_v2_qwen38_vllm.yaml").read_text(encoding="utf-8"))
-    config["agent"]["require_evidence_assessment"] = True
+    config["agent"]["require_evidence_assessment"] = bool(args.require_assessment)
     config["policy"] = {
         "provider": "ollama", "model": model, "host": host, "temperature": 0,
         "think": False, "num_ctx": 32768, "max_output_tokens": 2048,
@@ -158,6 +160,7 @@ def main() -> None:
         "embedding_model": embedding, "embedding_digest": model_by_name[embedding].get("digest"),
         "conditions": list(CONDITIONS), "expected_episodes": len(DATASETS) * 10 * len(CONDITIONS),
         "question_selection": {"per_dataset": 10, "per_type": 5, "types": list(QUESTION_TYPES), "min_evidence_units": 2},
+        "require_evidence_assessment": bool(args.require_assessment),
         "datasets": {}, "skill_sha256": digest(repo / "skills/interface_study.md"),
         "runner_sha256": digest(repo / "scripts/run_interface_study.py"),
     }
