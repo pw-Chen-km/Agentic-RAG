@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import shlex
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -28,6 +29,7 @@ from agentic_rag.agent.policy import (
 )
 
 OllamaThink = bool | Literal["low", "medium", "high"] | None
+OllamaOutputMode = Literal["structured", "native_tools"]
 
 
 class OllamaChatPolicy:
@@ -39,6 +41,7 @@ class OllamaChatPolicy:
         model: str,
         client: Any | None = None,
         host: str | None = None,
+        output_mode: OllamaOutputMode = "structured",
         enabled_expansions: Sequence[ExpansionKind | str] = DEFAULT_ENABLED_EXPANSIONS,
         temperature: float = 0.0,
         num_ctx: int = 32_768,
@@ -58,8 +61,10 @@ class OllamaChatPolicy:
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             retry_backoff_seconds=retry_backoff_seconds,
+            output_mode=output_mode,
         )
         self.temperature = float(temperature)
+        self.output_mode = output_mode
         self.num_ctx = num_ctx
         self.think = think
         self.keep_alive = keep_alive
@@ -83,7 +88,22 @@ class OllamaChatPolicy:
         messages: Sequence[Message | dict[str, str]],
         *,
         decision_format: type[BaseModel] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_models: Mapping[str, type[BaseModel]] | None = None,
+        output_mode: OllamaOutputMode | None = None,
     ) -> PolicyDecision:
+        mode = output_mode or self.output_mode
+        if mode == "native_tools":
+            return self._decide_with_native_tools(
+                messages,
+                decision_format=decision_format,
+                tools=tools,
+                tool_models=tool_models,
+            )
+        if mode != "structured":
+            raise PolicyConfigurationError(
+                "output_mode must be 'structured' or 'native_tools'"
+            )
         response_model = decision_format or self.decision_format
         self.last_usage = Usage()
         request: dict[str, Any] = {
@@ -113,6 +133,97 @@ class OllamaChatPolicy:
                 "Ollama response failed PolicyDecision validation"
             ) from exc
 
+    def _decide_with_native_tools(
+        self,
+        messages: Sequence[Message | dict[str, str]],
+        *,
+        decision_format: type[BaseModel] | None,
+        tools: Sequence[dict[str, Any]] | None,
+        tool_models: Mapping[str, type[BaseModel]] | None,
+    ) -> PolicyDecision:
+        if not tools:
+            raise PolicyConfigurationError(
+                "native_tools output mode requires at least one tool"
+            )
+        models = dict(tool_models or {})
+        if not models and len(tools) == 1 and decision_format is not None:
+            name = _tool_name(tools[0])
+            if name is not None:
+                models[name] = decision_format
+        if not models:
+            raise PolicyConfigurationError(
+                "native_tools output mode requires tool_models"
+            )
+        self.last_usage = Usage()
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                message.as_openai_input() if isinstance(message, Message) else dict(message)
+                for message in messages
+            ],
+            "stream": False,
+            "tools": list(tools),
+            "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
+        }
+        if self.think is not None:
+            request["think"] = self.think
+        if self.keep_alive is not None:
+            request["keep_alive"] = self.keep_alive
+        response = self._call_with_retries(lambda: self._client.chat(**request))
+        self.last_usage = _usage(response)
+        name, arguments = _extract_tool_call(response)
+        model = models.get(name)
+        if model is None:
+            raise PolicyResponseError(f"Ollama returned an unknown tool {name!r}")
+        try:
+            parsed = model.model_validate(arguments)
+            payload = parsed.model_dump(mode="json")
+            if decision_format is not None:
+                payload = decision_format.model_validate(payload).model_dump(mode="json")
+            return PolicyDecision.model_validate(payload)
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise PolicyResponseError(
+                f"Ollama tool {name!r} arguments failed PolicyDecision validation"
+            ) from exc
+
+    def decide_tool(
+        self,
+        messages: Sequence[Message | dict[str, str]],
+        *,
+        tools: Sequence[dict[str, Any]],
+        tool_models: Mapping[str, type[BaseModel]],
+    ) -> tuple[str, BaseModel]:
+        """Call Ollama's native tool interface and validate one tool call."""
+        if not tools or not tool_models:
+            raise PolicyConfigurationError("native tool call requires tools")
+        self.last_usage = Usage()
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                message.as_openai_input() if isinstance(message, Message) else dict(message)
+                for message in messages
+            ],
+            "stream": False,
+            "tools": list(tools),
+            "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
+        }
+        if self.think is not None:
+            request["think"] = self.think
+        if self.keep_alive is not None:
+            request["keep_alive"] = self.keep_alive
+        response = self._call_with_retries(lambda: self._client.chat(**request))
+        self.last_usage = _usage(response)
+        name, arguments = _extract_tool_call(response)
+        model = tool_models.get(name)
+        if model is None:
+            raise PolicyResponseError(f"Ollama returned an unknown tool {name!r}")
+        try:
+            return name, model.model_validate(arguments)
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise PolicyResponseError(
+                f"Ollama tool {name!r} arguments failed validation"
+            ) from exc
+
     def _call_with_retries(self, operation: Callable[[], Any]) -> Any:
         for attempt in range(self.max_retries + 1):
             try:
@@ -140,6 +251,50 @@ def _usage(response: Any) -> Usage:
         output_tokens=output_tokens,
         total_tokens=input_tokens + output_tokens,
     )
+
+
+def _tool_name(tool: Any) -> str | None:
+    function = _value(tool, "function")
+    name = _value(function, "name")
+    return name.strip() if isinstance(name, str) and name.strip() else None
+
+
+def _extract_tool_call(response: Any) -> tuple[str, dict[str, Any]]:
+    message = _value(response, "message")
+    calls = _value(message, "tool_calls") or []
+    if not calls:
+        raise PolicyResponseError("Ollama response did not contain a native tool call")
+    if len(calls) != 1:
+        raise PolicyResponseError("Ollama response contained more than one native tool call")
+    function = _value(calls[0], "function")
+    name = _tool_name(calls[0])
+    arguments = _value(function, "arguments")
+    if name is None:
+        raise PolicyResponseError("Ollama native tool call has no function name")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError as exc:
+            raise PolicyResponseError("Ollama native tool arguments are not JSON") from exc
+    if not isinstance(arguments, dict):
+        raise PolicyResponseError("Ollama native tool arguments must be an object")
+    return name, _decode_nested_json(arguments)
+
+
+def _decode_nested_json(value: Any) -> Any:
+    """Decode object/array strings emitted by some Qwen/Ollama models."""
+    if isinstance(value, dict):
+        return {key: _decode_nested_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_nested_json(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")):
+            try:
+                return _decode_nested_json(json.loads(stripped))
+            except json.JSONDecodeError:
+                return value
+    return value
 
 
 def _integer(value: Any, name: str) -> int:
@@ -243,6 +398,7 @@ def _validate_options(
     timeout_seconds: float | None,
     max_retries: int,
     retry_backoff_seconds: float,
+    output_mode: OllamaOutputMode,
 ) -> None:
     if isinstance(temperature, bool) or not math.isfinite(float(temperature)) or float(temperature) < 0:
         raise PolicyConfigurationError("temperature must be finite and non-negative")
@@ -258,3 +414,7 @@ def _validate_options(
         raise PolicyConfigurationError("timeout_seconds must be positive")
     if max_retries < 0 or retry_backoff_seconds < 0:
         raise PolicyConfigurationError("retry settings must be non-negative")
+    if output_mode not in {"structured", "native_tools"}:
+        raise PolicyConfigurationError(
+            "output_mode must be 'structured' or 'native_tools'"
+        )

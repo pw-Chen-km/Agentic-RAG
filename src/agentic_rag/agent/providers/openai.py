@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -71,7 +71,14 @@ class OpenAIResponsesPolicy:
         messages: Sequence[Message | dict[str, str]],
         *,
         decision_format: type[BaseModel] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_models: Mapping[str, type[BaseModel]] | None = None,
+        output_mode: str | None = None,
     ) -> PolicyDecision:
+        if output_mode not in (None, "structured"):
+            raise PolicyConfigurationError(
+                "OpenAIResponsesPolicy only supports structured output"
+            )
         response_model = decision_format or self.decision_format
         self.last_usage = Usage()
         provider_input = [

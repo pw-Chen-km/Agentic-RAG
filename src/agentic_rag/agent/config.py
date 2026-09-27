@@ -31,6 +31,7 @@ class OllamaPolicyConfig(ConfigModel):
     provider: Literal["ollama"] = "ollama"
     model: str = Field(default="qwen3.5:9b", min_length=1)
     host: str = Field(default="http://localhost:11434", min_length=1)
+    output_mode: Literal["structured", "native_tools"] = "structured"
     temperature: float = Field(default=0.0, ge=0.0)
     think: OllamaThink = False
     timeout_seconds: float = Field(default=300.0, gt=0.0)

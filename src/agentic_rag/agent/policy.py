@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import deque
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import StrEnum
 from functools import lru_cache
 from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
@@ -52,8 +52,16 @@ class PolicyClient(Protocol):
         messages: Sequence[Message | dict[str, str]],
         *,
         decision_format: type[BaseModel] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_models: Mapping[str, type[BaseModel]] | None = None,
+        output_mode: str | None = None,
     ) -> PolicyDecision:
-        """Return exactly one assessment-and-action decision."""
+        """Return exactly one assessment-and-action decision.
+
+        ``tools`` and ``tool_models`` are optional so providers that support
+        native tool calling can opt into it without breaking the structured
+        output contract used by existing policies.
+        """
 
 
 class _WireAssessment(AgentModel):
@@ -122,7 +130,27 @@ class ScriptedPolicy:
         messages: Sequence[Message | dict[str, str]],
         *,
         decision_format: type[BaseModel] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_models: Mapping[str, type[BaseModel]] | None = None,
+        output_mode: str | None = None,
     ) -> PolicyDecision:
+        if output_mode == "native_tools":
+            if not tools or not tool_models:
+                raise PolicyConfigurationError(
+                    "native_tools output mode requires tools and tool_models"
+                )
+            name, parsed = self.decide_tool(
+                messages,
+                tools=tools,
+                tool_models=tool_models,
+            )
+            payload = parsed.model_dump(mode="json")
+            try:
+                return PolicyDecision.model_validate(payload)
+            except (ValidationError, TypeError, ValueError) as exc:
+                raise PolicyResponseError(
+                    f"scripted native tool {name!r} failed PolicyDecision validation"
+                ) from exc
         self.last_usage = Usage(policy_calls=1)
         self.calls.append(list(messages))
         if not self._decisions:
@@ -143,6 +171,49 @@ class ScriptedPolicy:
             raise PolicyResponseError(
                 "scripted policy output failed PolicyDecision validation"
             ) from exc
+
+    def decide_tool(
+        self,
+        messages: Sequence[Message | dict[str, str]],
+        *,
+        tools: Sequence[dict[str, Any]],
+        tool_models: Mapping[str, type[BaseModel]],
+    ) -> tuple[str, BaseModel]:
+        """Deterministic native-tool test double for controller tests."""
+        if not tools or not tool_models:
+            raise PolicyConfigurationError("native tool call requires tools")
+        self.last_usage = Usage(policy_calls=1)
+        self.calls.append(list(messages))
+        if not self._decisions:
+            raise PolicyResponseError("scripted policy has no decisions remaining")
+        scripted = self._decisions.popleft()
+        if isinstance(scripted, Exception):
+            raise scripted
+        if callable(scripted):
+            scripted = scripted(messages)
+        if isinstance(scripted, BaseModel):
+            payload: Any = scripted.model_dump(mode="json")
+        elif isinstance(scripted, dict):
+            payload = scripted
+        else:
+            raise PolicyResponseError("scripted tool output must be a model or object")
+        if "tool_name" in payload:
+            name = str(payload["tool_name"])
+            arguments = payload.get("arguments", {})
+        elif len(tool_models) == 1:
+            name = next(iter(tool_models))
+            arguments = payload
+        else:
+            action_type = payload.get("action", {}).get("type")
+            name = str(action_type or "").casefold()
+            arguments = payload
+        model = tool_models.get(name)
+        if model is None:
+            raise PolicyResponseError(f"unknown scripted tool {name!r}")
+        try:
+            return name, model.model_validate(arguments)
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise PolicyResponseError("scripted tool arguments failed validation") from exc
 
 
 def policy_decision_model(

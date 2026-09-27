@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from agentic_rag.agent.action_schema import (
     ActionSchemaBuilder,
     decision_schema_sha256,
+    native_action_tools,
 )
 from agentic_rag.agent.action_space import AvailableActionSpaceBuilder
 from agentic_rag.agent.models import (
@@ -57,6 +58,8 @@ class BuiltPolicyContext:
     available_action_space: AvailableActionSpace
     decision_format: type[BaseModel]
     decision_schema_sha256: str
+    native_tools: list[dict[str, Any]]
+    native_tool_models: dict[str, type[BaseModel]]
 
     def __iter__(self):
         return iter(self.messages)
@@ -113,6 +116,7 @@ class PolicyContextBuilder:
             if self.use_state_conditioned_schema
             else policy_decision_model(self.enabled_expansions)
         )
+        native_tools, native_tool_models = native_action_tools(available_action_space)
         memory = self._semantic_memory(display_ids, state)
         attempted_actions = [self._attempt_summary(item) for item in trajectory]
         view = PolicyView(
@@ -174,6 +178,8 @@ class PolicyContextBuilder:
             available_action_space=available_action_space,
             decision_format=decision_format,
             decision_schema_sha256=decision_schema_sha256(decision_format),
+            native_tools=native_tools,
+            native_tool_models=native_tool_models,
         )
 
     def _display_ids(self, state: EpisodeState) -> list[str]:

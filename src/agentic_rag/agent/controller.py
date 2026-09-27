@@ -105,9 +105,9 @@ class AgentController:
                 scope_id=scope_id,
             )
             try:
-                decision = self.policy.decide(
+                decision = self._decide_policy(
                     built.messages,
-                    decision_format=built.decision_format,
+                    built,
                 )
             except PolicyResponseError as exc:
                 usage = self._policy_usage()
@@ -314,7 +314,7 @@ class AgentController:
         )
         messages = [*built.messages, Message(role="user", content=BUDGET_FINALIZE_INSTRUCTION)]
         try:
-            decision = self.policy.decide(messages, decision_format=built.decision_format)
+            decision = self._decide_policy(messages, built)
             usage = self._policy_usage()
             resolved = resolve_decision(decision, built.reference_map)
             validation = self.validator.validate(resolved, state, manager.scope_id)
@@ -342,6 +342,19 @@ class AgentController:
             error_code="budget_finalize_requires_finish",
             error_message=(validation.message or "Budget finalization requires FINISH"),
         )
+
+    def _decide_policy(self, messages, built):
+        """Dispatch one policy turn with optional Ollama native tools."""
+        output_mode = getattr(self.policy, "output_mode", None)
+        if output_mode == "native_tools":
+            return self.policy.decide(
+                messages,
+                decision_format=built.decision_format,
+                tools=built.native_tools,
+                tool_models=built.native_tool_models,
+                output_mode="native_tools",
+            )
+        return self.policy.decide(messages, decision_format=built.decision_format)
 
     def _finish_result(
         self,

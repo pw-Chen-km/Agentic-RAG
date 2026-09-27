@@ -33,6 +33,27 @@ class ActionSchemaBuilder:
         return _state_conditioned_model(action_space.model_dump_json())
 
 
+def native_action_tools(
+    action_space: AvailableActionSpace,
+) -> tuple[list[dict[str, Any]], dict[str, type[BaseModel]]]:
+    """Build Ollama native function tools for one legal action space.
+
+    The structured-output schema represents all legal actions as one union.
+    Native tool calling can make the action family explicit at generation time,
+    so expose one function for each family that is currently available.  Each
+    function still carries the same assessment and state-conditioned action
+    model as the structured contract; the returned model map lets providers
+    validate the decoded function arguments before they reach the controller.
+    """
+    if not action_space.has_actions:
+        raise ValueError("cannot build native tools without any legal action")
+    return _native_action_tools(action_space.model_dump_json())
+
+
+# Keep a concise alias for callers that use the provider terminology.
+native_tools = native_action_tools
+
+
 def decision_schema_sha256(model: type[BaseModel]) -> str:
     canonical = json.dumps(
         model.model_json_schema(),
@@ -41,6 +62,114 @@ def decision_schema_sha256(model: type[BaseModel]) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+@lru_cache(maxsize=256)
+def _native_action_tools(
+    serialized_action_space: str,
+) -> tuple[list[dict[str, Any]], dict[str, type[BaseModel]]]:
+    action_space = AvailableActionSpace.model_validate_json(serialized_action_space)
+    digest = hashlib.sha256(serialized_action_space.encode("utf-8")).hexdigest()[:12]
+
+    search_types: list[type[BaseModel]] = []
+    for index, option in enumerate(action_space.search_options, start=1):
+        search_types.append(
+            create_model(
+                f"NativeSearchAction_{digest}_{index}",
+                __base__=_WireSearchAction,
+                method=(_literal(option.method.value), ...),
+                target=(_literal(option.target.value), ...),
+            )
+        )
+
+    expand_types: list[type[BaseModel]] = []
+    for index, option in enumerate(action_space.expand_options, start=1):
+        kind_type = _literal(option.kind.value)
+        source_type = _literal(*(str(ref) for ref in option.source_refs))
+        if option.kind is ExpansionKind.CHUNK_ADJACENT_CHUNK:
+            expand_types.append(
+                create_model(
+                    f"NativeAdjacentExpandAction_{digest}_{index}",
+                    __base__=_WireAdjacentExpandAction,
+                    kind=(kind_type, ...),
+                    source_ref=(source_type, ...),
+                    direction=(_literal(*(item.value for item in option.directions)), ...),
+                )
+            )
+        else:
+            expand_types.append(
+                create_model(
+                    f"NativeExpandAction_{digest}_{index}",
+                    __base__=_WireNonAdjacentExpandAction,
+                    kind=(kind_type, ...),
+                    source_ref=(source_type, ...),
+                )
+            )
+
+    read_types: list[type[BaseModel]] = []
+    if action_space.read_refs:
+        read_types.append(
+            create_model(
+                f"NativeReadAction_{digest}",
+                __base__=_WireReadAction,
+                chunk_ref=(_literal(*(str(ref) for ref in action_space.read_refs)), ...),
+            )
+        )
+
+    finish_types: list[type[BaseModel]] = []
+    if action_space.finish_evidence_refs:
+        evidence_type = _literal(
+            *(str(ref) for ref in action_space.finish_evidence_refs)
+        )
+        finish_types.append(
+            create_model(
+                f"NativeFinishAction_{digest}",
+                __base__=_WireFinishAction,
+                evidence_refs=(
+                    list[evidence_type],
+                    Field(
+                        min_length=1,
+                        max_length=min(20, len(action_space.finish_evidence_refs)),
+                        description="Visible complete S# or read C# refs",
+                    ),
+                ),
+            )
+        )
+
+    families = (
+        ("search", search_types, "Choose one legal SEARCH action."),
+        ("expand", expand_types, "Choose one legal EXPAND action."),
+        ("read", read_types, "Choose one legal READ action."),
+        ("finish", finish_types, "Return a FINISH answer with visible evidence."),
+    )
+    tools: list[dict[str, Any]] = []
+    models: dict[str, type[BaseModel]] = {}
+    for name, action_types, description in families:
+        if not action_types:
+            continue
+        action_union: Any = action_types[0]
+        for action_type in action_types[1:]:
+            action_union = action_union | action_type
+        model = create_model(
+            f"Native{name.title()}Decision_{digest}",
+            __base__=AgentModel,
+            assessment=(_WireAssessment, ...),
+            action=(action_union, ...),
+        )
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": model.model_json_schema(),
+                },
+            }
+        )
+        models[name] = model
+    if not tools:
+        raise ValueError("cannot build native tools without any legal action")
+    return tools, models
 
 
 @lru_cache(maxsize=256)

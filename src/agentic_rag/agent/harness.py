@@ -268,6 +268,7 @@ def _policy_from_config(config: AgentConfig) -> PolicyClient:
         return OllamaChatPolicy(
             model=config.policy.model,
             host=config.policy.host,
+            output_mode=config.policy.output_mode,
             temperature=config.policy.temperature,
             think=config.policy.think,
             timeout_seconds=config.policy.timeout_seconds,

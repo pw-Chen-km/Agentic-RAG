@@ -6,6 +6,7 @@ from agentic_rag.agent.config import (
     OpenAIPolicyConfig,
     PolicyConfig,
 )
+from agentic_rag.agent.action_schema import native_action_tools
 from agentic_rag.agent.context import BuiltPolicyContext, PolicyContextBuilder
 from agentic_rag.agent.controller import AgentController
 from agentic_rag.agent.harness import AgentHarness
@@ -86,6 +87,7 @@ __all__ = [
     "ExpansionKind",
     "FinishAction",
     "Message",
+    "native_action_tools",
     "Observation",
     "ObservationOutcome",
     "ObservationStatus",
