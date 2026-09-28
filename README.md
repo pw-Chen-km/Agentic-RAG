@@ -45,6 +45,22 @@ python scripts/analyze_context_comparison.py --run /path/to/new-comparison-run -
 比較程式依序執行 assessment 關閉／開啟，各三資料集 × 七配置，合計 42 episodes；
 只做 smoke，不會自動啟動完整實驗。
 
+Information-gap v1 的新 gate 與配對 smoke 使用：
+
+```powershell
+python scripts/run_information_gap_smoke.py `
+  --data-root /path/to/interface_study_v2 `
+  --output runs/information-gap-calibration-YYYYMMDD `
+  --extended-output runs/information-gap-extended-YYYYMMDD `
+  --selection-manifest /path/to/prior/question_selection_manifest.json `
+  --require-assessment
+```
+
+它先做三資料集 × 七配置的 provider calibration、backend branch coverage 與 21 題自然流程
+gate；只有 protocol、assessment 與 execution 門檻通過，才會啟動 Novel 70 題加 Medical 70
+題的 140-episode smoke。`scripts/analyze_information_gap_smoke.py` 會讀取新 run 的 raw
+episode artifacts，輸出缺口、action uptake、錯誤、重複操作、token 與 terminal 完整性診斷。
+
 ## Data lineage
 
 `data/interface_study/source_manifest.json` 固定 HotpotQA distractor dev 檔案的
