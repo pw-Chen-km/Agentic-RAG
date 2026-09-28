@@ -23,7 +23,7 @@ from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.substrate.storage import Substrate
 
 
-ASSESSMENT = {"supported_facts": [], "missing_information": ["answer"]}
+ASSESSMENT = {"missing_information": ["answer"]}
 
 
 def _decision(action: dict) -> dict:
@@ -85,6 +85,14 @@ def test_empty_state_schema_contains_only_six_legal_search_pairs() -> None:
         )
     with pytest.raises(ValidationError):
         model.model_validate(_decision({"type": "READ", "chunk_ref": "C1"}))
+
+
+def test_assessment_off_state_schema_omits_assessment() -> None:
+    state = EpisodeState.initial()
+    space = AvailableActionSpaceBuilder(()).build(state, ContextReferenceMap())
+    model = ActionSchemaBuilder().build(space, require_evidence_assessment=False)
+    assert "assessment" not in model.model_json_schema()["properties"]
+    assert model.model_json_schema()["required"] == ["action"]
 
 
 def test_schema_and_prompt_share_reference_affordances(built_substrate: Path) -> None:

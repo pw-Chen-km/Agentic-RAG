@@ -192,15 +192,16 @@ def render_action_guide(
     sections.append("REFERENCE RULES\n\n" + "\n".join(reference_rules))
     if require_evidence_assessment:
         decision = (
-            "Return one structured decision with supported_facts, missing_information, and action.\n"
-            "supported_facts: brief facts supported by source text already shown.\n"
-            "missing_information: information still needed to answer the question.\n"
-            "action: exactly one action listed above, using its exact name and argument names."
+            "Make exactly one native tool call using an operation listed above.\n"
+            "Include assessment.missing_information in its arguments: at most three non-empty strings "
+            "describing specific facts or connections still needed to answer the question.\n"
+            "Use an empty list if no information is missing; retain unresolved gaps when finishing.\n"
+            "Supply the operation's other arguments alongside assessment, not inside it."
         )
     else:
         decision = (
-            "Return one structured decision with exactly one action listed above,\n"
-            "using its exact name and argument names."
+            "Make exactly one native tool call using an operation listed above,\n"
+            "with its exact argument names."
         )
     sections.append("DECISION FORMAT\n\n" + decision)
     return "\n\n".join(sections)

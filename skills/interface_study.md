@@ -11,8 +11,8 @@ operation's behavior; they do not prescribe an action order or recommend one ope
 The current observation can include the original question, source text, visible
 references, previous results, action history, and remaining budget. Use only what is
 shown there. Only displayed source text can support the answer; operation descriptions,
-action history, and an assessment are guidance, not additional evidence. Do not infer
-hidden source text or hidden candidates.
+action history, and an information-gap assessment are guidance, not additional evidence.
+Do not infer hidden source text or hidden candidates.
 
 POLICY
 
@@ -27,3 +27,36 @@ Use only references shown in the current observation. Do not invent operations,
 references, entity names, or source text.
 When finishing, cite visible sources that support the answer. If no source is shown,
 use an empty evidence_refs list.
+
+RETRIEVAL DECISION PRINCIPLES
+
+Base the next action on what is still missing from the visible evidence. Identify the
+unresolved fact or connection, rather than only stating that more information is needed.
+
+Compare the available operations by whether their candidate scope and returned text unit
+can help resolve that gap.
+
+Global search can discover evidence anywhere in the collection and can express a new
+subquestion through the query. It remains a valid option when a relevant entity is
+already visible.
+
+Entity following can continue retrieval from a visible entity when the missing
+information concerns that entity, or is plausibly contained in other sources mentioning
+it. An entity discovered in an earlier result can be a useful retrieval anchor even when
+it was not named in the original question.
+
+Do not follow an entity merely because it is visible or broadly related. Mention links
+identify candidate sources; they do not by themselves establish the factual relationship
+needed for the answer.
+
+When choosing among available granularities, consider whether the gap requires a focused
+statement or surrounding context. A complete sentence may suffice for a specific fact;
+a passage may help with qualifications, references, chronology, or explanations.
+
+Use the observed results to reassess the remaining gap. Consider another scope or a
+different query when an operation adds no useful evidence. Do not repeat the same
+completed operation.
+
+No retrieval route is mandatory or preferred by default. Do not retrieve more solely to
+exercise an available tool. Finish when the visible sources adequately support the
+answer.

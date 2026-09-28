@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+from agentic_rag.agent.contract_versions import ASSESSMENT_SCHEMA_VERSION, CONTEXT_RENDERER_VERSION
+
 
 def span_key(span):
     return (span.get("sentence_id"), span.get("start"), span.get("end"))
@@ -33,8 +35,8 @@ def action_summary(record):
     elif status == "invalid_action" or record.validation_status.value == "invalid":
         executed, outcome = False, "rejected"
         if (record.validation_error or "").startswith("arguments.assessment"):
-            explanation = ("The assessment must contain exactly supported_facts and missing_information. "
-                           "Both values must be lists of strings, not a string or an object. Empty lists are allowed.")
+            explanation = ("The assessment must contain exactly missing_information. "
+                           "It must be a list of strings, not a string or an object. Empty lists are allowed.")
         elif code in {"source_not_visible", "reference_not_available", "reference_not_evidence"}:
             explanation = "The selected reference is not available for this operation."
         elif code in {"search_pair_not_enabled", "expansion_not_enabled"}:
@@ -141,7 +143,8 @@ def render_context(
                 break
         sections.append("PREVIOUS ASSESSMENT\n" + (
             "Your assessment before action " + str(previous["turn"]) +
-            ". This is your earlier judgment, not source text; it does not include subsequent results.\n" +
+            ". This is your earlier judgment, not source text; it does not include subsequent results. "
+            "Reassess it using the question and sources now shown; do not treat an earlier gap as a confirmed fact.\n" +
             json.dumps(previous, ensure_ascii=False) if previous else "No previous assessment is available."))
     if attempts:
         latest = attempts[-1]
@@ -163,15 +166,16 @@ def render_context(
     sections.append(f"BUDGET\nRemaining decisions: {state.remaining_step_budget}\n"
                     f"Remaining retrieval token estimate: {state.remaining_retrieved_token_budget}")
     if require_assessment:
-        sections.append('Return exactly one decision. At the top level, include "supported_facts" '
-                        'and "missing_information", each as a list of strings, plus one "action". '
-                        "Use these exact key names. Update the brief facts and information gaps from the source text now shown, "
-                        "then choose exactly one operation from OPERATIONS AVAILABLE NOW, or finish. "
+        sections.append('Make exactly one native tool call. Include "assessment" with only '
+                        '"missing_information", a list of at most three non-empty strings, in the tool arguments. '
+                        "Describe the specific fact or connection still needed from the question and source text now shown. "
+                        "Choose exactly one operation from OPERATIONS AVAILABLE NOW, including finish. "
                         "You may revise your previous assessment. "
                         "If finishing with unresolved gaps, keep those gaps in missing_information.")
     else:
-        sections.append("Return exactly one decision. Choose exactly one operation from OPERATIONS AVAILABLE NOW, or finish.")
-    audit = {"version": "sectioned-context-v6.2-entity-navigation-filter", "assessment_requested": require_assessment,
+        sections.append("Make exactly one native tool call from OPERATIONS AVAILABLE NOW, including finish.")
+    audit = {"version": CONTEXT_RENDERER_VERSION, "assessment_schema_version": ASSESSMENT_SCHEMA_VERSION,
+             "assessment_requested": require_assessment,
              "previous_assessment": previous,
              "newly_visible_source_spans": new_spans,
              "new_source_references": [b["ref"] for b in new_blocks],

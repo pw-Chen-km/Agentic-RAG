@@ -157,7 +157,12 @@ class EpisodeStateManager:
             tool_definitions=(
                 list(event.tool_definitions)
                 if event.tool_definitions
-                else build_tool_definitions(event.available_action_space)
+                else build_tool_definitions(
+                    event.available_action_space,
+                    require_evidence_assessment=bool(
+                        event.policy_view.context_audit.get("assessment_requested", True)
+                    ),
+                )
             ),
             messages=list(event.messages),
             provider_metadata=dict(event.provider_metadata or {}),
@@ -231,7 +236,12 @@ def _telemetry(event: AttemptEvent) -> dict:
         )
     metadata["available_tools"] = [
         item.get("function", {}).get("name")
-        for item in build_tool_definitions(event.available_action_space)
+        for item in build_tool_definitions(
+            event.available_action_space,
+            require_evidence_assessment=bool(
+                event.policy_view.context_audit.get("assessment_requested", True)
+            ),
+        )
     ]
     metadata["decision_schema_token_estimate"] = len(
         re.findall(r"(?u)\b\w+\b|[^\w\s]", str(event.decision_schema))

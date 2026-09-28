@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from agentic_rag.agent.config import AgentConfig
+from agentic_rag.agent.contract_versions import (
+    ASSESSMENT_SCHEMA_VERSION,
+    ARTIFACT_CONTRACT_VERSION,
+    CONTEXT_RENDERER_VERSION,
+    NATIVE_PROTOCOL_VERSION,
+)
 from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.agent.harness import _policy_from_config
 from agentic_rag.agent.interface import get_interface_contract
@@ -69,7 +75,9 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
     ).hexdigest()
     substrate_manifest_data = json.loads((args.substrate / "manifest.json").read_text(encoding="utf-8"))
     manifest = {
-        "manifest_version": "interface-study-run-v2",
+        "manifest_version": "interface-study-run-v3",
+        "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
+        "assessment_schema_version": ASSESSMENT_SCHEMA_VERSION,
         "dataset": args.dataset,
         "seed": args.seed,
         "question_limit": args.limit,
@@ -104,11 +112,11 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         "embedding_validation_override": bool(
             getattr(args, "allow_substrate_embedding_mismatch", False)
         ),
-        "renderer_version": "sectioned-context-v6.2-entity-navigation-filter",
+        "renderer_version": CONTEXT_RENDERER_VERSION,
         "renderer_sha256": hashlib.sha256(renderer_bytes).hexdigest(),
         "protocol_type": "native_tool_calling",
         "native_tool_calling": True,
-        "provider_protocol": "native-tool-calling-v1.1-original-question-hop",
+        "provider_protocol": NATIVE_PROTOCOL_VERSION,
         "require_evidence_assessment": config.require_evidence_assessment,
         "target_prompt_digest": hashlib.sha256(
             (repo_root / "src/agentic_rag/agent/interface.py").read_bytes()
@@ -205,6 +213,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("resume requested but run_manifest.json does not exist")
     if manifest_path.exists():
         previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if previous.get("assessment_schema_version") != ASSESSMENT_SCHEMA_VERSION:
+            raise ValueError(
+                "resume refused: assessment contract changed; start a new run directory"
+            )
+        if previous.get("manifest_version") != manifest["manifest_version"]:
+            raise ValueError(
+                "resume refused: run manifest version changed; start a new run directory"
+            )
         if previous != manifest:
             raise ValueError("resume refused: source/config/substrate/renderer manifest changed")
     if not sidecar_manifest_path.exists():

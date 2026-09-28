@@ -1,5 +1,9 @@
 # Constrained single-decision v4
 
+> Historical contract: this document describes the pre-information-gap schema used by
+> older runs. New runs use `information-gap-v1`; do not use this document to resume or
+> interpret them.
+
 ## 為什麼更換 protocol
 
 v3 使用 provider 的 native tool calling。JJ 的 42-episode comparison 出現兩種格式錯誤：

@@ -94,7 +94,7 @@ def calibrate(
             )
         contract = get_interface_contract(name)
         builder = PolicyContextBuilder(
-            substrate, interface_contract=contract
+            substrate, interface_contract=contract, require_evidence_assessment=True
         )
         initial = builder.build(
             "Calibration question",
@@ -162,6 +162,7 @@ def calibrate(
                 ),
                 "entity_visible_decision_schema_sha256": entity_visible.decision_schema_sha256,
                 "schema_valid": True,
+                "assessment_schema_version": "information-gap-v1",
                 "execution_status": "not_run",
         }
         if policy is not None:
@@ -209,6 +210,13 @@ def calibrate(
                             "provider_status": "ok",
                             "selected_tool": selected,
                             "selected_tool_allowed": selected in available,
+                            "assessment_status": (
+                                "provided" if decision.assessment is not None else "unavailable"
+                            ),
+                            "missing_information": (
+                                decision.assessment.missing_information
+                                if decision.assessment is not None else None
+                            ),
                             "decision_count": policy.last_usage_metadata.get("decision_count"),
                             "selected_action": policy.last_usage_metadata.get("selected_action"),
                             "native_tool_calling": policy.last_usage_metadata.get(
@@ -265,29 +273,45 @@ def calibrate(
         and check.get("tool_call_count") == 1
         and check.get("selected_tool_allowed") is True
         and check.get("selected_action") == check.get("selected_tool")
+        and check.get("assessment_status") == "provided"
     ]
     protocol_valid_rate = (
         len(protocol_valid_checks) / len(live_checks) if live_checks else None
     )
+    assessment_checks = [
+        check for check in live_checks if check.get("provider_status") == "ok"
+    ]
+    assessment_valid_checks = [
+        check for check in assessment_checks if check.get("assessment_status") == "provided"
+    ]
+    assessment_parse_rate = (
+        len(assessment_valid_checks) / len(assessment_checks)
+        if assessment_checks else None
+    )
     if live:
         gate = (
-            "live_protocol_smoke_passed"
-            if protocol_valid_rate == 1.0
-            else "live_protocol_smoke_failed"
+            "live_protocol_and_assessment_passed"
+            if protocol_valid_rate is not None
+            and protocol_valid_rate >= 0.99
+            and assessment_parse_rate is not None
+            and assessment_parse_rate >= 0.99
+            else "live_protocol_or_assessment_failed"
         )
     else:
         gate = "static_contracts_passed"
     return {
-        "calibration_version": "interface-study-native-tool-calling-v1",
+        "calibration_version": "interface-study-native-information-gap-v1",
+        "assessment_schema_version": "information-gap-v1",
         "substrate": substrate.root.as_posix(),
         "conditions": rows,
         "schema_valid_rate": static_valid / len(conditions) if conditions else None,
         "live_protocol_check_count": len(live_checks),
         "live_protocol_valid_count": len(protocol_valid_checks),
         "protocol_valid_rate": protocol_valid_rate,
+        "assessment_parse_rate": assessment_parse_rate,
         "execution_success_rate": None,
         "execution_status": (
-            "not_measured_by_protocol_probe"
+            "not_measured_by_provider_probe; run_information_gap_smoke.py performs backend and natural execution checks"
             if live
             else "deferred_to_live_workflow_smoke"
         ),

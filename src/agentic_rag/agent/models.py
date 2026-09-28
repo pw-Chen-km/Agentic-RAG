@@ -66,10 +66,22 @@ class ExpansionDirection(StrEnum):
 
 
 class Assessment(AgentModel):
-    """The Policy's semantic judgment, deliberately free of references."""
+    """The Policy's information-gap judgment, deliberately free of references.
 
-    supported_facts: list[str] = Field(default_factory=list, max_length=5)
-    missing_information: list[str] = Field(default_factory=list, max_length=3)
+    This is a short, model-generated planning aid.  It is not source evidence
+    and must never be used as an evidence reference by the evaluator.
+    """
+
+    missing_information: list[Annotated[str, Field(min_length=1)]] = Field(
+        default_factory=list, max_length=3
+    )
+
+    @field_validator("missing_information")
+    @classmethod
+    def gaps_must_not_be_blank(cls, values: list[str]) -> list[str]:
+        if any(not item.strip() for item in values):
+            raise ValueError("information gaps must contain non-whitespace characters")
+        return values
 
 
 _TYPED_REF_PATTERN = r"^[ESC][1-9][0-9]*$"

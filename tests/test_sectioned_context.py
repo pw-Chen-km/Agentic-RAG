@@ -164,8 +164,9 @@ def test_wrong_assessment_keys_receive_specific_safe_guidance():
         validation_error="arguments.assessment is missing a required argument",
         observation=Observation(status="invalid_action", error_code="protocol_invalid"))
     text = action_summary(record)["explanation"]
-    assert "supported_facts and missing_information" in text
-    assert "lists of strings" in text
+    assert "exactly missing_information" in text
+    assert "list of strings" in text
+    assert "supported_facts" not in text
 
 
 def test_assessment_required_and_unknown_field_rejected(built_substrate):
@@ -226,7 +227,7 @@ def test_compact_history_is_shorter_than_previous_json_record():
     assert len(format_action_summary(attempt)) < len(json.dumps(old, ensure_ascii=False))
 
 
-@pytest.mark.parametrize("field", ["renderer_sha256", "provider_protocol_sha256", "require_evidence_assessment"])
+@pytest.mark.parametrize("field", ["renderer_sha256", "provider_protocol_sha256", "require_evidence_assessment", "assessment_schema_version"])
 def test_resume_rejects_changed_context_or_assessment(tmp_path, monkeypatch, field):
     import importlib.util
     import json

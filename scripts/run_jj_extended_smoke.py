@@ -120,6 +120,36 @@ def select_rows(path: Path, dataset: str) -> tuple[list[tuple[int, dict[str, Any
     return selected, report
 
 
+def selection_from_manifest(
+    path: Path, dataset: str, baseline: dict[str, Any]
+) -> tuple[list[tuple[int, dict[str, Any]]], dict[str, Any]]:
+    """Reuse exact source rows; changed source or row identity is not comparable."""
+    if baseline.get("seed") != SEED or baseline.get("conditions") != list(CONDITIONS):
+        raise ValueError("baseline seed or conditions do not match this smoke")
+    info = baseline.get("datasets", {}).get(dataset)
+    if not isinstance(info, dict) or info.get("source_sha256") != digest(path):
+        raise ValueError(f"{dataset}: baseline question source hash mismatch")
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    selected = []
+    for item in info.get("selected", []):
+        index = item.get("source_row_index")
+        if not isinstance(index, int) or not 0 <= index < len(rows):
+            raise ValueError(f"{dataset}: invalid baseline source row index")
+        row = rows[index]
+        if (str(row.get("_id") or row.get("id")) != str(item.get("id"))
+                or row.get("question") != item.get("question")
+                or row.get("question_type") != item.get("type")):
+            raise ValueError(f"{dataset}: baseline source row {index} changed")
+        selected.append((index, row))
+    if len(selected) != 10 or len({index for index, _ in selected}) != 10:
+        raise ValueError(f"{dataset}: baseline must select ten distinct source rows")
+    counts = {kind: sum(row.get("question_type") == kind for _, row in selected)
+              for kind in QUESTION_TYPES}
+    if counts != {kind: 5 for kind in QUESTION_TYPES}:
+        raise ValueError(f"{dataset}: baseline question type counts changed: {counts}")
+    return selected, info.get("selection_report", {})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", type=Path, required=True)
@@ -127,6 +157,8 @@ def main() -> None:
     parser.add_argument("--per-type", type=int, default=5)
     parser.add_argument("--require-assessment", action="store_true",
                         help="include the optional evidence assessment in tool arguments")
+    parser.add_argument("--selection-manifest", type=Path,
+                        help="reuse exact prior question rows after verifying source hashes")
     args = parser.parse_args()
     if args.per_type != 5:
         raise ValueError("this smoke is intentionally fixed at five questions per type")
@@ -138,18 +170,18 @@ def main() -> None:
     with urllib.request.urlopen(host + "/api/tags", timeout=30) as response:
         tags = json.load(response)
     model = "qwen3.8:27b-q4_K_M"
-    embedding = "qwen3-embedding:4b"
     model_by_name = {entry["name"]: entry for entry in tags.get("models", [])}
-    for name in (model, embedding):
-        if name not in model_by_name:
-            raise ValueError(f"required Ollama model not installed: {name}")
+    if model not in model_by_name:
+        raise ValueError(f"required Ollama model not installed: {model}")
+    baseline = (json.loads(args.selection_manifest.read_text(encoding="utf-8"))
+                if args.selection_manifest else None)
 
     config = yaml.safe_load((repo / "configs/interface_study_v2_qwen38_vllm.yaml").read_text(encoding="utf-8"))
     config["agent"]["require_evidence_assessment"] = bool(args.require_assessment)
     config["policy"] = {
         "provider": "ollama", "model": model, "host": host, "temperature": 0,
         "think": False, "num_ctx": 32768, "max_output_tokens": 2048,
-        "timeout_seconds": 600, "max_retries": 2,
+        "timeout_seconds": 600, "max_retries": 2, "seed": SEED,
     }
     config_path = output / "target_config.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
@@ -157,10 +189,13 @@ def main() -> None:
         "purpose": "expanded natural action-selection smoke; 5 multi-evidence reasoning + 5 contextual summarization per dataset",
         "created_at": datetime.now(timezone.utc).isoformat(), "seed": SEED,
         "model": model, "model_digest": model_by_name[model].get("digest"),
-        "embedding_model": embedding, "embedding_digest": model_by_name[embedding].get("digest"),
         "conditions": list(CONDITIONS), "expected_episodes": len(DATASETS) * 10 * len(CONDITIONS),
         "question_selection": {"per_dataset": 10, "per_type": 5, "types": list(QUESTION_TYPES), "min_evidence_units": 2},
         "require_evidence_assessment": bool(args.require_assessment),
+        "assessment_schema_version": "information-gap-v1",
+        "baseline_selection_manifest_sha256": (
+            digest(args.selection_manifest) if args.selection_manifest else None
+        ),
         "datasets": {}, "skill_sha256": digest(repo / "skills/interface_study.md"),
         "runner_sha256": digest(repo / "scripts/run_interface_study.py"),
     }
@@ -171,12 +206,28 @@ def main() -> None:
             substrate = root / "substrates" / dataset
             source = root / "sources/graphrag_benchmark" / dataset / "questions.json"
             source_manifest = root / "sources/graphrag_benchmark" / dataset / "source_manifest.json"
-            selected, selection_report = select_rows(source, dataset)
+            selected, selection_report = (
+                selection_from_manifest(source, dataset, baseline)
+                if baseline is not None else select_rows(source, dataset)
+            )
+            substrate_manifest = json.loads((substrate / "manifest.json").read_text(encoding="utf-8"))
+            if baseline is not None:
+                baseline_dataset = baseline.get("datasets", {}).get(dataset, {})
+                if baseline_dataset.get("substrate_manifest_sha256") != digest(substrate / "manifest.json"):
+                    raise ValueError(f"{dataset}: baseline substrate manifest hash mismatch")
+            actual_embedding = substrate_manifest.get("embedding_model")
+            embedding_name = actual_embedding.get("name") if isinstance(actual_embedding, dict) else actual_embedding
+            if substrate_manifest.get("embedding_backend") == "ollama" and embedding_name not in model_by_name:
+                raise ValueError(f"required substrate Ollama embedding not installed: {embedding_name}")
             selected_indices = [index for index, _ in selected]
             selected_path = output / "selected_questions" / f"{dataset}.json"
             save(selected_path, [row for _, row in selected])
             manifest["datasets"][dataset] = {
                 "source_sha256": digest(source), "substrate_manifest_sha256": digest(substrate / "manifest.json"),
+                "embedding_model_identity": actual_embedding,
+                "embedding_backend": substrate_manifest.get("embedding_backend"),
+                "embedding_dimension": substrate_manifest.get("embedding_dimension"),
+                "embedding_digest": model_by_name.get(embedding_name, {}).get("digest"),
                 "selection_report": selection_report,
                 "selected": [{"source_row_index": index, "id": row.get("_id") or row.get("id"),
                               "type": row.get("question_type"), "evidence_units": evidence_count(row),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, create_model
 
@@ -36,10 +36,17 @@ from agentic_rag.agent.policy import (
 class ActionSchemaBuilder:
     """Translate structural affordances into an OpenAI/Ollama response model."""
 
-    def build(self, action_space: AvailableActionSpace) -> type[BaseModel]:
+    def build(
+        self,
+        action_space: AvailableActionSpace,
+        *,
+        require_evidence_assessment: bool = True,
+    ) -> type[BaseModel]:
         if not action_space.has_actions:
             raise ValueError("cannot build a Policy schema without any legal action")
-        return _state_conditioned_model(action_space.model_dump_json())
+        return _state_conditioned_model(
+            action_space.model_dump_json(), require_evidence_assessment
+        )
 
 
 class InterfaceDecisionSchemaBuilder:
@@ -77,11 +84,10 @@ def policy_decision_from_constrained(value: BaseModel | dict[str, Any]) -> Polic
     raw_action = dict(payload["action"])
     name = raw_action.pop("name")
     assessment = None
-    if "supported_facts" in payload or "missing_information" in payload:
-        assessment = Assessment(
-            supported_facts=payload.get("supported_facts", []),
-            missing_information=payload.get("missing_information", []),
-        )
+    if "supported_facts" in payload:
+        raise ValueError("supported_facts is not part of information-gap-v1")
+    if "missing_information" in payload:
+        assessment = Assessment(missing_information=payload.get("missing_information", []))
     if name == "find_passages":
         action = SearchAction(
             query=raw_action["query"], method=SearchMethod.DENSE,
@@ -186,11 +192,9 @@ def _interface_decision_model(cache_key: str) -> type[BaseModel]:
     }
     if require_assessment:
         fields = {
-            "supported_facts": (
-                list[str], Field(max_length=5, description="Brief facts supported by source text already shown. Use an empty list when there are none."),
-            ),
             "missing_information": (
-                list[str], Field(max_length=3, description="Information still needed to answer. Use an empty list when nothing is missing."),
+                list[Annotated[str, Field(min_length=1)]],
+                Field(max_length=3, description="Specific information still needed to answer. Use an empty list when nothing is missing."),
             ),
             **fields,
         }
@@ -200,7 +204,10 @@ def _interface_decision_model(cache_key: str) -> type[BaseModel]:
 
 
 @lru_cache(maxsize=256)
-def _state_conditioned_model(serialized_action_space: str) -> type[BaseModel]:
+def _state_conditioned_model(
+    serialized_action_space: str,
+    require_evidence_assessment: bool = True,
+) -> type[BaseModel]:
     action_space = AvailableActionSpace.model_validate_json(serialized_action_space)
     digest = hashlib.sha256(serialized_action_space.encode("utf-8")).hexdigest()[:12]
     action_types: list[type[BaseModel]] = []
@@ -285,11 +292,13 @@ def _state_conditioned_model(serialized_action_space: str) -> type[BaseModel]:
     action_union: Any = action_types[0]
     for action_type in action_types[1:]:
         action_union = action_union | action_type
+    fields: dict[str, Any] = {"action": (action_union, ...)}
+    if require_evidence_assessment:
+        fields = {"assessment": (_WireAssessment, ...), **fields}
     return create_model(
-        f"StateConditionedPolicyDecision_{digest}",
+        f"StateConditionedPolicyDecision_{digest}_{'assessment' if require_evidence_assessment else 'no_assessment'}",
         __base__=AgentModel,
-        assessment=(_WireAssessment, ...),
-        action=(action_union, ...),
+        **fields,
     )
 
 

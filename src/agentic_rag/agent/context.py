@@ -145,11 +145,20 @@ class PolicyContextBuilder:
                 display_ids, reference_map, available_action_space,
                 entity_filter_audit,
             )
-        tool_definitions = build_tool_definitions(available_action_space)
+        tool_definitions = build_tool_definitions(
+            available_action_space,
+            require_evidence_assessment=self.require_evidence_assessment,
+        )
         decision_format = (
-            self.action_schema_builder.build(available_action_space)
+            self.action_schema_builder.build(
+                available_action_space,
+                require_evidence_assessment=self.require_evidence_assessment,
+            )
             if self.use_state_conditioned_schema
-            else policy_decision_model(self.enabled_expansions)
+            else policy_decision_model(
+                self.enabled_expansions,
+                require_evidence_assessment=self.require_evidence_assessment,
+            )
         )
         memory = self._semantic_memory(display_ids, state)
         attempted_actions = [self._attempt_summary(item) for item in trajectory]

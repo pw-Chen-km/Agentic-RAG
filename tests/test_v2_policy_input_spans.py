@@ -35,7 +35,7 @@ def test_spans_describe_input_not_new_retrieval(
                 raise PolicyResponseError("test malformed constrained decision")
             else:
                 decision = PolicyDecision(
-                    assessment=Assessment(supported_facts=["Marie Curie was born in Warsaw"]),
+                    assessment=Assessment(missing_information=[]),
                     action=FinishAction(answer="Warsaw", evidence_refs=[]),
                 )
             self.last_usage_metadata = {"constrained_single_decision": True, "decision_count": 1}

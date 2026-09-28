@@ -175,6 +175,20 @@ def decision_from_tool_call(tool_call: Mapping[str, Any], tools=None) -> PolicyD
             "native tool call must include a valid evidence assessment"
         ) from exc
 
+    allowed_arguments = {
+        "find_passages": {"query"},
+        "find_sentences": {"query"},
+        "follow_entity_to_passages": {"entity_ref"},
+        "follow_entity_to_sentences": {"entity_ref"},
+        "read_passage": {"passage_ref"},
+        "finish": {"answer", "evidence_refs"},
+    }
+    unexpected = set(args) - allowed_arguments.get(name, set())
+    if unexpected:
+        raise PolicyResponseError(
+            f"native tool {name!r} contains unexpected arguments: {sorted(unexpected)}"
+        )
+
     try:
         if name == "find_passages":
             action = SearchAction(query=args["query"], method=SearchMethod.DENSE, target=SearchTarget.CHUNK)
@@ -247,22 +261,13 @@ def _function(name: str, description: str, parameters: dict[str, Any]) -> dict[s
             "assessment": {
                 "type": "object",
                 "description": (
-                    "Before selecting the tool, summarize what the shown source text "
-                    "already supports and what information is still needed. Use exactly "
-                    "supported_facts and missing_information as keys, with lists of strings as values. "
+                    "Before selecting the tool, identify the specific fact or connection "
+                    "still needed from the shown source text. Use exactly "
+                    "missing_information as a key with a list of strings as its value. "
                     "This object is only the assessment: do not put query, entity_ref, answer, "
                     "or any other tool argument inside it; those arguments belong at the top level."
                 ),
                 "properties": {
-                    "supported_facts": {
-                        "type": "array",
-                        "items": {"type": "string", "minLength": 1},
-                        "maxItems": 5,
-                        "description": (
-                            "Brief facts already supported by the source text shown to you. "
-                            "Use an empty list if no relevant fact is supported yet."
-                        ),
-                    },
                     "missing_information": {
                         "type": "array",
                         "items": {"type": "string", "minLength": 1},
@@ -274,7 +279,7 @@ def _function(name: str, description: str, parameters: dict[str, Any]) -> dict[s
                         ),
                     },
                 },
-                "required": ["supported_facts", "missing_information"],
+                "required": ["missing_information"],
                 "additionalProperties": False,
             },
             **parameters["properties"],

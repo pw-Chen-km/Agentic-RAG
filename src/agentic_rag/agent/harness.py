@@ -5,6 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentic_rag.agent.artifacts import ArtifactWriter
+from agentic_rag.agent.contract_versions import (
+    ASSESSMENT_SCHEMA_VERSION,
+    ARTIFACT_CONTRACT_VERSION,
+    CONTEXT_RENDERER_VERSION,
+    NATIVE_PROTOCOL_VERSION,
+)
 from agentic_rag.agent.config import AgentConfig, OllamaPolicyConfig, OpenAICompatiblePolicyConfig
 from agentic_rag.agent.context import PolicyContextBuilder
 from agentic_rag.agent.interface import InterfaceContract, get_interface_contract
@@ -217,6 +223,7 @@ class AgentHarness:
             )
             prior_steps.append(step)
         return {
+            "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
             "trace_format": "agentic-rag-episode-v1",
             "episode_id": result.episode_id,
             "target_input": {
@@ -240,6 +247,7 @@ class AgentHarness:
                 else None
             ),
             "policy_context": {
+                "assessment_schema_version": ASSESSMENT_SCHEMA_VERSION,
                 "node_reference_scheme": "episode_local_typed_refs_with_frozen_visibility",
                 "show_available_action_options": (
                     self.config.show_available_action_options
@@ -266,7 +274,7 @@ class AgentHarness:
                 ],
                 "budget_representation": "compact_text",
                 "action_guide_version": (
-                    "sectioned-context-v6.2-entity-navigation-filter"
+                    CONTEXT_RENDERER_VERSION
                     if self.interface_contract is not None
                     else None
                 ),
@@ -275,7 +283,7 @@ class AgentHarness:
             },
             "runtime_components": {
                 "policy_client": type(self.policy).__name__,
-                "policy_protocol": "native-tool-calling-v1.1-original-question-hop",
+                "policy_protocol": NATIVE_PROTOCOL_VERSION,
                 "native_tool_calling": True,
                 "one_decision_per_turn": True,
                 "state_manager": "EpisodeStateManager",

@@ -41,7 +41,7 @@ class _FakeOllama:
                         "id": "ollama-call-1",
                         "function": {
                             "name": "find_passages",
-                            "arguments": {"assessment": {"supported_facts": [], "missing_information": ["Where Marie Curie was born"]}, "query": "Marie Curie"},
+                            "arguments": {"assessment": {"missing_information": ["Where Marie Curie was born"]}, "query": "Marie Curie"},
                         },
                     }
                 ]
@@ -80,7 +80,7 @@ def test_openai_compatible_uses_single_native_tool_call() -> None:
                                 "type": "function",
                                 "function": {
                                     "name": "find_passages",
-                                    "arguments": '{"assessment":{"supported_facts":[],"missing_information":["Where Marie Curie was born"]},"query":"Marie Curie"}',
+                                    "arguments": '{"assessment":{"missing_information":["Where Marie Curie was born"]},"query":"Marie Curie"}',
                                 },
                             }
                         ]
@@ -103,7 +103,7 @@ def test_ollama_constrains_one_flattened_decision_without_native_tools() -> None
         request = None
         def chat(self, **kwargs):
             self.request = kwargs
-            return {"message": {"content": '{"supported_facts":[],"missing_information":["birthplace"],"action":{"name":"find_passages","query":"Marie Curie birthplace"}}'},
+            return {"message": {"content": '{"missing_information":["birthplace"],"action":{"name":"find_passages","query":"Marie Curie birthplace"}}'},
                     "prompt_eval_count": 12, "eval_count": 8}
     client = Client()
     policy = OllamaChatPolicy(model="qwen3.5:4b", client=client)
@@ -121,7 +121,7 @@ def test_openai_compatible_constrains_one_flattened_decision() -> None:
     captured = {}
     def fake_request(payload):
         captured.update(payload)
-        return {"choices": [{"message": {"content": '{"supported_facts":[],"missing_information":[],"action":{"name":"finish","answer":"Unknown","evidence_refs":[]}}'}}],
+        return {"choices": [{"message": {"content": '{"missing_information":[],"action":{"name":"finish","answer":"Unknown","evidence_refs":[]}}'}}],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
     policy._request = fake_request  # type: ignore[method-assign]
     decision = policy.decide([Message(role="user", content="Question")],

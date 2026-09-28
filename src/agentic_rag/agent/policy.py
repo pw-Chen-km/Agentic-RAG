@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from enum import StrEnum
 from functools import lru_cache
-from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
+from typing import Annotated, Any, Literal, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 
@@ -58,12 +58,11 @@ class PolicyClient(Protocol):
         decision_format: type[BaseModel] | None = None,
         tools: Sequence[dict[str, Any]] | None = None,
     ) -> PolicyDecision:
-        """Return exactly one assessment-and-action decision."""
+        """Return exactly one information-gap assessment and action decision."""
 
 
 class _WireAssessment(AgentModel):
-    supported_facts: list[str] = Field(max_length=5)
-    missing_information: list[str] = Field(max_length=3)
+    missing_information: list[Annotated[str, Field(min_length=1)]] = Field(max_length=3)
 
 
 class _WireSearchAction(AgentModel):
@@ -153,18 +152,21 @@ class ScriptedPolicy:
 
 def policy_decision_model(
     enabled_expansions: Sequence[ExpansionKind | str] = DEFAULT_ENABLED_EXPANSIONS,
+    *,
+    require_evidence_assessment: bool = True,
 ) -> type[BaseModel]:
     """Build an OpenAI/Ollama-compatible schema for the enabled relations."""
 
     normalized = tuple(ExpansionKind(item) for item in enabled_expansions)
     if len(normalized) != len(set(normalized)):
         raise ValueError("enabled_expansions must not contain duplicates")
-    return _policy_decision_model(normalized)
+    return _policy_decision_model(normalized, require_evidence_assessment)
 
 
 @lru_cache(maxsize=None)
 def _policy_decision_model(
     enabled_expansions: tuple[ExpansionKind, ...],
+    require_evidence_assessment: bool = True,
 ) -> type[BaseModel]:
     signature = ",".join(item.value for item in enabled_expansions)
     digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:12]
@@ -188,11 +190,13 @@ def _policy_decision_model(
     if ExpansionKind.CHUNK_ADJACENT_CHUNK in enabled_expansions:
         action_types = action_types | _WireAdjacentExpandAction
     action_types = action_types | _WireReadAction | _WireFinishAction
+    fields: dict[str, Any] = {"action": (action_types, ...)}
+    if require_evidence_assessment:
+        fields = {"assessment": (_WireAssessment, ...), **fields}
     return create_model(
-        f"EnabledPolicyDecision_{suffix}",
+        f"EnabledPolicyDecision_{suffix}_{'assessment' if require_evidence_assessment else 'no_assessment'}",
         __base__=AgentModel,
-        assessment=(_WireAssessment, ...),
-        action=(action_types, ...),
+        **fields,
     )
 
 

@@ -49,7 +49,7 @@ def test_v2_condition_tool_registry_isolated(built_substrate: Path) -> None:
         assert "read_passage" not in _tool_names(built.tool_definitions)
         assert built.provider_tools == built.tool_definitions
         decision_schema = built.decision_format.model_json_schema()
-        assert set(decision_schema["required"]) == {"supported_facts", "missing_information", "action"}
+        assert set(decision_schema["required"]) == {"missing_information", "action"}
         for tool in built.tool_definitions:
             parameters = tool["function"]["parameters"]
             assert "assessment" in parameters["properties"]
@@ -62,7 +62,7 @@ def test_native_tool_call_decodes_to_existing_action_model() -> None:
             "type": "function",
             "function": {
                 "name": "find_sentences",
-                "arguments": '{"assessment":{"supported_facts":[],"missing_information":["Where Marie Curie was born"]},"query":"Marie Curie"}',
+                "arguments": '{"assessment":{"missing_information":["Where Marie Curie was born"]},"query":"Marie Curie"}',
             },
         }
     )
@@ -70,6 +70,21 @@ def test_native_tool_call_decodes_to_existing_action_model() -> None:
     assert decision.action.target.value == "SENTENCE"
     assert decision.action.query == "Marie Curie"
     assert decision.assessment.missing_information == ["Where Marie Curie was born"]
+
+
+def test_native_decoder_rejects_historical_supported_facts_argument() -> None:
+    with pytest.raises(PolicyResponseError):
+        decision_from_tool_call({
+            "id": "legacy",
+            "type": "function",
+            "function": {
+                "name": "find_passages",
+                "arguments": {
+                    "assessment": {"missing_information": [], "supported_facts": []},
+                    "query": "Marie Curie",
+                },
+            },
+        })
 
 
 def test_tool_schema_uses_the_same_capability_card_descriptions(built_substrate: Path) -> None:
@@ -90,20 +105,26 @@ def test_constrained_decision_is_single_flattened_action(built_substrate: Path) 
     built = PolicyContextBuilder(substrate, interface_contract=get_interface_contract("C1")).build(
         "Question?", SkillDocument.from_text("Answer."), EpisodeState.initial(), [], scope_id="q1")
     model = built.decision_format
-    valid = model.model_validate({"supported_facts": [], "missing_information": ["answer"],
+    valid = model.model_validate({"missing_information": ["answer"],
                                   "action": {"name": "find_sentences", "query": "specific fact"}})
     decision = policy_decision_from_constrained(valid)
     assert decision.action.target.value == "SENTENCE"
     with pytest.raises(Exception):
-        model.model_validate({"assessment": {"supported_facts": [], "missing_information": []},
+        model.model_validate({"assessment": {"missing_information": []},
                               "action": {"name": "find_passages", "query": "fact"}})
     with pytest.raises(Exception):
-        model.model_validate({"supported_facts": "[]", "missing_information": [],
+        model.model_validate({"missing_information": "[]",
                               "action": {"name": "find_passages", "query": "fact"}})
     with pytest.raises(Exception):
-        model.model_validate({"supported_facts": [], "missing_information": [],
+        model.model_validate({"missing_information": [],
                               "action": [{"name": "find_passages", "query": "one"},
                                          {"name": "find_passages", "query": "two"}]})
+    with pytest.raises(Exception):
+        model.model_validate({"supported_facts": [], "missing_information": [],
+                              "action": {"name": "find_passages", "query": "fact"}})
+    with pytest.raises(Exception):
+        model.model_validate({"missing_information": ["one", "two", "three", "four"],
+                              "action": {"name": "find_passages", "query": "fact"}})
 
 
 def test_entity_tools_are_created_only_from_visible_entity_cards(
@@ -227,7 +248,7 @@ def test_finish_is_always_available_but_empty_evidence_is_explicit(
             "type": "function",
             "function": {
                 "name": "finish",
-                "arguments": {"assessment": {"supported_facts": ["The source does not answer the question"], "missing_information": []}, "answer": "Unknown", "evidence_refs": []},
+                "arguments": {"assessment": {"missing_information": ["The answer is not shown"]}, "answer": "Unknown", "evidence_refs": []},
             },
         }
     )
@@ -259,10 +280,7 @@ def test_native_parser_rejects_unknown_or_hidden_references(
         "function": {
             "name": "follow_entity_to_sentences",
             "arguments": {
-                "assessment": {
-                    "supported_facts": [],
-                    "missing_information": ["Connected evidence"],
-                },
+                "assessment": {"missing_information": ["Connected evidence"]},
                 "entity_ref": "E99",
             },
         },
