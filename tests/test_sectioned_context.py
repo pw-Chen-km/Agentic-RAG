@@ -25,11 +25,21 @@ def test_live_shaped_duplicate_feedback_and_assessment_modes(built_substrate, fa
         def decide(self, messages, *, tools=None, **kwargs):
             assert tools
             self.count += 1
+            # The new finish guard requires an empty information-gap
+            # assessment once the scripted policy decides it has enough.
+            current = (
+                Assessment(
+                    missing_information=(
+                        ["Unresolved information"] if self.count <= 2 else []
+                    )
+                )
+                if assessment
+                else None
+            )
             if self.count <= 2:
                 action = SearchAction(query="Marie Curie", method=SearchMethod.DENSE, target=SearchTarget.CHUNK)
             else:
                 action = FinishAction(answer="Insufficient evidence", evidence_refs=[])
-            current = Assessment(missing_information=["Unresolved information"]) if assessment else None
             self.last_usage_metadata = {"constrained_single_decision": True, "decision_count": 1}
             return PolicyDecision(assessment=current, action=action)
     harness = AgentHarness(substrate=Substrate.open(built_substrate),
@@ -56,7 +66,7 @@ def test_live_shaped_duplicate_feedback_and_assessment_modes(built_substrate, fa
     assert (final.decision.assessment is not None) == assessment
     if assessment:
         assert final.context_audit["previous_assessment"]["turn"] == 2
-        assert final.decision.assessment.missing_information == ["Unresolved information"]
+        assert final.decision.assessment.missing_information == []
     for step in result.trajectory:
         audit = step.context_audit
         assert not set(audit["new_section_references"]) & set(audit["old_section_references"])

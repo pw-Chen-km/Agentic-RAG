@@ -15,6 +15,7 @@ from agentic_rag.agent.tool_calling import (
 from agentic_rag.agent.interface_action_catalog import ACTION_CARDS
 from agentic_rag.agent.policy import PolicyResponseError, PolicyStateError
 from agentic_rag.agent.references import ReferenceResolutionError, resolve_decision
+from agentic_rag.agent.validator import DecisionValidator
 from agentic_rag.substrate.storage import Substrate
 from agentic_rag.substrate.models import Entity
 
@@ -225,7 +226,7 @@ def test_v62_entity_filter_excludes_ner_types_but_keeps_single_entity_hop(
     assert "Visible entity references:" not in filtered_prompt
 
 
-def test_finish_is_always_available_but_empty_evidence_is_explicit(
+def test_finish_schema_allows_call_but_validator_requires_visible_source(
     built_substrate: Path,
 ) -> None:
     substrate = Substrate.open(built_substrate)
@@ -254,6 +255,46 @@ def test_finish_is_always_available_but_empty_evidence_is_explicit(
     )
     assert decision.action.type == "FINISH"
     assert decision.action.evidence_refs == []
+    resolved = resolve_decision(decision, built.reference_map)
+    validation = DecisionValidator(substrate, interface_contract=contract).validate(
+        resolved, EpisodeState.initial(), "q1"
+    )
+    assert validation.ok is False
+    assert validation.code == "finish_without_source"
+
+
+def test_finish_with_unresolved_assessment_is_rejected_after_source_is_visible(
+    built_substrate: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    contract = get_interface_contract("C0")
+    state = EpisodeState.initial()
+    chunk_id = sorted(substrate.chunk_ids_by_scope["q1"])[0]
+    state.visible_chunk_ids.add(chunk_id)
+    state.semantic_memory_node_ids.append(chunk_id)
+    built = PolicyContextBuilder(substrate, interface_contract=contract).build(
+        "Question?", SkillDocument.from_text("Answer."), state, [], scope_id="q1"
+    )
+    decision = decision_from_tool_call(
+        {
+            "id": "call-finish-gap",
+            "type": "function",
+            "function": {
+                "name": "finish",
+                "arguments": {
+                    "assessment": {"missing_information": ["the missing fact"]},
+                    "answer": "Unknown",
+                    "evidence_refs": [],
+                },
+            },
+        }
+    )
+    resolved = resolve_decision(decision, built.reference_map)
+    validation = DecisionValidator(substrate, interface_contract=contract).validate(
+        resolved, state, "q1"
+    )
+    assert validation.ok is False
+    assert validation.code == "finish_with_unresolved_gap"
 
 
 def test_native_parser_rejects_unknown_or_hidden_references(

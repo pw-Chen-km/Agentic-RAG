@@ -35,6 +35,8 @@ ValidationCode = Literal[
     "entity_not_navigable",
     "chunk_not_readable",
     "reference_not_evidence",
+    "finish_without_source",
+    "finish_with_unresolved_gap",
 ]
 
 
@@ -93,7 +95,7 @@ class DecisionValidator:
             if invalid is not None:
                 return self._invalid(*invalid, decision)
         elif isinstance(action, ResolvedFinishAction):
-            invalid = self._validate_finish(action, state, scope_id)
+            invalid = self._validate_finish(action, state, scope_id, decision)
             if invalid is not None:
                 return self._invalid(*invalid, decision)
         elif not isinstance(action, SearchAction):
@@ -193,7 +195,20 @@ class DecisionValidator:
         action: ResolvedFinishAction,
         state: EpisodeState,
         scope_id: str,
+        decision: ResolvedDecision,
     ) -> tuple[ValidationCode, str] | None:
+        if not state.visible_chunk_ids and not state.eligible_sentence_ids:
+            return (
+                "finish_without_source",
+                "FINISH is not allowed because no source text is currently visible; "
+                "choose one available search operation",
+            )
+        if decision.assessment is not None and decision.assessment.missing_information:
+            return (
+                "finish_with_unresolved_gap",
+                "FINISH is not allowed while assessment.missing_information is non-empty; "
+                "choose an available operation that could address the listed gap",
+            )
         seen: set[tuple[str, str]] = set()
         for ref in action.evidence_refs:
             key = (ref.unit, ref.id)

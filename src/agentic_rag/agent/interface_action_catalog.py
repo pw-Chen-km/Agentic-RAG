@@ -120,7 +120,8 @@ ACTION_CARDS = {
             "How it works: ends the episode without retrieving new text.\n"
             "Returns: no new source text.\n"
             "Limitation: cite only visible passage or sentence labels that support the answer;\n"
-            "if no source is visible, evidence_refs must be an empty list."
+            "do not use this operation when no source is visible or when the current assessment\n"
+            "still lists a specific missing fact or connection."
         ),
         schema_description="End the episode with an answer and visible source citations.",
     ),

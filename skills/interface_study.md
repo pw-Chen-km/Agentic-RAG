@@ -26,7 +26,10 @@ priority. The same query used with two different search operations is allowed.
 Use only references shown in the current observation. Do not invent operations,
 references, entity names, or source text.
 When finishing, cite visible sources that support the answer. If no source is shown,
-use an empty evidence_refs list.
+do not finish: choose one of the currently available search operations. If the
+assessment still lists a specific missing fact or connection, do not finish yet;
+choose one of the currently available operations that could address it. This rule
+does not prefer global search, sentence search, or entity following.
 
 RETRIEVAL DECISION PRINCIPLES
 

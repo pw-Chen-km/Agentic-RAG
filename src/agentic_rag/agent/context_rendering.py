@@ -41,6 +41,16 @@ def action_summary(record):
             explanation = "The selected reference is not available for this operation."
         elif code in {"search_pair_not_enabled", "expansion_not_enabled"}:
             explanation = "The selected tool is not available in this interface."
+        elif code == "finish_without_source":
+            explanation = (
+                "FINISH was rejected because no source text is visible. "
+                "Choose one of the available search operations."
+            )
+        elif code == "finish_with_unresolved_gap":
+            explanation = (
+                "FINISH was rejected because the assessment still lists missing information. "
+                "Choose an available operation that could address that gap."
+            )
         else:
             explanation = "The request did not satisfy the available tool's input requirements."
         explanation += " This request was not executed. No new source text was added."
@@ -171,7 +181,8 @@ def render_context(
                         "Describe the specific fact or connection still needed from the question and source text now shown. "
                         "Choose exactly one operation from OPERATIONS AVAILABLE NOW, including finish. "
                         "You may revise your previous assessment. "
-                        "If finishing with unresolved gaps, keep those gaps in missing_information.")
+                        "Do not finish when no source text is visible or when missing_information is non-empty. "
+                        "This does not prefer any particular operation.")
     else:
         sections.append("Make exactly one native tool call from OPERATIONS AVAILABLE NOW, including finish.")
     audit = {"version": CONTEXT_RENDERER_VERSION, "assessment_schema_version": ASSESSMENT_SCHEMA_VERSION,

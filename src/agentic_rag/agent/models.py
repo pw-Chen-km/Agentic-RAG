@@ -160,9 +160,8 @@ class ReadAction(AgentModel):
 class FinishAction(AgentModel):
     type: Literal["FINISH"] = "FINISH"
     answer: str = Field(min_length=1)
-    # A finish call is always available.  An empty list records an answer for
-    # which the agent found no eligible citation; the evaluator can then
-    # distinguish "no evidence cited" from a protocol failure.
+    # The schema keeps FINISH available so the validator can return a clear,
+    # state-conditioned rejection when evidence is missing or unresolved.
     evidence_refs: list[TypedReference] = Field(min_length=0, max_length=20)
 
     @field_validator("answer")

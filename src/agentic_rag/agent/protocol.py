@@ -19,13 +19,15 @@ They state the arguments accepted by each available action. A search returns the
 unit described by that tool; an entity action starts from an entity reference
 shown with its name; finish returns an answer and any references that support
 it. Use only references shown in the current observation. Never invent an
-entity, source text, reference, or unavailable action. You may finish with no
-citation when no eligible evidence is visible.
+entity, source text, reference, or unavailable action.
 
 Reference examples: source_ref: "E2", chunk_ref: "C4", and
 evidence_refs: ["S2", "C1"]. Copy the exact references shown in the current
 observation.
 Never output E#, S#, C#, or another placeholder instead of a reference.
+Do not finish when no source text is visible or when the current assessment still
+lists a specific missing fact or connection. Choose an available operation instead;
+this rule does not prefer any particular retrieval scope.
 """
 
 
