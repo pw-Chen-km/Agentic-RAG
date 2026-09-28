@@ -771,16 +771,17 @@ class ExpansionEngine:
         if not candidates:
             return {}
         ordered = sorted(candidates.items(), key=lambda item: str(item[0]))
-        matrix = normalize_embeddings(
-            self._get_embedding_backend().encode(
-                [query, *(text for _, text in ordered)]
-            )
+        backend = self._get_embedding_backend()
+        query_encoder = getattr(backend, "encode_query", backend.encode)
+        query_vector = normalize_embeddings(query_encoder([query]))
+        candidate_matrix = normalize_embeddings(
+            backend.encode([text for _, text in ordered])
         )
-        if matrix.shape[0] != len(ordered) + 1:
+        if query_vector.shape[0] != 1 or candidate_matrix.shape[0] != len(ordered):
             raise AgenticRAGError(
                 "Embedding backend returned the wrong number of expansion rows"
             )
-        scores = np.asarray(matrix[1:] @ matrix[0], dtype=np.float32)
+        scores = np.asarray(candidate_matrix @ query_vector[0], dtype=np.float32)
         result: dict[KeyT, float] = {}
         for (candidate_id, _), raw_score in zip(ordered, scores, strict=True):
             score = float(raw_score)

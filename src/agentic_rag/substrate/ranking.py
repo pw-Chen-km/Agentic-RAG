@@ -69,7 +69,8 @@ class RankingService:
         if cached is not None:
             return cached
         backend = self.embedding_backend or self._default_backend()
-        vector = normalize_embeddings(backend.encode([query]))[0]
+        encoder = getattr(backend, "encode_query", backend.encode)
+        vector = normalize_embeddings(encoder([query]))[0]
         self._query_cache[query] = vector
         self.query_encodes += 1
         return vector

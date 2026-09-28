@@ -21,6 +21,10 @@ class EmbeddingBackend(Protocol):
     def encode(self, texts: Sequence[str]) -> np.ndarray:
         ...
 
+    def encode_query(self, texts: Sequence[str]) -> np.ndarray:
+        """Encode retrieval queries using the backend's query convention."""
+        ...
+
 
 class SentenceTransformerEmbeddingBackend:
     def __init__(
@@ -61,6 +65,51 @@ class SentenceTransformerEmbeddingBackend:
             ) from exc
         return np.asarray(result, dtype=np.float32)
 
+    def encode_query(self, texts: Sequence[str]) -> np.ndarray:
+        """Encode queries with the model's query prompt when it defines one.
+
+        Qwen3-Embedding models expose a ``query`` prompt in their
+        SentenceTransformers wrapper.  Document/source vectors remain
+        unprompted, so query and document encoding must not silently share the
+        same call.  Other models use their ordinary encoder unchanged.
+        """
+        if not texts:
+            dimension = int(self._model.get_sentence_embedding_dimension())
+            return np.empty((0, dimension), dtype=np.float32)
+        try:
+            prompts = getattr(self._model, "prompts", None) or {}
+            if "query" in prompts:
+                result = self._model.encode(
+                    list(texts),
+                    prompt_name="query",
+                    batch_size=self.batch_size,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
+            else:
+                result = self._model.encode(
+                    list(texts),
+                    batch_size=self.batch_size,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
+        except TypeError:
+            # Keep compatibility with older SentenceTransformers wrappers.
+            result = self._model.encode(
+                list(texts),
+                batch_size=self.batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+        except Exception as exc:
+            raise BuildError(
+                f"Embedding model {self.name!r} failed to encode query: {exc}"
+            ) from exc
+        return np.asarray(result, dtype=np.float32)
+
 
 class OllamaEmbeddingBackend:
     """Embedding backend backed by Ollama's /api/embed endpoint."""
@@ -83,6 +132,9 @@ class OllamaEmbeddingBackend:
             except Exception as exc:
                 raise BuildError(f"Ollama embedding model {self.name!r} failed: {exc}") from exc
         return normalize_embeddings(np.asarray(rows, dtype=np.float32))
+
+    def encode_query(self, texts: Sequence[str]) -> np.ndarray:
+        return self.encode(texts)
 
 
 def create_embedding_backend(model_name: str, *, backend: str = "sentence_transformers", host: str = "http://localhost:11434", batch_size: int = 64, device: str | None = None) -> EmbeddingBackend:
