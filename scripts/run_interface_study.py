@@ -82,6 +82,8 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         "seed": args.seed,
         "question_limit": args.limit,
         "question_indices": getattr(args, "question_indices", None),
+        "partition_index": getattr(args, "partition_index", None),
+        "partition_count": getattr(args, "partition_count", None),
         "conditions": list(conditions),
         "question_file": args.questions.resolve().as_posix(),
         "question_sha256": sha256(args.questions),
@@ -198,6 +200,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if any(index < 0 or index >= len(questions) for index in args.question_indices):
             raise ValueError("--question-indices contains an out-of-range source row")
         questions = [questions[index] for index in args.question_indices]
+    partition_index = getattr(args, "partition_index", None)
+    partition_count = getattr(args, "partition_count", None)
+    if partition_index is not None or partition_count is not None:
+        if partition_index is None or partition_count is None:
+            raise ValueError("--partition-index and --partition-count must be provided together")
+        if getattr(args, "question_indices", None) is not None or args.limit is not None:
+            raise ValueError("partition options cannot be combined with --question-indices or --limit")
+        if partition_count < 1 or partition_index < 0 or partition_index >= partition_count:
+            raise ValueError("invalid question partition")
+        questions = [
+            row for source_index, row in enumerate(questions)
+            if source_index % partition_count == partition_index
+        ]
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = _manifest(args, AgentConfig.from_yaml(args.config), conditions)
     sidecar_manifest_path = args.substrate / "evaluation" / "gold_evidence_manifest.json"
@@ -347,6 +362,10 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="limit questions for a smoke run")
     parser.add_argument("--question-indices", nargs="+", type=int, default=None,
                         help="source row indices to run after full source/sidecar validation")
+    parser.add_argument("--partition-index", type=int, default=None,
+                        help="deterministic source-row partition index (0-based)")
+    parser.add_argument("--partition-count", type=int, default=None,
+                        help="number of deterministic source-row partitions")
     parser.add_argument(
         "--allow-substrate-embedding-mismatch",
         action="store_true",
