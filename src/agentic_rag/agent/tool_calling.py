@@ -79,14 +79,19 @@ def build_tool_definitions(
                     "description": "A reference displayed in the current observation.",
                 }
             }
-        if option.kind not in {
-            ExpansionKind.CHUNK_ADJACENT_CHUNK,
+        if option.kind is ExpansionKind.CHUNK_ADJACENT_CHUNK:
+            # Chunk adjacency is the only expansion whose target is selected
+            # by a direction. Entity hops select an E# and must not expose a
+            # direction enum (the old code emitted enum=[] for entity hops).
+            properties["direction"] = {
+                "type": "string",
+                "enum": list(item.value for item in option.directions),
+            }
+        elif option.kind not in {
             ExpansionKind.ENTITY_MENTIONED_IN_CHUNK,
             ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,
         }:
             properties["query"] = {"type": ["string", "null"], "minLength": 1}
-        else:
-            properties["direction"] = {"type": "string", "enum": list(item.value for item in option.directions)}
         required = ["entity_ref"] if "entity_ref" in properties else ["source_ref"]
         tools.append(_function(name, description, {
             "type": "object",
