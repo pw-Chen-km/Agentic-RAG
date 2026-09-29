@@ -212,6 +212,7 @@ class PolicyContextBuilder:
             policy_state=PolicyStateView(
                 step=state.step,
                 policy_attempts=state.policy_attempts,
+                consecutive_unresolved_searches=state.consecutive_unresolved_searches,
                 last_assessment=(
                     state.last_assessment.model_copy(deep=True)
                     if state.last_assessment is not None
@@ -450,6 +451,26 @@ class PolicyContextBuilder:
             entity_filter_audit=entity_filter_audit,
             scope_id=scope_id,
         )
+        # Keep the dynamic navigation gate auditable without turning its
+        # bookkeeping into another Policy instruction.  The model sees the
+        # resulting tool registry; these values explain why that registry may
+        # contain only an entity-hop route after repeated unresolved search.
+        audit.update(
+            {
+                "consecutive_unresolved_searches": state.consecutive_unresolved_searches,
+                "information_gap_remaining": bool(
+                    state.last_assessment is not None
+                    and state.last_assessment.missing_information
+                ),
+                "forced_entity_navigation": bool(
+                    getattr(space, "forced_entity_navigation", False)
+                ),
+                "available_entity_navigation": any(
+                    str(option.kind.value).startswith("ENTITY_")
+                    for option in space.expand_options
+                ),
+            }
+        )
         guide = render_action_guide(
             space,
             entity_annotation=self.interface_contract.entity_annotation,
@@ -504,6 +525,7 @@ class PolicyContextBuilder:
         )
         view = PolicyView(context_audit=audit, policy_state=PolicyStateView(
             step=state.step, policy_attempts=state.policy_attempts,
+            consecutive_unresolved_searches=state.consecutive_unresolved_searches,
             last_assessment=(
                 latest_decision.assessment.model_copy(deep=True)
                 if latest_decision is not None and self.require_evidence_assessment

@@ -25,7 +25,11 @@ Context renderer 使用 `sectioned-context-v10-gap-phases`：分開上一輪操�
 並重新提供完整 source memory。
 JJ 使用本機 SSH 與既有 `qwen3.8:27b-q4_K_M`，不同於下方 Brev 的 FP8 設定。
 v6 只在原有歷史區簡短列出工具、參數、狀態與新增文字數，不另加重複的操作清單；
-validator 仍拒絕同一操作，且被拒絕的 decision 照常計入預算。
+validator 仍拒絕同一操作，且被拒絕的 decision 照常計入預算。在 entity-enabled
+condition 中，若模型已提交兩次搜尋而最新 assessment 仍有缺口，下一個正常
+retrieval turn 會暫時只註冊仍可用的 entity-navigation operation；這個 gate 也計入
+重複或 state-invalid 的已提交搜尋，並在新 gap phase 或空缺口時重置。這是本次正式
+run 的明確 workflow policy，不與舊 run 混合。
 
 既有 run 可做離線 retrieval coverage 稽核，不需重跑 Policy，也不會將隱藏候選或 gold
 放進模型輸入。分析須使用與 run manifest hash 相符的三套 substrate：

@@ -62,6 +62,8 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
             Path("src/agentic_rag/agent/tool_calling.py"),
             Path("src/agentic_rag/agent/action_schema.py"),
             Path("src/agentic_rag/agent/models.py"),
+            Path("src/agentic_rag/agent/action_space.py"),
+            Path("src/agentic_rag/agent/state.py"),
             Path("src/agentic_rag/agent/validator.py"),
             Path("src/agentic_rag/agent/expansion.py"),
             Path("src/agentic_rag/agent/providers/openai_compatible.py"),
@@ -141,6 +143,12 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         "entity_filter_policy_sha256": sha256(
             repo_root / "src/agentic_rag/agent/entity_visibility.py"
         ),
+        "entity_navigation_fallback_policy": {
+            "version": "two-submitted-searches-with-unresolved-gap-v1",
+            "threshold": 2,
+            "scope": "entity-enabled conditions with a visible navigable entity",
+            "counts": "submitted search actions, including duplicate/state-invalid attempts",
+        },
         "budget": {
             "normal_policy_decisions": 15,
             "finalize_calls": 1,

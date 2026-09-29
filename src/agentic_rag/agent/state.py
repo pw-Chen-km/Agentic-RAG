@@ -5,7 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agentic_rag.agent.models import Assessment, EpisodeState, Observation, SentencePreview
+from agentic_rag.agent.models import (
+    Assessment,
+    EpisodeState,
+    Observation,
+    SearchAction,
+    SentencePreview,
+)
 from agentic_rag.agent.entity_visibility import EntityVisibilityPolicy
 from agentic_rag.agent.interface import InterfaceContract
 from agentic_rag.substrate.storage import Substrate
@@ -103,6 +109,25 @@ class StateUpdater:
 
         if action_signature is not None:
             updated.action_signatures.add(action_signature)
+
+        # Keep a small, deterministic signal for the action-space builder.
+        # A submitted SearchAction with an explicitly unresolved assessment
+        # contributes to the consecutive count, including a duplicate or
+        # other state rejection.  Counting the rejected attempt is important:
+        # otherwise ``search -> duplicate search`` could leave the same global
+        # operation available forever.  A different action, or a closed/absent
+        # assessment, breaks the run.
+        if isinstance(observation.action, SearchAction):
+            if (
+                assessment is not None
+                and assessment.missing_information
+            ):
+                updated.consecutive_unresolved_searches += 1
+            else:
+                updated.consecutive_unresolved_searches = 0
+        elif observation.action is not None:
+            updated.consecutive_unresolved_searches = 0
+
         if commit_assessment and assessment is not None:
             # ``resolved_gaps`` is cumulative state.  The provider response is
             # kept verbatim in the trajectory, but the state used for the next

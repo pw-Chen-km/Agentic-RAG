@@ -19,6 +19,7 @@ def test_begin_new_phase_clears_only_current_phase_sources() -> None:
     state.action_signatures.add("find_passages:town")
     state.visible_entity_ids.add("entity:Mary_Town")
     state.remaining_step_budget = 9
+    state.consecutive_unresolved_searches = 2
     state.answer_stage_pending = False
 
     next_state = state.begin_new_phase()
@@ -33,6 +34,7 @@ def test_begin_new_phase_clears_only_current_phase_sources() -> None:
     assert next_state.action_signatures == {"find_passages:town"}
     assert next_state.visible_entity_ids == {"entity:Mary_Town"}
     assert next_state.remaining_step_budget == 9
+    assert next_state.consecutive_unresolved_searches == 0
     assert next_state.answer_stage_pending is False
 
 
@@ -102,6 +104,61 @@ def test_resolved_gap_with_new_source_starts_a_fresh_policy_window(built_substra
     assert transitioned.current_phase_source_keys == {f"passage:{chunk.chunk_id}"}
     assert "passage:old" in transitioned.all_source_keys
     assert f"passage:{chunk.chunk_id}" in transitioned.all_source_keys
+
+
+def test_phase_reset_does_not_reintroduce_previously_seen_returned_units(built_substrate) -> None:
+    from agentic_rag.substrate.storage import Substrate
+
+    substrate = Substrate.open(built_substrate)
+    chunks = list(substrate.chunks[:2])
+    old_chunk, new_chunk = chunks[0], chunks[1]
+    before = EpisodeState.initial()
+    before.last_assessment = Assessment(missing_information=["identify the town"])
+    before.current_phase_source_keys.add(f"passage:{old_chunk.chunk_id}")
+    before.all_source_keys.add(f"passage:{old_chunk.chunk_id}")
+
+    updater = StateUpdater(substrate)
+    observation = Observation(
+        status=ObservationStatus.OK,
+        retrieved_tokens=1,
+        novel_node_ids=[new_chunk.chunk_id],
+        metadata={"visibility_delta": {"visible_passage_ids": [new_chunk.chunk_id]}},
+    )
+    updated = updater.apply(
+        before,
+        assessment=Assessment(
+            resolved_gaps=["identify the town — Mary Town"],
+            missing_information=["determine Mary Town's industry"],
+        ),
+        observation=observation,
+        action_signature="search:industry",
+    )
+    # The backend may return a mix of old and new units.  This audit field is
+    # intentionally broader than the compact source window.
+    observation.metadata["returned_source_keys"] = [
+        f"passage:{old_chunk.chunk_id}",
+        f"passage:{new_chunk.chunk_id}",
+    ]
+    event = SimpleNamespace(
+        validation_status=ValidationStatus.VALID,
+        observation=observation,
+        policy_view=SimpleNamespace(context_audit={"context_mode": "gap_bounded"}),
+        assessment=Assessment(
+            resolved_gaps=["identify the town — Mary Town"],
+            missing_information=["determine Mary Town's industry"],
+        ),
+    )
+
+    transitioned, did_transition, reason = EpisodeStateManager._apply_phase_transition(
+        before, updated, event
+    )
+
+    assert did_transition is True
+    assert reason == "resolved_gap_with_new_source"
+    assert transitioned.current_phase_source_keys == {
+        f"passage:{new_chunk.chunk_id}"
+    }
+    assert f"passage:{old_chunk.chunk_id}" in transitioned.all_source_keys
 
 
 def test_new_source_without_resolved_gap_keeps_current_policy_window(built_substrate) -> None:
@@ -174,6 +231,11 @@ def test_answer_stage_reopens_complete_memory_and_closes_retrieval(built_substra
 
     assert "ALL SOURCE MEMORY (ANSWER STAGE)" in content
     assert all(chunk.text in content for chunk in chunks)
+    # Answer mode reopens the complete episode memory, but the renderer must
+    # still emit each canonical passage once (not once in both a current and
+    # previous-source section, and not once per nested sentence).
+    assert all(content.count(chunk.text) == 1 for chunk in chunks)
+    assert "PREVIOUSLY SHOWN SOURCE TEXT" not in content
     assert built.available_action_space.mode is ActionSpaceMode.ANSWER
     assert built.available_action_space.search_options == ()
     assert built.available_action_space.finish_available is True

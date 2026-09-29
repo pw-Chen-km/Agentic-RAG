@@ -380,6 +380,13 @@ class EpisodeState(AgentModel):
     current_phase_source_keys: set[str] = Field(default_factory=set)
     all_source_keys: set[str] = Field(default_factory=set)
     answer_stage_pending: bool = False
+    # Count consecutive submitted global searches while the latest
+    # assessment still reports an information gap.  The interface
+    # uses this only as a safety valve: after two such searches, any
+    # available entity-navigation route is exposed on its own for the next
+    # normal retrieval turn.  Conditions without entity navigation keep
+    # their ordinary search affordances.
+    consecutive_unresolved_searches: int = Field(default=0, ge=0)
     visible_entity_ids: set[str] = Field(default_factory=set)
     visible_sentence_ids: set[str] = Field(default_factory=set)
     visible_chunk_ids: set[str] = Field(default_factory=set)
@@ -440,6 +447,10 @@ class EpisodeState(AgentModel):
         updated = self.model_copy(deep=True)
         updated.phase_index += 1
         updated.current_phase_source_keys.clear()
+        # A new information gap starts a fresh search streak.  Carrying the
+        # previous phase's count would force an entity hop before the new gap
+        # has had any global-search attempt.
+        updated.consecutive_unresolved_searches = 0
         updated.answer_stage_pending = answer_stage_pending
         return updated
 
@@ -504,6 +515,7 @@ class AvailableActionSpace(AgentModel):
     read_refs: tuple[TypedReference, ...] = ()
     finish_evidence_refs: tuple[TypedReference, ...] = ()
     finish_available: bool = False
+    forced_entity_navigation: bool = False
 
     @property
     def has_actions(self) -> bool:
@@ -557,6 +569,7 @@ SemanticMemoryItem = Annotated[
 class PolicyStateView(AgentModel):
     step: int = Field(ge=0)
     policy_attempts: int = Field(ge=0)
+    consecutive_unresolved_searches: int = Field(default=0, ge=0)
     last_assessment: Assessment | None = None
     semantic_memory: list[SemanticMemoryItem] = Field(default_factory=list)
     latest_attempt: dict[str, Any] | None = None

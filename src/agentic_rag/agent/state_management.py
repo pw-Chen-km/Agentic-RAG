@@ -267,11 +267,11 @@ class EpisodeStateManager:
         if context_mode == "gap_bounded" and previous is not None and resolved_gap_added:
             updated = updated.begin_new_phase(answer_stage_pending=False)
             # This assessment was generated BEFORE this action executed.
-            # Only earlier source is retired. The just-returned text must
-            # survive so the next call can actually read and assess it.
-            updated.current_phase_source_keys.update(
-                event.observation.metadata.get("returned_source_keys", new_source_keys)
-            )
+            # Retire the previous phase and keep only source units that this
+            # action made newly visible.  The observation may also return
+            # already-seen units; those remain in the complete artifact but
+            # must not silently re-enter the compact Policy window.
+            updated.current_phase_source_keys.update(new_source_keys)
             event.observation.metadata["phase_transition_source_keys"] = sorted(new_source_keys)
             return updated, True, "resolved_gap_with_new_source"
         return updated, False, None
