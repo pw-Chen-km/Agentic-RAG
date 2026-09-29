@@ -6,7 +6,7 @@ import pytest
 from agentic_rag.agent.context import PolicyContextBuilder
 from agentic_rag.agent.action_schema import policy_decision_from_constrained
 from agentic_rag.agent.interface import get_interface_contract
-from agentic_rag.agent.models import EpisodeState
+from agentic_rag.agent.models import ActionSpaceMode, EpisodeState
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.agent.tool_calling import (
     build_tool_definitions,
@@ -27,13 +27,13 @@ def _tool_names(tools: list[dict]) -> list[str]:
 def test_v2_condition_tool_registry_isolated(built_substrate: Path) -> None:
     substrate = Substrate.open(built_substrate)
     expected = {
-        "C0": ["find_passages", "finish"],
-        "C1": ["find_passages", "find_sentences", "finish"],
-        "C2": ["find_passages", "finish"],
-        "C3": ["find_passages", "finish"],
-        "C5": ["find_passages", "find_sentences", "finish"],
-        "C4": ["find_passages", "find_sentences", "finish"],
-        "A1": ["find_passages", "find_sentences", "finish"],
+        "C0": ["find_passages"],
+        "C1": ["find_passages", "find_sentences"],
+        "C2": ["find_passages"],
+        "C3": ["find_passages"],
+        "C5": ["find_passages", "find_sentences"],
+        "C4": ["find_passages", "find_sentences"],
+        "A1": ["find_passages", "find_sentences"],
     }
     for name, names in expected.items():
         contract = get_interface_contract(name)
@@ -90,9 +90,15 @@ def test_native_decoder_rejects_historical_supported_facts_argument() -> None:
 
 def test_tool_schema_uses_the_same_capability_card_descriptions(built_substrate: Path) -> None:
     substrate = Substrate.open(built_substrate)
+    state = EpisodeState.initial()
+    chunk_id = sorted(substrate.chunk_ids_by_scope["q1"])[0]
+    state.visible_chunk_ids.add(chunk_id)
+    state.visible_passage_ids.add(chunk_id)
+    state.semantic_memory_node_ids.append(chunk_id)
+    state.reference_registry.register(chunk_id, "CHUNK")
     built = PolicyContextBuilder(
         substrate, interface_contract=get_interface_contract("C4")
-    ).build("Question?", SkillDocument.from_text("Answer."), EpisodeState.initial(), [], scope_id="q1")
+    ).build("Question?", SkillDocument.from_text("Answer."), state, [], scope_id="q1")
     descriptions = {
         item["function"]["name"]: item["function"]["description"]
         for item in build_tool_definitions(built.available_action_space)
@@ -226,7 +232,7 @@ def test_v62_entity_filter_excludes_ner_types_but_keeps_single_entity_hop(
     assert "Visible entity references:" not in filtered_prompt
 
 
-def test_finish_schema_allows_call_but_validator_requires_visible_source(
+def test_finish_is_not_available_before_any_source_is_visible(
     built_substrate: Path,
 ) -> None:
     substrate = Substrate.open(built_substrate)
@@ -238,11 +244,24 @@ def test_finish_schema_allows_call_but_validator_requires_visible_source(
         [],
         scope_id="q1",
     )
-    finish = next(
-        item for item in built.tool_definitions if item["function"]["name"] == "finish"
+    assert "finish" not in _tool_names(built.tool_definitions)
+
+
+def test_budget_finalize_allows_incomplete_finish(
+    built_substrate: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    contract = get_interface_contract("C0")
+    state = EpisodeState.initial()
+    built = PolicyContextBuilder(substrate, interface_contract=contract).build(
+        "Question?",
+        SkillDocument.from_text("Answer."),
+        state,
+        [],
+        scope_id="q1",
+        action_space_mode=ActionSpaceMode.BUDGET_FINALIZE,
     )
-    params = finish["function"]["parameters"]
-    assert params["properties"]["evidence_refs"]["maxItems"] == 0
+    assert "finish" in _tool_names(built.tool_definitions)
     decision = decision_from_tool_call(
         {
             "id": "call-finish",
@@ -253,14 +272,11 @@ def test_finish_schema_allows_call_but_validator_requires_visible_source(
             },
         }
     )
-    assert decision.action.type == "FINISH"
-    assert decision.action.evidence_refs == []
     resolved = resolve_decision(decision, built.reference_map)
     validation = DecisionValidator(substrate, interface_contract=contract).validate(
-        resolved, EpisodeState.initial(), "q1"
+        resolved, state, "q1", allow_incomplete_finish=True
     )
-    assert validation.ok is False
-    assert validation.code == "finish_without_source"
+    assert validation.ok is True
 
 
 def test_finish_with_unresolved_assessment_is_rejected_after_source_is_visible(

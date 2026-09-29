@@ -398,7 +398,12 @@ class AgentController:
             )
             usage = self._policy_usage()
             resolved = resolve_decision(decision, built.reference_map)
-            validation = self.validator.validate(resolved, state, manager.scope_id)
+            validation = self.validator.validate(
+                resolved,
+                state,
+                manager.scope_id,
+                allow_incomplete_finish=True,
+            )
         except Exception as exc:
             usage = self._policy_usage()
             manager.record_attempt(

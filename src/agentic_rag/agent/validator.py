@@ -75,6 +75,8 @@ class DecisionValidator:
         decision: ResolvedDecision,
         state: EpisodeState,
         scope_id: str,
+        *,
+        allow_incomplete_finish: bool = False,
     ) -> ValidationResult:
         self.substrate.require_scope(scope_id)
         action = decision.action
@@ -95,7 +97,13 @@ class DecisionValidator:
             if invalid is not None:
                 return self._invalid(*invalid, decision)
         elif isinstance(action, ResolvedFinishAction):
-            invalid = self._validate_finish(action, state, scope_id, decision)
+            invalid = self._validate_finish(
+                action,
+                state,
+                scope_id,
+                decision,
+                allow_incomplete_finish=allow_incomplete_finish,
+            )
             if invalid is not None:
                 return self._invalid(*invalid, decision)
         elif not isinstance(action, SearchAction):
@@ -196,14 +204,20 @@ class DecisionValidator:
         state: EpisodeState,
         scope_id: str,
         decision: ResolvedDecision,
+        *,
+        allow_incomplete_finish: bool = False,
     ) -> tuple[ValidationCode, str] | None:
-        if not state.visible_chunk_ids and not state.eligible_sentence_ids:
+        if not allow_incomplete_finish and not state.visible_chunk_ids and not state.eligible_sentence_ids:
             return (
                 "finish_without_source",
                 "FINISH is not allowed because no source text is currently visible; "
                 "choose one available search operation",
             )
-        if decision.assessment is not None and decision.assessment.missing_information:
+        if (
+            not allow_incomplete_finish
+            and decision.assessment is not None
+            and decision.assessment.missing_information
+        ):
             return (
                 "finish_with_unresolved_gap",
                 "FINISH is not allowed while assessment.missing_information is non-empty; "

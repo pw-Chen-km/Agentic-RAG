@@ -279,8 +279,10 @@ def _function(name: str, description: str, parameters: dict[str, Any]) -> dict[s
                         "maxItems": 3,
                         "description": (
                             "Specific information still needed to answer the question. "
-                            "Use an empty list if no information is missing. Keep unresolved gaps "
-                            "when finishing with insufficient evidence or an exhausted budget."
+                            "Use an empty list only when no information is missing. "
+                            "During a normal retrieval turn, a non-empty list means choose a retrieval "
+                            "operation rather than FINISH. The separate budget-finalize turn may preserve "
+                            "unresolved gaps because retrieval is already closed."
                         ),
                     },
                 },

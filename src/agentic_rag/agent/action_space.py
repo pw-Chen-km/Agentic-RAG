@@ -57,13 +57,20 @@ class AvailableActionSpaceBuilder:
             for ref, item in references.typed_refs.items()
             if item.can_use_as_evidence
         )
-        finish_available = self.interface_contract is not None or bool(evidence_refs)
         if mode is ActionSpaceMode.BUDGET_FINALIZE:
             return AvailableActionSpace(
                 mode=mode,
                 finish_evidence_refs=tuple(evidence_refs),
-                finish_available=finish_available,
+                # Retrieval is closed at this point. The one finalize call
+                # must still be able to return an answer when no evidence was
+                # found, so an empty evidence list is intentionally legal.
+                finish_available=True,
             )
+
+        # During normal retrieval, FINISH is not an option before any source
+        # is visible. This prevents an abstention from consuming a policy turn
+        # when the agent has not attempted retrieval yet.
+        finish_available = bool(evidence_refs)
 
         retrieval_open = (
             state.remaining_step_budget > 0

@@ -11,7 +11,7 @@ from agentic_rag.agent.interface import InterfaceContract
 ACTION_PROTOCOL = """\
 You answer the question using information made available by the current
 retrieval interface. At each step, choose one action that is listed as
-available, or finish. The interface does not prescribe an action order and no
+available. FINISH is available only when it is listed. The interface does not prescribe an action order and no
 retrieval action is preferred by default.
 
 Action interface: the current turn's native tool definitions are authoritative.

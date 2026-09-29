@@ -135,6 +135,7 @@ def render_context(
     state,
     *,
     require_assessment,
+    budget_finalize=False,
     entity_filter_audit=None,
 ):
     previously_seen = {span_key(s) for record in trajectory for s in record.visible_source_spans}
@@ -145,7 +146,13 @@ def render_context(
     attempts = [action_summary(record) for record in trajectory]
     sections = []
     previous = None
-    if require_assessment:
+    if budget_finalize:
+        sections.append(
+            "Retrieval budget is exhausted. Make exactly one native tool call to FINISH. "
+            "Retrieval operations are closed. If evidence is incomplete, keep the specific "
+            "missing_information in the assessment rather than claiming it was established."
+        )
+    elif require_assessment:
         for record in reversed(trajectory):
             decision = record.decision or record.resolved_decision
             if decision and decision.assessment is not None:
@@ -179,12 +186,14 @@ def render_context(
         sections.append('Make exactly one native tool call. Include "assessment" with only '
                         '"missing_information", a list of at most three non-empty strings, in the tool arguments. '
                         "Describe the specific fact or connection still needed from the question and source text now shown. "
-                        "Choose exactly one operation from OPERATIONS AVAILABLE NOW, including finish. "
+                        "Choose exactly one operation from OPERATIONS AVAILABLE NOW. FINISH is available only "
+                        "when it is listed there; during normal retrieval it requires visible source and no "
+                        "specific missing information. "
                         "You may revise your previous assessment. "
                         "Do not finish when no source text is visible or when missing_information is non-empty. "
                         "This does not prefer any particular operation.")
-    else:
-        sections.append("Make exactly one native tool call from OPERATIONS AVAILABLE NOW, including finish.")
+    elif not budget_finalize:
+        sections.append("Make exactly one native tool call from OPERATIONS AVAILABLE NOW. FINISH is available only when listed.")
     audit = {"version": CONTEXT_RENDERER_VERSION, "assessment_schema_version": ASSESSMENT_SCHEMA_VERSION,
              "assessment_requested": require_assessment,
              "previous_assessment": previous,

@@ -13,13 +13,13 @@ from agentic_rag.substrate.storage import Substrate
 
 
 EXPECTED_INITIAL = {
-    "C0": {"find_passages", "finish"},
-    "C1": {"find_passages", "find_sentences", "finish"},
-    "C2": {"find_passages", "finish"},
-    "C3": {"find_passages", "finish"},
-    "C5": {"find_passages", "find_sentences", "finish"},
-    "C4": {"find_passages", "find_sentences", "finish"},
-    "A1": {"find_passages", "find_sentences", "finish"},
+    "C0": {"find_passages"},
+    "C1": {"find_passages", "find_sentences"},
+    "C2": {"find_passages"},
+    "C3": {"find_passages"},
+    "C5": {"find_passages", "find_sentences"},
+    "C4": {"find_passages", "find_sentences"},
+    "A1": {"find_passages", "find_sentences"},
 }
 
 

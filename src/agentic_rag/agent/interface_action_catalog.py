@@ -123,7 +123,11 @@ ACTION_CARDS = {
             "do not use this operation when no source is visible or when the current assessment\n"
             "still lists a specific missing fact or connection."
         ),
-        schema_description="End the episode with an answer and visible source citations.",
+        schema_description=(
+            "End the episode with an answer and visible source citations. In a normal retrieval turn, "
+            "use this only when source text is visible and no specific information gap remains. "
+            "The separate budget-finalize turn may require an answer even when evidence is incomplete."
+        ),
     ),
 }
 
@@ -196,7 +200,8 @@ def render_action_guide(
             "Make exactly one native tool call using an operation listed above.\n"
             "Include assessment.missing_information in its arguments: at most three non-empty strings "
             "describing specific facts or connections still needed to answer the question.\n"
-            "Use an empty list if no information is missing; retain unresolved gaps when finishing.\n"
+            "Use an empty list only when no information is missing. During normal retrieval, "
+            "a non-empty list means do not finish; choose an available retrieval operation.\n"
             "Supply the operation's other arguments alongside assessment, not inside it."
         )
     else:
