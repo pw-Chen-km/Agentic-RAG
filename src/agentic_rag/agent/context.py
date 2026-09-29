@@ -388,6 +388,7 @@ class PolicyContextBuilder:
         content, audit, attempted = render_context(
             memory, spans, entity_cards, trajectory, state,
             require_assessment=self.require_evidence_assessment,
+            budget_finalize=space.mode is ActionSpaceMode.BUDGET_FINALIZE,
             entity_filter_audit=entity_filter_audit,
         )
         guide = render_action_guide(
