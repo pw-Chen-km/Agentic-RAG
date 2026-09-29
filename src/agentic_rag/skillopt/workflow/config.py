@@ -37,7 +37,7 @@ class WorkflowConfig:
     max_optimizer_input_tokens: int = 16_000
     max_edits_per_reflection: int = 2
     max_edits_per_batch: int = 2
-    max_edit_tokens: int = 250
+    max_edit_tokens: int = 300
     max_trainable_skill_tokens: int = 1_500
 
     def __post_init__(self) -> None:
@@ -79,6 +79,6 @@ class WorkflowConfig:
             max_optimizer_input_tokens=int(value.get("max_optimizer_input_tokens", 16_000)),
             max_edits_per_reflection=int(value.get("max_edits_per_reflection", 2)),
             max_edits_per_batch=int(value.get("max_edits_per_batch", 2)),
-            max_edit_tokens=int(value.get("max_edit_tokens", 250)),
+            max_edit_tokens=int(value.get("max_edit_tokens", 300)),
             max_trainable_skill_tokens=int(value.get("max_trainable_skill_tokens", 1_500)),
         )

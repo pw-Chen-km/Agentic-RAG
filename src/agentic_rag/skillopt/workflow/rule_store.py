@@ -301,7 +301,7 @@ class RuleStore:
         *,
         stage: str,
         max_edits: int = 2,
-        max_delta_tokens: int = 250,
+        max_delta_tokens: int = 300,
         max_trainable_tokens: int = 1500,
         tokenizer: Callable[[str], int] | None = None,
     ) -> tuple["RuleStore", dict[str, Any]]:

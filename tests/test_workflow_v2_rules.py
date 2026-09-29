@@ -108,8 +108,8 @@ def test_config_exposes_v2_limits():
     config = WorkflowConfig.from_mapping({"max_optimizer_input_tokens": 16000,
                                           "max_edits_per_reflection": 2,
                                           "max_edits_per_batch": 2,
-                                          "max_edit_tokens": 250,
+                                          "max_edit_tokens": 300,
                                           "max_trainable_skill_tokens": 1500})
     assert (config.max_optimizer_input_tokens, config.max_edits_per_reflection,
             config.max_edits_per_batch, config.max_edit_tokens,
-            config.max_trainable_skill_tokens) == (16000, 2, 2, 250, 1500)
+            config.max_trainable_skill_tokens) == (16000, 2, 2, 300, 1500)
