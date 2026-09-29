@@ -122,6 +122,41 @@ def test_ollama_receives_the_exact_state_conditioned_schema() -> None:
     assert all(item not in serialized for item in ("EXPAND", "READ", "FINISH"))
 
 
+def test_ollama_structured_mode_never_sends_tools_even_if_supplied() -> None:
+    """Agent structured output must use ``format`` as its only output contract.
+
+    The provider accepts the optional native-tool arguments for backwards
+    compatibility, but an Agent explicitly configured for structured output
+    must not send them to Ollama.  This keeps the Agent interface separate
+    from SkillOpt's native-tool optimizer interface.
+    """
+    client = FakeOllamaClient()
+    policy = OllamaChatPolicy(
+        model="qwen3.8:27b-q4_K_M",
+        client=client,
+        output_mode="structured",
+        max_retries=0,
+    )
+    action_space = AvailableActionSpaceBuilder(()).build(
+        EpisodeState.initial(), ContextReferenceMap()
+    )
+    decision_format = ActionSchemaBuilder().build(action_space)
+    tools, tool_models = native_action_tools(action_space)
+
+    decision = policy.decide(
+        [Message(role="user", content="question")],
+        decision_format=decision_format,
+        tools=tools,
+        tool_models=tool_models,
+    )
+
+    assert decision.action.type == "SEARCH"
+    assert "format" in client.kwargs
+    assert client.kwargs["format"] == decision_format.model_json_schema()
+    assert "tools" not in client.kwargs
+
+
+
 def test_ollama_native_tools_omit_structured_format() -> None:
     client = FakeNativeOllamaClient()
     policy = OllamaChatPolicy(

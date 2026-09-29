@@ -47,6 +47,20 @@ def main(argv=None):
     if rules is not None:
         contract["skill_rules_hash"] = rules.json_hash()
         contract["compiled_skill_hash"] = hashlib.sha256(seed.encode()).hexdigest()
+        if config.get("optimizer", {}).get("output_mode") == "native_tools":
+            from .optimizer_native import build_optimizer_tools
+
+            contract["optimizer_tool_schema_hash"] = {
+                stage: hashlib.sha256(
+                    json.dumps(
+                        build_optimizer_tools(stage, rules.optimizer_view(stage)),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                for stage in ("retrieval", "meta", "answer")
+            }
     backend = None
     if args.demo:
         from .demo import DemoBackend
@@ -61,6 +75,20 @@ def main(argv=None):
         substrate = resolve(config["substrate"])
         Substrate.open(substrate)
         contract["agent"] = agent.effective_dict()
+        contract["output_modes"] = {
+            "agent": agent.policy.output_mode
+            if hasattr(agent.policy, "output_mode")
+            else "structured",
+            "optimizer": optimizer.output_mode,
+            "judge": judge.output_mode,
+        }
+        expected_modes = config.get("expected_output_modes")
+        if expected_modes is not None:
+            if expected_modes != contract["output_modes"]:
+                raise ValueError(
+                    "configured output modes do not match expected_output_modes: "
+                    f"expected={expected_modes!r}, actual={contract['output_modes']!r}"
+                )
         # Hash every existing index/corpus artifact; never rebuild embeddings.
         def file_hash(path):
             h = hashlib.sha256()

@@ -50,6 +50,15 @@ def test_config_has_one_architecture_and_rejects_removed_fields(tmp_path: Path) 
         AgentConfig.from_yaml(invalid)
 
 
+def test_structured_agent_config_is_explicit() -> None:
+    """The production Agent config records structured output explicitly."""
+    config_path = Path(__file__).parents[1] / "configs" / "hotpotqa_workflow_jj27b_structured.yaml"
+    config = AgentConfig.from_yaml(config_path)
+    assert config.policy.provider == "ollama"
+    assert config.policy.output_mode == "structured"
+    assert config.use_state_conditioned_schema is True
+
+
 def test_refs_normalize_case_but_never_fuzzy_match() -> None:
     references = ContextReferenceMap(
         typed_refs={
