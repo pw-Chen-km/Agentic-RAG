@@ -118,3 +118,24 @@ def test_assessment_off_guide_matches_schema(built_substrate: Path) -> None:
     assert "supported_facts" not in prompt
     assert "missing_information" not in prompt
     assert set(built.decision_schema["required"]) == {"action"}
+
+
+def test_retrieval_and_finish_gates_are_explicit_and_non_conflicting(
+    built_substrate: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    built = PolicyContextBuilder(
+        substrate,
+        interface_contract=get_interface_contract("C4"),
+        require_evidence_assessment=True,
+    ).build(
+        "Question?",
+        SkillDocument.from_text("Answer."),
+        EpisodeState.initial(),
+        [],
+        scope_id="q1",
+    )
+    prompt = built.messages[0].content or ""
+    assert "a non-empty list means choose retrieval; an empty list with visible source means choose FINISH" in prompt
+    assert "same tool and arguments again" in prompt
+    assert "query choices may still duplicate history" not in prompt

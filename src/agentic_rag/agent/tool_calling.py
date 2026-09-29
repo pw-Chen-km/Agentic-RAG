@@ -292,7 +292,10 @@ def _function(name: str, description: str, parameters: dict[str, Any]) -> dict[s
                             "The complete current list of specific information still needed to answer "
                             "the question. Preserve exact entity names, relationships, dates, and other "
                             "qualifiers. Use an empty list only when no information is missing. During "
-                            "normal retrieval, a non-empty list means choose retrieval rather than FINISH."
+                            "normal retrieval, a non-empty list means choose retrieval rather than FINISH; "
+                            "an empty list with visible source means choose FINISH. If the previous operation "
+                            "was rejected, repeated, empty, or added no new source text, do not submit the "
+                            "same tool and arguments again."
                         ),
                     },
                 },

@@ -16,20 +16,30 @@ Do not infer hidden source text or hidden candidates.
 
 POLICY
 
-At each step, make exactly one call to a tool listed in the current tool registry, or call
-`finish`. The tool call itself supplies the tool name and its arguments; do not write a
-separate JSON action or explain the call in ordinary text.
-There is no required order and no operation is preferred by default.
-Repeating a completed operation with the same tool and arguments will not produce new
-results. You may change the query, choose another listed operation, or finish; none has
-priority. The same query used with two different search operations is allowed.
+At each step, make exactly one call to a tool listed in the current tool registry. The
+tool call itself supplies the tool name and its arguments; do not write a separate JSON
+action or explain the call in ordinary text.
+
+During normal retrieval, apply this decision rule:
+- If no source text is visible, or `missing_information` is non-empty, choose one
+  currently available retrieval operation. Do not call `finish`.
+- If source text is visible and `missing_information` is empty, call `finish` with the
+  answer and the visible evidence references. Do not retrieve more just because a tool
+  is available.
+- If the latest operation was rejected, repeated, empty, or added no new source text,
+  reassess the same concrete information need. Never resubmit the exact same tool and
+  arguments. If a gap remains, choose another legal retrieval operation; if no gap
+  remains and source text is visible, call `finish`.
+
+There is no required order among legal retrieval operations, and no retrieval operation
+is preferred by default. The same query used with two different search operations is
+allowed. A budget-finalize turn is different: retrieval is closed and the only legal
+call is `finish`, even if the assessment still lists unresolved information.
 Use only references shown in the current observation. Do not invent operations,
 references, entity names, or source text.
-When finishing, cite visible sources that support the answer. If no source is shown,
-do not finish: choose one of the currently available search operations. If the
-assessment still lists a specific missing fact or connection, do not finish yet;
-choose one of the currently available operations that could address it. This rule
-does not prefer global search, sentence search, or entity following.
+When finishing in a normal retrieval turn, cite visible sources that support the answer.
+The tool registry and the current observation determine which operations are legal; the
+rules above do not prefer global search, sentence search, or entity following.
 
 INFORMATION-GAP ASSESSMENT
 

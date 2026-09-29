@@ -10,9 +10,8 @@ from agentic_rag.agent.interface import InterfaceContract
 
 ACTION_PROTOCOL = """\
 You answer the question using information made available by the current
-retrieval interface. At each step, choose one action that is listed as
-available. FINISH is available only when it is listed. The interface does not prescribe an action order and no
-retrieval action is preferred by default.
+retrieval interface. At each step, make exactly one native tool call from
+the current tool registry. The registry is the complete list of legal tools.
 
 Action interface: the current turn's native tool definitions are authoritative.
 They state the arguments accepted by each available action. A search returns the complete
@@ -30,9 +29,16 @@ When assessment is requested, return both `resolved_gaps` and
 replace the current missing-information list on each turn. Preserve exact entity
 names and qualifiers so that a missing item can guide a query or an entity hop.
 The assessment is a working judgment, not source evidence.
-Do not finish when no source text is visible or when the current assessment still
-lists a specific missing fact or connection. Choose an available operation instead;
-this rule does not prefer any particular retrieval scope.
+
+During a normal retrieval turn, choose retrieval when no source text is visible or
+when `missing_information` is non-empty. When source text is visible and
+`missing_information` is empty, choose `finish`; do not retrieve more merely because
+another tool is available. If the latest operation was rejected, repeated, empty, or
+added no new source text, do not submit the same tool with the same arguments again.
+Reassess the same concrete gap and choose another legal retrieval operation if it
+remains, or choose `finish` if the gap is empty and source text is visible. A
+budget-finalize turn is an exception: retrieval is closed and only `finish` is legal,
+even when gaps remain. These rules do not prefer any particular retrieval scope.
 """
 
 
@@ -59,8 +65,9 @@ def render_available_action_options(
     """List currently reference-valid action templates without choosing one."""
 
     sections = [
-        "Currently available action options (structurally/reference-valid; "
-        "query choices may still duplicate history):",
+        "Currently available action options (the complete legal list for this state). "
+        "The order has no meaning. An exact tool-and-argument signature that was "
+        "already executed or rejected must not be submitted again:",
     ]
     if action_space.search_options:
         sections.extend(

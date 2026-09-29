@@ -120,13 +120,16 @@ ACTION_CARDS = {
             "How it works: ends the episode without retrieving new text.\n"
             "Returns: no new source text.\n"
             "Limitation: cite only visible passage or sentence labels that support the answer;\n"
-            "do not use this operation when no source is visible or when the current assessment\n"
-            "still lists a specific missing fact or connection."
+            "in a normal retrieval turn, use this only when source text is visible and the\n"
+            "current assessment has no missing information. If a missing item remains, choose\n"
+            "a retrieval operation instead. A budget-finalize turn may require this operation\n"
+            "even when evidence is incomplete."
         ),
         schema_description=(
             "End the episode with an answer and visible source citations. In a normal retrieval turn, "
-            "use this only when source text is visible and no specific information gap remains. "
-            "The separate budget-finalize turn may require an answer even when evidence is incomplete."
+            "use this when source text is visible and no specific information gap remains. "
+            "If a gap remains, choose retrieval. The separate budget-finalize turn may require "
+            "an answer even when evidence is incomplete."
         ),
     ),
 }
@@ -204,7 +207,10 @@ def render_action_guide(
             "Replace missing_information each turn with the complete current list of specific facts or "
             "connections still needed to answer the question.\n"
             "Use an empty missing_information list only when no information is missing. During normal retrieval, "
-            "a non-empty list means do not finish; choose an available retrieval operation.\n"
+            "a non-empty list means choose retrieval; an empty list with visible source means choose FINISH.\n"
+            "If the previous operation was rejected, repeated, empty, or added no new source text, do not submit "
+            "the same tool and arguments again. Reassess the same gap and choose another legal retrieval operation, "
+            "or FINISH when the gap is empty and source text is visible.\n"
             "Supply the operation's other arguments alongside assessment, not inside it."
         )
     else:

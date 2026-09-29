@@ -211,11 +211,24 @@ class EpisodeStateManager:
         ``resolved_gaps`` is a model judgment and is therefore used only as a
         boundary signal, not as evidence.
         """
+        if not event.assessment:
+            return updated, False, None
+        # A duplicate retrieval is not executed, but its assessment is still
+        # a valid model judgment.  Preserve the normal answer-stage transition
+        # when that judgment closes the remaining gap and source evidence is
+        # already visible.  This prevents a rejected action from trapping the
+        # episode in a retrieval loop.
+        if (
+            event.validation_status is not ValidationStatus.VALID
+            and event.observation.status is ObservationStatus.DUPLICATE_ACTION
+        ):
+            if not event.assessment.missing_information and updated.all_source_keys:
+                updated.answer_stage_pending = True
+                return updated, True, "answer_stage_ready_after_duplicate"
+            return updated, False, None
         if event.validation_status is not ValidationStatus.VALID:
             return updated, False, None
         if event.observation.status is not ObservationStatus.OK:
-            return updated, False, None
-        if not event.assessment:
             return updated, False, None
         new_source_keys = set(updated.all_source_keys) - set(before.all_source_keys)
         if not new_source_keys:

@@ -4,9 +4,10 @@ from pathlib import Path
 import pytest
 
 from agentic_rag.agent.context import PolicyContextBuilder
+from agentic_rag.agent.evidence import EvidenceResolver
 from agentic_rag.agent.action_schema import policy_decision_from_constrained
 from agentic_rag.agent.interface import get_interface_contract
-from agentic_rag.agent.models import ActionSpaceMode, EpisodeState
+from agentic_rag.agent.models import ActionSpaceMode, ChunkRef, EpisodeState, SentenceRef
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.agent.tool_calling import (
     build_tool_definitions,
@@ -309,6 +310,29 @@ def test_finish_with_unresolved_assessment_is_rejected_after_source_is_visible(
     )
     assert validation.ok is False
     assert validation.code == "finish_with_unresolved_gap"
+
+
+def test_evidence_refs_remove_sentence_content_covered_by_cited_passage(
+    built_substrate: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    chunk_id = sorted(substrate.chunk_ids_by_scope["q1"])[0]
+    sentence_id = substrate.sentences_by_chunk[chunk_id][0].sentence_id
+    state = EpisodeState.initial()
+    state.visible_chunk_ids.add(chunk_id)
+    state.visible_passage_ids.add(chunk_id)
+    state.visible_sentence_ids.add(sentence_id)
+    state.eligible_sentence_ids.add(sentence_id)
+
+    resolver = EvidenceResolver(substrate)
+    refs = resolver.canonicalize_refs(
+        [ChunkRef(id=chunk_id), SentenceRef(id=sentence_id)], state, "q1"
+    )
+    assert refs == [ChunkRef(id=chunk_id)]
+    resolved = resolver.resolve(
+        [ChunkRef(id=chunk_id), SentenceRef(id=sentence_id)], state, "q1"
+    )
+    assert [item.ref for item in resolved] == [ChunkRef(id=chunk_id)]
 
 
 def test_native_parser_rejects_unknown_or_hidden_references(

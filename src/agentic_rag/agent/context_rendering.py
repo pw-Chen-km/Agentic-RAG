@@ -295,12 +295,13 @@ def render_context(
                         "Keep resolved gaps cumulative and concrete; replace missing_information with the complete "
                         "current list. Preserve exact entity names, relationships, and qualifiers. Describe the "
                         "specific fact or connection still needed from the question and source text now shown. "
-                        "Choose exactly one operation from OPERATIONS AVAILABLE NOW. FINISH is available only "
-                        "when it is listed there; during normal retrieval it requires visible source and no "
-                        "specific missing information. "
-                        "You may revise your previous assessment. "
-                        "Do not finish when no source text is visible or when missing_information is non-empty. "
-                        "This does not prefer any particular operation.")
+                        "Choose exactly one operation from OPERATIONS AVAILABLE NOW. During normal retrieval, "
+                        "if no source is visible or missing_information is non-empty, choose retrieval; if source "
+                        "is visible and missing_information is empty, choose FINISH. If the latest action was "
+                        "rejected, repeated, empty, or added no new source text, do not submit the same tool and "
+                        "arguments again. Reassess the same gap and choose another legal retrieval operation, or "
+                        "FINISH when the gap is empty and source text is visible. These rules do not prefer any "
+                        "particular retrieval operation.")
     elif not budget_finalize:
         sections.append("Make exactly one native tool call from OPERATIONS AVAILABLE NOW. FINISH is available only when listed.")
     audit = {"version": CONTEXT_RENDERER_VERSION, "assessment_schema_version": ASSESSMENT_SCHEMA_VERSION,

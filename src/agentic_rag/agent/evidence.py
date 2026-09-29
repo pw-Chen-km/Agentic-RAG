@@ -26,13 +26,7 @@ class EvidenceResolver:
         scope_id: str,
     ) -> list[ResolvedEvidence]:
         self.substrate.require_scope(scope_id)
-        unique: list[EvidenceRef] = []
-        seen: set[tuple[str, str]] = set()
-        for ref in refs:
-            key = (ref.unit, ref.id)
-            if key not in seen:
-                seen.add(key)
-                unique.append(ref)
+        unique = self.canonicalize_refs(refs, state, scope_id)
 
         selected_chunk_ids = {
             ref.id for ref in unique if isinstance(ref, ChunkRef)
@@ -90,3 +84,38 @@ class EvidenceResolver:
                 )
             )
         return resolved
+
+    def canonicalize_refs(
+        self,
+        refs: Iterable[EvidenceRef],
+        state: EpisodeState,
+        scope_id: str,
+    ) -> list[EvidenceRef]:
+        """Remove exact duplicates and sentence refs covered by cited passages.
+
+        A passage citation already contains every sentence in that passage. Keeping
+        both a passage and one of its sentence children adds no evidence, so the
+        sentence citation is removed deterministically. The raw model request is
+        still preserved in the trajectory artifact.
+        """
+
+        self.substrate.require_scope(scope_id)
+        unique: list[EvidenceRef] = []
+        seen: set[tuple[str, str]] = set()
+        for ref in refs:
+            key = (ref.unit, ref.id)
+            if key not in seen:
+                seen.add(key)
+                unique.append(ref)
+
+        selected_chunk_ids = {
+            ref.id for ref in unique if isinstance(ref, ChunkRef)
+        }
+        canonical: list[EvidenceRef] = []
+        for ref in unique:
+            if isinstance(ref, SentenceRef):
+                sentence = self.substrate.sentence_by_id.get(ref.id)
+                if sentence is not None and sentence.chunk_id in selected_chunk_ids:
+                    continue
+            canonical.append(ref)
+        return canonical

@@ -251,7 +251,12 @@ class AgentController:
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
                         decision_schema=built.decision_schema,
-                        commit_assessment=False,
+                        # A duplicate action is a state-level rejection, but
+                        # the assessment was still a structurally valid part
+                        # of the model response. Keep it so an empty
+                        # information-gap assessment can move the episode to
+                        # the answer stage on the next turn.
+                        commit_assessment=(validation.code == "duplicate_action"),
                         consume_step=True,
                         invalid_attempt=True,
                         messages=tuple(built.messages),
@@ -528,24 +533,45 @@ class AgentController:
         consume_step: bool = True,
         messages: Sequence[Message] | None = None,
     ) -> EpisodeResult:
-        evidence_refs = list(resolved.action.evidence_refs)
+        requested_evidence_refs = list(resolved.action.evidence_refs)
+        evidence_refs = self.evidence_resolver.canonicalize_refs(
+            requested_evidence_refs, state, manager.scope_id
+        )
+        content_overlap_removed = [
+            ref for ref in requested_evidence_refs if ref not in evidence_refs
+        ]
+        canonical_action = resolved.action.model_copy(
+            update={"evidence_refs": evidence_refs}
+        )
+        canonical_resolved = resolved.model_copy(
+            update={"action": canonical_action}
+        )
         evidence = self.evidence_resolver.resolve(evidence_refs, state, manager.scope_id)
         observation = Observation(
             action_id=manager.next_action_id,
             status=ObservationStatus.OK,
-            action=resolved.action,
+            action=canonical_action,
             results=[item.model_dump(mode="json") for item in evidence],
             metadata={
                 "finish": True,
                 "budget_finalize": not consume_step,
                 "selected_tool": "finish",
-                "parsed_arguments": resolved.action.model_dump(mode="json"),
+                "parsed_arguments": canonical_action.model_dump(mode="json"),
+                "requested_evidence_refs": [
+                    ref.model_dump(mode="json") for ref in requested_evidence_refs
+                ],
+                "canonical_evidence_refs": [
+                    ref.model_dump(mode="json") for ref in evidence_refs
+                ],
+                "content_overlap_removed_refs": [
+                    ref.model_dump(mode="json") for ref in content_overlap_removed
+                ],
             },
         )
         manager.record_attempt(
             AttemptEvent(
                 decision=decision,
-                resolved_decision=resolved,
+                resolved_decision=canonical_resolved,
                 validation_status=ValidationStatus.VALID,
                 validation_error=None,
                 observation=observation,

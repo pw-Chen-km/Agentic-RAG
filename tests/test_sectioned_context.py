@@ -103,6 +103,68 @@ def test_duplicate_loop_is_bounded_and_finalize_retains_gaps(built_substrate, fa
         assert result.trajectory[-1].decision.assessment.missing_information == ["Unresolved gap"]
 
 
+def test_duplicate_with_closed_gap_commits_assessment_and_opens_answer_stage(
+    built_substrate, fake_embedder, tmp_path
+):
+    """A rejected duplicate must not discard a valid empty-gap assessment."""
+
+    class Policy:
+        count = 0
+        last_usage = Usage(policy_calls=1)
+        last_usage_metadata = {}
+
+        def decide(self, messages, *, tools=None, **kwargs):
+            self.count += 1
+            assert tools
+            names = [item["function"]["name"] for item in tools]
+            if self.count == 1:
+                assert "find_passages" in names
+                return PolicyDecision(
+                    assessment=Assessment(missing_information=["the answer"]),
+                    action=SearchAction(
+                        query="Marie Curie",
+                        method=SearchMethod.DENSE,
+                        target=SearchTarget.CHUNK,
+                    ),
+                )
+            if self.count == 2:
+                # The action is intentionally duplicated, but the model has
+                # validly determined that no information gap remains.
+                assert "find_passages" in names
+                return PolicyDecision(
+                    assessment=Assessment(missing_information=[]),
+                    action=SearchAction(
+                        query="Marie Curie",
+                        method=SearchMethod.DENSE,
+                        target=SearchTarget.CHUNK,
+                    ),
+                )
+            assert names == ["finish"]
+            return PolicyDecision(
+                action=FinishAction(answer="Marie Curie", evidence_refs=[])
+            )
+
+    harness = AgentHarness(
+        substrate=Substrate.open(built_substrate),
+        config=AgentConfig(interface="C0", require_evidence_assessment=True),
+        skill=SkillDocument.from_text("Answer using sources."),
+        policy=Policy(),
+        output_root=tmp_path / "duplicate-closed-gap",
+        embedding_backend=fake_embedder,
+    )
+    result = harness.run("Where was Marie Curie born?", "q1")
+
+    assert result.termination_reason.value == "finish"
+    assert len(result.trajectory) == 3
+    duplicate = result.trajectory[1]
+    assert duplicate.observation.error_code == "duplicate_action"
+    assert duplicate.assessment_status == "provided"
+    assert duplicate.state_after.last_assessment is not None
+    assert duplicate.state_after.last_assessment.missing_information == []
+    assert duplicate.state_after.answer_stage_pending is True
+    assert result.trajectory[2].available_action_space.mode.value == "ANSWER"
+
+
 def test_same_query_with_different_search_tool_is_allowed(built_substrate, fake_embedder, tmp_path):
     actions = [SearchAction(query="Marie Curie", method=SearchMethod.DENSE,
                             target=SearchTarget.CHUNK),
