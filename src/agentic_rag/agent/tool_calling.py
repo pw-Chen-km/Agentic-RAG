@@ -266,27 +266,37 @@ def _function(name: str, description: str, parameters: dict[str, Any]) -> dict[s
             "assessment": {
                 "type": "object",
                 "description": (
-                    "Before selecting the tool, identify the specific fact or connection "
-                    "still needed from the shown source text. Use exactly "
-                    "missing_information as a key with a list of strings as its value. "
-                    "This object is only the assessment: do not put query, entity_ref, answer, "
-                    "or any other tool argument inside it; those arguments belong at the top level."
+                    "Before selecting the tool, compare the question with the source text "
+                    "shown so far. Record concrete information needs that this episode has "
+                    "resolved in resolved_gaps, and the concrete information still needed in "
+                    "missing_information. Preserve exact entity names, relationships, and "
+                    "qualifiers. This object is only the assessment: do not put query, "
+                    "entity_ref, answer, or any other tool argument inside it; those arguments "
+                    "belong at the top level."
                 ),
                 "properties": {
+                    "resolved_gaps": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "description": (
+                            "Specific information needs resolved during this episode so far. "
+                            "Keep concrete names and qualifiers. Start from the earlier missing "
+                            "item's wording and append the established value after an em dash; "
+                            "use an empty list when none has been resolved."
+                        ),
+                    },
                     "missing_information": {
                         "type": "array",
                         "items": {"type": "string", "minLength": 1},
-                        "maxItems": 3,
                         "description": (
-                            "Specific information still needed to answer the question. "
-                            "Use an empty list only when no information is missing. "
-                            "During a normal retrieval turn, a non-empty list means choose a retrieval "
-                            "operation rather than FINISH. The separate budget-finalize turn may preserve "
-                            "unresolved gaps because retrieval is already closed."
+                            "The complete current list of specific information still needed to answer "
+                            "the question. Preserve exact entity names, relationships, dates, and other "
+                            "qualifiers. Use an empty list only when no information is missing. During "
+                            "normal retrieval, a non-empty list means choose retrieval rather than FINISH."
                         ),
                     },
                 },
-                "required": ["missing_information"],
+                "required": ["resolved_gaps", "missing_information"],
                 "additionalProperties": False,
             },
             **parameters["properties"],

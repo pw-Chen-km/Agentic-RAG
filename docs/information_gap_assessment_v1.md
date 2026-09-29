@@ -1,5 +1,8 @@
 # Information-Gap Assessment v1
 
+> Historical contract. New runs use `information-gap-v2-resolved-gaps` as
+> described in [information_gap_assessment_v2.md](information_gap_assessment_v2.md).
+
 This document defines the assessment contract used by the information-gap retrieval
 workflow. It is a model-generated aid for choosing the next operation. It is not source
 text, an evidence citation, or a replacement for the visible source record.
@@ -47,10 +50,10 @@ search, entity following, sentence result, passage result, or any other fixed se
 
 The assessment schema rejects the historical `supported_facts` field and any unknown
 assessment fields. `missing_information` must be an array of at most three strings. This
-contract is identified as `information-gap-v1` in run manifests and artifact metadata.
+contract is identified as `information-gap-v1` in historical run manifests and artifact metadata.
 The skill, decision schema, tool schema, renderer, and protocol hashes are part of the
 resume manifest. A run using an older assessment contract or skill cannot be resumed as
-an information-gap-v1 run.
+an historical information-gap-v1 run.
 
 ## Diagnostics
 

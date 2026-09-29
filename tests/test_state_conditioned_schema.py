@@ -23,7 +23,7 @@ from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.substrate.storage import Substrate
 
 
-ASSESSMENT = {"missing_information": ["answer"]}
+ASSESSMENT = {"resolved_gaps": [], "missing_information": ["answer"]}
 
 
 def _decision(action: dict) -> dict:

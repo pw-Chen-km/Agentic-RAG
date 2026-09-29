@@ -85,9 +85,16 @@ def policy_decision_from_constrained(value: BaseModel | dict[str, Any]) -> Polic
     name = raw_action.pop("name")
     assessment = None
     if "supported_facts" in payload:
-        raise ValueError("supported_facts is not part of information-gap-v1")
-    if "missing_information" in payload:
-        assessment = Assessment(missing_information=payload.get("missing_information", []))
+        raise ValueError("supported_facts is not part of information-gap-v2-resolved-gaps")
+    if "assessment" in payload:
+        assessment_payload = payload.get("assessment")
+        if not isinstance(assessment_payload, dict):
+            raise ValueError("assessment must be an object")
+        assessment = Assessment.model_validate(assessment_payload)
+    elif "missing_information" in payload or "resolved_gaps" in payload:
+        # Legacy constrained responses are intentionally rejected rather than
+        # silently mixing the old top-level contract with the new nested one.
+        raise ValueError("assessment must be an object containing resolved_gaps and missing_information")
     if name == "find_passages":
         action = SearchAction(
             query=raw_action["query"], method=SearchMethod.DENSE,
@@ -192,9 +199,12 @@ def _interface_decision_model(cache_key: str) -> type[BaseModel]:
     }
     if require_assessment:
         fields = {
-            "missing_information": (
-                list[Annotated[str, Field(min_length=1)]],
-                Field(max_length=3, description="Specific information still needed to answer. Use an empty list when nothing is missing."),
+            "assessment": (
+                _WireAssessment,
+                Field(description=(
+                    "Record the concrete information needs resolved so far and the complete "
+                    "current information still needed. Preserve exact names and qualifiers."
+                )),
             ),
             **fields,
         }

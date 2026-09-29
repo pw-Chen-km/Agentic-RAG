@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-VERSION = "information-gap-smoke-analysis-v1"
+VERSION = "information-gap-smoke-analysis-v2-resolved-gaps"
 KNOWN_DATASETS = {"hotpotqa", "novel", "medical"}
 GENERIC_GAP = re.compile(
     r"^(?:(?:i|we)\s+)?(?:(?:still\s+)?need(?:s|ed)?\s+)?(?:more\s+)?"
@@ -53,17 +53,29 @@ def _calls(provider: dict) -> list:
 
 def _assessment(value: Any, requested: bool) -> dict:
     result = {"status": "not_requested" if not requested else "missing_assessment",
-              "schema_valid": False, "gaps": []}
+              "schema_valid": False, "gaps": [], "resolved_gaps": []}
     if value is None:
         return result
-    if isinstance(value, dict) and isinstance(value.get("missing_information"), list):
-        result["gaps"] = [item for item in value["missing_information"] if isinstance(item, str)]
+    if isinstance(value, dict):
+        if isinstance(value.get("missing_information"), list):
+            result["gaps"] = [item for item in value["missing_information"] if isinstance(item, str)]
+        if isinstance(value.get("resolved_gaps"), list):
+            result["resolved_gaps"] = [item for item in value["resolved_gaps"] if isinstance(item, str)]
     if not requested:
         result["status"] = "unexpected_assessment"
         return result
-    valid = (isinstance(value, dict) and set(value) == {"missing_information"}
+    # Historical v1 artifacts used only missing_information.  Keep them
+    # analyzable as legacy diagnostics, while the runtime/native decoder
+    # rejects this shape for new episodes.
+    if (isinstance(value, dict) and set(value) == {"missing_information"}
+            and isinstance(value["missing_information"], list)
+            and all(isinstance(item, str) and bool(item.strip()) for item in value["missing_information"])):
+        result.update(status="legacy_v1", schema_valid=True)
+        return result
+    valid = (isinstance(value, dict) and set(value) == {"resolved_gaps", "missing_information"}
+             and isinstance(value["resolved_gaps"], list)
              and isinstance(value["missing_information"], list)
-             and len(value["missing_information"]) <= 3
+             and all(isinstance(item, str) and bool(item.strip()) for item in value["resolved_gaps"])
              and all(isinstance(item, str) and bool(item.strip()) for item in value["missing_information"]))
     result.update(status="valid" if valid else "invalid_assessment", schema_valid=valid)
     return result
@@ -78,10 +90,10 @@ def _raw_call(call: Any, requested: bool) -> dict:
             args = json.loads(args, object_pairs_hook=_strict_object)
         except (ValueError, TypeError):
             return {"name": name, "arguments": None, "assessment": {
-                "status": "invalid_json", "schema_valid": False, "gaps": []}}
+                "status": "invalid_json", "schema_valid": False, "gaps": [], "resolved_gaps": []}}
     if not isinstance(args, dict):
         return {"name": name, "arguments": None, "assessment": {
-            "status": "invalid_arguments", "schema_valid": False, "gaps": []}}
+            "status": "invalid_arguments", "schema_valid": False, "gaps": [], "resolved_gaps": []}}
     return {"name": name, "arguments": {key: value for key, value in args.items() if key != "assessment"},
             "assessment": _assessment(args.get("assessment"), requested)}
 
@@ -152,6 +164,7 @@ def analyze_episode(episode: dict, *, dataset: str, path: Path, requested: bool 
         diagnostics = chosen if chosen["schema_valid"] else next(
             (call["assessment"] for call in raw if call["assessment"]["gaps"]), chosen)
         gaps = diagnostics["gaps"]
+        resolved = diagnostics.get("resolved_gaps", [])
         code, status = observation.get("error_code"), observation.get("status")
         category = (provider.get("failure_category") or metadata.get("failure_category")
                     or (code if code in {"protocol_invalid", "state_invalid", "execution_error"} else None))
@@ -178,6 +191,7 @@ def analyze_episode(episode: dict, *, dataset: str, path: Path, requested: bool 
         turns.append({"turn": step.get("policy_attempt", index), "assessment_requested": required,
                       "assessment_recorded_status": step.get("assessment_status", "unavailable"),
                       "raw_assessments": raw, "assessment_schema_valid": chosen["schema_valid"],
+                      "resolved_gaps": resolved,
                       "missing_information": gaps, "gap_count": len(gaps),
                       "gap_character_count": sum(map(len, gaps)),
                       "blank_gap_count": sum(not gap.strip() for gap in gaps),

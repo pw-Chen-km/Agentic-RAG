@@ -83,10 +83,45 @@ class StateUpdater:
                     known.add(node_id)
                     updated.semantic_memory_node_ids.append(node_id)
 
+            # Keep source memory separate from the semantic visibility sets.
+            # Passage text is the canonical unit when a complete passage was
+            # returned; nested sentence rows must not create duplicate phase
+            # units. Sentence retrieval remains sentence-granular.
+            returned_passages = set(delta.get("visible_passage_ids", []))
+            returned_sentences = set(delta.get("eligible_sentence_ids", []))
+            source_keys = {f"passage:{chunk_id}" for chunk_id in returned_passages}
+            for sentence_id in returned_sentences:
+                sentence = self.substrate.sentence_by_id.get(sentence_id)
+                if sentence is not None and sentence.chunk_id in returned_passages:
+                    continue
+                source_keys.add(f"sentence:{sentence_id}")
+            if source_keys:
+                updated.current_phase_source_keys.update(source_keys)
+                updated.all_source_keys.update(source_keys)
+                observation.metadata["returned_source_keys"] = sorted(source_keys)
+                observation.metadata["source_keys"] = sorted(source_keys - state.all_source_keys)
+
         if action_signature is not None:
             updated.action_signatures.add(action_signature)
         if commit_assessment and assessment is not None:
-            updated.last_assessment = assessment.model_copy(deep=True)
+            # ``resolved_gaps`` is cumulative state.  The provider response is
+            # kept verbatim in the trajectory, but the state used for the next
+            # prompt unions earlier resolved items so one imperfect response
+            # cannot make a solved gap look unresolved again.  The current
+            # ``missing_information`` list is intentionally replaced.
+            prior_resolved = (
+                list(updated.last_assessment.resolved_gaps)
+                if updated.last_assessment is not None
+                else []
+            )
+            resolved = list(prior_resolved)
+            for item in assessment.resolved_gaps:
+                if item not in resolved:
+                    resolved.append(item)
+            updated.last_assessment = Assessment(
+                resolved_gaps=resolved,
+                missing_information=list(assessment.missing_information),
+            )
         updated.newest_observation = observation
         self._update_references_and_previews(updated, observation, scope_id=scope_id)
         return updated

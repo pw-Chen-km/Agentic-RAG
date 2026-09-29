@@ -192,7 +192,7 @@ def main() -> None:
         "conditions": list(CONDITIONS), "expected_episodes": len(DATASETS) * 10 * len(CONDITIONS),
         "question_selection": {"per_dataset": 10, "per_type": 5, "types": list(QUESTION_TYPES), "min_evidence_units": 2},
         "require_evidence_assessment": bool(args.require_assessment),
-        "assessment_schema_version": "information-gap-v1",
+        "assessment_schema_version": "information-gap-v2-resolved-gaps",
         "baseline_selection_manifest_sha256": (
             digest(args.selection_manifest) if args.selection_manifest else None
         ),

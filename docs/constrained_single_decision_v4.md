@@ -1,7 +1,7 @@
 # Constrained single-decision v4
 
 > Historical contract: this document describes the pre-information-gap schema used by
-> older runs. New runs use `information-gap-v1`; do not use this document to resume or
+> older runs. New runs use `information-gap-v2-resolved-gaps`; do not use this document to resume or
 > interpret them.
 
 ## 為什麼更換 protocol

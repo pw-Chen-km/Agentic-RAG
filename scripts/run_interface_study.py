@@ -120,6 +120,8 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         "native_tool_calling": True,
         "provider_protocol": NATIVE_PROTOCOL_VERSION,
         "require_evidence_assessment": config.require_evidence_assessment,
+        "context_mode": config.context_mode,
+        "phase_workflow": "gap-bounded-v1" if config.context_mode == "gap_bounded" else "full-evidence-baseline-v1",
         "target_prompt_digest": hashlib.sha256(
             (repo_root / "src/agentic_rag/agent/interface.py").read_bytes()
             + (repo_root / "src/agentic_rag/agent/interface_action_catalog.py").read_bytes()

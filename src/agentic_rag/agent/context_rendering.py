@@ -7,7 +7,64 @@ from agentic_rag.agent.contract_versions import ASSESSMENT_SCHEMA_VERSION, CONTE
 
 
 def span_key(span):
-    return (span.get("sentence_id"), span.get("start"), span.get("end"))
+    """Return the stable identity of a projected source span.
+
+    The text itself is deliberately excluded.  Identical text from two
+    different source units is still two pieces of evidence, while a sentence
+    projected through a passage keeps the same identity.
+    """
+    return (
+        span.get("scope_id"),
+        span.get("span_type", "sentence"),
+        span.get("sentence_id"),
+        span.get("chunk_id"),
+        span.get("start"),
+        span.get("end"),
+        bool(span.get("complete", False)),
+    )
+
+
+def source_block_key(block):
+    """Return the identity used to render one complete source block."""
+    source_key = block.get("source_key")
+    if source_key:
+        return str(source_key)
+    ref = block.get("ref")
+    if ref:
+        return str(ref)
+    sentence_ids = tuple(block.get("sentence_ids", ()))
+    return "sentences:" + ",".join(str(item) for item in sentence_ids)
+
+
+def _source_ref(span):
+    return span.get("source_ref") or span.get("ref") or span.get("sentence_id") or span.get("chunk_id")
+
+
+def _deduplicate_blocks(blocks):
+    """Keep the first stable source block and report suppressed duplicates."""
+    unique = []
+    seen = set()
+    duplicate_keys = []
+    for block in blocks:
+        key = source_block_key(block)
+        if key in seen:
+            duplicate_keys.append(key)
+            continue
+        seen.add(key)
+        unique.append(block)
+    return unique, duplicate_keys
+
+
+def _deduplicate_spans(spans):
+    unique = []
+    seen = set()
+    for span in spans:
+        key = span_key(span)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(span)
+    return unique
 
 
 def action_summary(record):
@@ -35,8 +92,9 @@ def action_summary(record):
     elif status == "invalid_action" or record.validation_status.value == "invalid":
         executed, outcome = False, "rejected"
         if (record.validation_error or "").startswith("arguments.assessment"):
-            explanation = ("The assessment must contain exactly missing_information. "
-                           "It must be a list of strings, not a string or an object. Empty lists are allowed.")
+            explanation = ("The assessment must contain resolved_gaps and missing_information as lists "
+                           "of non-empty strings. Preserve concrete entity names and qualifiers; "
+                           "empty lists are allowed.")
         elif code in {"source_not_visible", "reference_not_available", "reference_not_evidence"}:
             explanation = "The selected reference is not available for this operation."
         elif code in {"search_pair_not_enabled", "expansion_not_enabled"}:
@@ -136,17 +194,43 @@ def render_context(
     *,
     require_assessment,
     budget_finalize=False,
+    answer_stage=False,
+    context_mode="full",
     entity_filter_audit=None,
+    scope_id=None,
 ):
+    blocks, duplicate_input_keys = _deduplicate_blocks(blocks)
+    spans = _deduplicate_spans(spans)
     previously_seen = {span_key(s) for record in trajectory for s in record.visible_source_spans}
+    # Phase-local exposure and first-ever evidence acquisition are different.
+    # Re-showing a unit within a phase must not count it as new evidence.
     new_spans = [s for s in spans if span_key(s) not in previously_seen]
     new_ids = {s["sentence_id"] for s in new_spans}
     new_blocks = [b for b in blocks if new_ids.intersection(b["sentence_ids"])]
     old_blocks = [b for b in blocks if not new_ids.intersection(b["sentence_ids"])]
+    new_block_keys = {source_block_key(b) for b in new_blocks}
+    old_blocks = [b for b in old_blocks if source_block_key(b) not in new_block_keys]
+    rendered_source_keys = [source_block_key(b) for b in blocks]
+    new_section_source_keys = [source_block_key(b) for b in new_blocks]
+    previous_section_source_keys = [source_block_key(b) for b in old_blocks]
+    previous_source_keys = {
+        key for record in trajectory
+        for key in record.context_audit.get("rendered_source_keys", [])
+    }
+    retransmitted_source_keys = [
+        key for key in rendered_source_keys if key in previous_source_keys
+    ]
     attempts = [action_summary(record) for record in trajectory]
     sections = []
     previous = None
-    if budget_finalize:
+    if answer_stage:
+        sections.append(
+            "ANSWER STAGE\n"
+            "All retrieval phases are complete. Use the complete source text shown below "
+            "to produce the final answer and cite the visible evidence references. "
+            "No retrieval operation is available."
+        )
+    elif budget_finalize:
         sections.append(
             "Retrieval budget is exhausted. Make exactly one native tool call to FINISH. "
             "Retrieval operations are closed. If evidence is incomplete, keep the specific "
@@ -154,9 +238,19 @@ def render_context(
         )
     elif require_assessment:
         for record in reversed(trajectory):
-            decision = record.decision or record.resolved_decision
-            if decision and decision.assessment is not None:
-                previous = {"turn": record.policy_attempt, **decision.assessment.model_dump(mode="json")}
+            # Use the state-normalized assessment so cumulative resolved gaps
+            # survive even if a later provider response accidentally omits an
+            # older item. The raw response remains in the trajectory artifact.
+            assessment = (
+                record.state_after.last_assessment
+                if getattr(record, "state_after", None) is not None
+                else None
+            )
+            if assessment is None:
+                decision = record.decision or record.resolved_decision
+                assessment = decision.assessment if decision else None
+            if assessment is not None:
+                previous = {"turn": record.policy_attempt, **assessment.model_dump(mode="json")}
                 break
         sections.append("PREVIOUS ASSESSMENT\n" + (
             "Your assessment before action " + str(previous["turn"]) +
@@ -170,11 +264,22 @@ def render_context(
                         ("\nNew source text is shown below." if new_spans else "\nNo new source text was added."))
     else:
         sections.append("LAST ACTION AND RESULT\nNo action has been taken.")
-    sections.append("NEW SOURCE TEXT\n" + (
-        "Complete units containing text not previously shown. A complete passage may include previously shown sentences.\n" +
-        "\n\n".join(b["text"] for b in new_blocks) if new_blocks else "None."))
-    sections.append("PREVIOUSLY SHOWN SOURCE TEXT\n" + (
-        "\n\n".join(b["text"] for b in old_blocks) if old_blocks else "None."))
+    source_heading = (
+        "ALL SOURCE MEMORY (ANSWER STAGE)"
+        if answer_stage
+        else "CURRENT PHASE SOURCE TEXT"
+        if context_mode == "gap_bounded"
+        else "NEW SOURCE TEXT"
+    )
+    if answer_stage or (context_mode == "gap_bounded" and not budget_finalize):
+        sections.append(source_heading + "\n" + (
+            "\n\n".join(b["text"] for b in blocks) if blocks else "None."))
+    else:
+        sections.append(source_heading + "\n" + (
+            "Complete units containing text not previously shown. A complete passage may include previously shown sentences.\n" +
+            "\n\n".join(b["text"] for b in new_blocks) if new_blocks else "None."))
+        sections.append("PREVIOUSLY SHOWN SOURCE TEXT\n" + (
+            "\n\n".join(b["text"] for b in old_blocks) if old_blocks else "None."))
     if entity_cards:
         sections.append("Visible entity references:\n" + "\n".join(entity_cards))
     sections.append("EARLIER ACTION HISTORY\n" + (
@@ -182,10 +287,14 @@ def render_context(
         if len(attempts) > 1 else "None."))
     sections.append(f"BUDGET\nRemaining decisions: {state.remaining_step_budget}\n"
                     f"Remaining retrieval token estimate: {state.remaining_retrieved_token_budget}")
-    if require_assessment:
-        sections.append('Make exactly one native tool call. Include "assessment" with only '
-                        '"missing_information", a list of at most three non-empty strings, in the tool arguments. '
-                        "Describe the specific fact or connection still needed from the question and source text now shown. "
+    if answer_stage:
+        sections.append("Call FINISH with the answer and visible evidence references. Do not call a retrieval operation.")
+    elif require_assessment:
+        sections.append('Make exactly one native tool call. Include an "assessment" object with '
+                        '"resolved_gaps" and "missing_information" lists in the tool arguments. '
+                        "Keep resolved gaps cumulative and concrete; replace missing_information with the complete "
+                        "current list. Preserve exact entity names, relationships, and qualifiers. Describe the "
+                        "specific fact or connection still needed from the question and source text now shown. "
                         "Choose exactly one operation from OPERATIONS AVAILABLE NOW. FINISH is available only "
                         "when it is listed there; during normal retrieval it requires visible source and no "
                         "specific missing information. "
@@ -195,12 +304,25 @@ def render_context(
     elif not budget_finalize:
         sections.append("Make exactly one native tool call from OPERATIONS AVAILABLE NOW. FINISH is available only when listed.")
     audit = {"version": CONTEXT_RENDERER_VERSION, "assessment_schema_version": ASSESSMENT_SCHEMA_VERSION,
-             "assessment_requested": require_assessment,
+             "assessment_requested": require_assessment and not answer_stage,
+             "answer_stage": answer_stage,
+             "context_mode": context_mode,
+             "phase_index": getattr(state, "phase_index", 0),
              "previous_assessment": previous,
              "newly_visible_source_spans": new_spans,
              "new_source_references": [b["ref"] for b in new_blocks],
              "new_section_references": [b["ref"] for b in new_blocks],
              "old_section_references": [b["ref"] for b in old_blocks],
+             "rendered_source_keys": rendered_source_keys,
+             "unique_source_keys": list(dict.fromkeys(rendered_source_keys)),
+             "duplicate_source_keys": [],
+             "duplicate_source_count": 0,
+             "duplicate_input_source_keys": duplicate_input_keys,
+             "new_section_source_keys": new_section_source_keys,
+             "previous_section_source_keys": previous_section_source_keys,
+             "retransmitted_source_keys": retransmitted_source_keys,
+             "retransmitted_source_count": len(retransmitted_source_keys),
+             "tool_history_contains_source_text": False,
              "latest_action": attempts[-1] if attempts else None,
              "entity_filter_audit": list(entity_filter_audit or [])}
     return "\n\n".join(sections), audit, attempts

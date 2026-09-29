@@ -1,10 +1,11 @@
 # Context 與 assessment 比較：實作與重測
 
 > Historical contract: this document describes the former `supported_facts` assessment
-> used by older runs. New runs use `information-gap-v1`; the old fields remain only for
+> used by older runs. New runs use `information-gap-v2-resolved-gaps`; the old fields remain only for
 > historical interpretation.
 
-> 本文件保留 v3 native-tool workflow 的診斷紀錄。v3 發現的兩種 protocol error
+> 本文件保留 v3 native-tool workflow 的診斷紀錄。新 run 使用
+> `information-gap-v2-resolved-gaps`；v3 發現的兩種 protocol error
 > 已由 v4 single-decision protocol 修正；目前候選設計與重測結果見
 > [constrained_single_decision_v4.md](constrained_single_decision_v4.md)。
 

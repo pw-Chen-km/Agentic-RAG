@@ -72,11 +72,15 @@ class Assessment(AgentModel):
     and must never be used as an evidence reference by the evaluator.
     """
 
-    missing_information: list[Annotated[str, Field(min_length=1)]] = Field(
-        default_factory=list, max_length=3
-    )
+    # Episode-level working record, not source evidence. Keep concrete
+    # entities and qualifiers in resolved items so later hops have a precise
+    # anchor (for example, "identify the town ... — Mary Town").
+    resolved_gaps: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    # The current list is replaced on every turn. There is no arbitrary
+    # item-count cap; the provider output budget is the operational bound.
+    missing_information: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
 
-    @field_validator("missing_information")
+    @field_validator("resolved_gaps", "missing_information")
     @classmethod
     def gaps_must_not_be_blank(cls, values: list[str]) -> list[str]:
         if any(not item.strip() for item in values):
@@ -369,6 +373,13 @@ class ReferenceRegistry(AgentModel):
 class EpisodeState(AgentModel):
     step: int = Field(default=0, ge=0)
     policy_attempts: int = Field(default=0, ge=0)
+    # Retrieval is organised into source-memory phases.  The phase counter
+    # does not reset the episode budget or trajectory; it only identifies the
+    # current compact-context window.
+    phase_index: int = Field(default=0, ge=0)
+    current_phase_source_keys: set[str] = Field(default_factory=set)
+    all_source_keys: set[str] = Field(default_factory=set)
+    answer_stage_pending: bool = False
     visible_entity_ids: set[str] = Field(default_factory=set)
     visible_sentence_ids: set[str] = Field(default_factory=set)
     visible_chunk_ids: set[str] = Field(default_factory=set)
@@ -403,6 +414,8 @@ class EpisodeState(AgentModel):
         )
 
     @field_serializer(
+        "current_phase_source_keys",
+        "all_source_keys",
         "visible_entity_ids",
         "visible_sentence_ids",
         "visible_chunk_ids",
@@ -413,6 +426,22 @@ class EpisodeState(AgentModel):
     )
     def serialize_sets(self, values: set[str]) -> list[str]:
         return sorted(values)
+
+    def begin_new_phase(self, *, answer_stage_pending: bool = False) -> "EpisodeState":
+        """Return a state copy with a fresh Policy-visible source window.
+
+        The complete source memory, trajectory, budgets, action signatures,
+        reference registry, and visible entity state are intentionally kept.
+        Only the compact-context source window is cleared.  Keeping this
+        operation on the state model gives the controller one unambiguous,
+        serializable phase transition primitive.
+        """
+
+        updated = self.model_copy(deep=True)
+        updated.phase_index += 1
+        updated.current_phase_source_keys.clear()
+        updated.answer_stage_pending = answer_stage_pending
+        return updated
 
 
 class ValidationStatus(StrEnum):
@@ -445,6 +474,7 @@ class ContextReferenceMap(AgentModel):
 
 class ActionSpaceMode(StrEnum):
     NORMAL = "NORMAL"
+    ANSWER = "ANSWER"
     BUDGET_FINALIZE = "BUDGET_FINALIZE"
 
 

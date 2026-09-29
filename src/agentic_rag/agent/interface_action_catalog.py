@@ -198,9 +198,12 @@ def render_action_guide(
     if require_evidence_assessment:
         decision = (
             "Make exactly one native tool call using an operation listed above.\n"
-            "Include assessment.missing_information in its arguments: at most three non-empty strings "
-            "describing specific facts or connections still needed to answer the question.\n"
-            "Use an empty list only when no information is missing. During normal retrieval, "
+            "Include assessment.resolved_gaps and assessment.missing_information in its arguments. "
+            "Keep resolved_gaps cumulative, preserve exact names, relations, and qualifiers, and "
+            "start a resolved item with the earlier missing item's wording before appending its value. "
+            "Replace missing_information each turn with the complete current list of specific facts or "
+            "connections still needed to answer the question.\n"
+            "Use an empty missing_information list only when no information is missing. During normal retrieval, "
             "a non-empty list means do not finish; choose an available retrieval operation.\n"
             "Supply the operation's other arguments alongside assessment, not inside it."
         )

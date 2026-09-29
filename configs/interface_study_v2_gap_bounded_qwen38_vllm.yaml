@@ -6,7 +6,7 @@ agent:
   show_available_action_options: true
   use_state_conditioned_schema: true
   require_evidence_assessment: true
-  context_mode: full
+  context_mode: gap_bounded
   protocol: native_tool_calling
   interface: C0
 policy:

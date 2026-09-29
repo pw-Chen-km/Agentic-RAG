@@ -24,6 +24,7 @@ from agentic_rag.agent.models import (
     Usage,
     ValidationStatus,
     Message,
+    ObservationStatus,
 )
 from agentic_rag.agent.state import StateUpdater
 from agentic_rag.agent.context_rendering import output_delivery
@@ -135,6 +136,9 @@ class EpisodeStateManager:
             consume_step=event.consume_step,
             consume_policy_attempt=event.consume_policy_attempt,
         )
+        updated, phase_transition, phase_reason = self._apply_phase_transition(
+            state_before, updated, event
+        )
         record = StepRecord(
             step=updated.step if event.consume_step else state_before.step + 1,
             policy_attempt=updated.policy_attempts,
@@ -175,6 +179,11 @@ class EpisodeStateManager:
             telemetry=_telemetry(event),
             context_audit={
                 **event.policy_view.context_audit,
+                "phase_index_before": state_before.phase_index,
+                "phase_index_after": updated.phase_index,
+                "phase_transition": phase_transition,
+                "phase_transition_reason": phase_reason,
+                "answer_stage_pending": updated.answer_stage_pending,
                 "output_delivery": output_delivery(
                     event.observation, updated, event.visible_source_spans or [],
                     event.context_reference_map.typed_refs if event.context_reference_map else (),
@@ -188,6 +197,71 @@ class EpisodeStateManager:
         self._trajectory.append(record)
         self._total_usage = self._total_usage + event.usage
         return record
+
+    @staticmethod
+    def _apply_phase_transition(
+        before: EpisodeState,
+        updated: EpisodeState,
+        event: AttemptEvent,
+    ) -> tuple[EpisodeState, bool, str | None]:
+        """Advance the compact source window only after a real source update.
+
+        Assessment text alone never clears source memory.  A transition needs
+        a valid, executed retrieval result with newly visible source keys.
+        ``resolved_gaps`` is a model judgment and is therefore used only as a
+        boundary signal, not as evidence.
+        """
+        if event.validation_status is not ValidationStatus.VALID:
+            return updated, False, None
+        if event.observation.status is not ObservationStatus.OK:
+            return updated, False, None
+        if not event.assessment:
+            return updated, False, None
+        new_source_keys = set(updated.all_source_keys) - set(before.all_source_keys)
+        if not new_source_keys:
+            # If the model has explicitly closed all information gaps and the
+            # episode already has evidence, move to the separate answer call
+            # even when this action returned only previously seen text.  An
+            # initial empty result with no evidence still cannot skip
+            # retrieval and therefore remains in normal mode.
+            if not event.assessment.missing_information and updated.all_source_keys:
+                updated.answer_stage_pending = True
+                return updated, True, "answer_stage_ready"
+            return updated, False, None
+
+        previous = before.last_assessment
+        previous_resolved = set(previous.resolved_gaps) if previous else set()
+        current_resolved = set(event.assessment.resolved_gaps)
+        # A phase boundary is earned only when the model adds a resolved gap
+        # and the retrieval actually exposed new source.  We deliberately do
+        # not require exact string equality with the previous gap: the skill
+        # asks the model to make resolved gaps more specific (for example,
+        # adding "Mary Town"), so exact matching would prevent the intended
+        # phase reset.  The original and updated assessment remain in audit
+        # for later diagnostics.
+        resolved_gap_added = bool(current_resolved - previous_resolved)
+
+        if not event.assessment.missing_information:
+            # The next call receives all evidence and only FINISH.  Keep the
+            # source keys; ANSWER mode bypasses the compact phase filter.
+            updated.answer_stage_pending = True
+            return updated, True, "answer_stage_ready"
+
+        policy_view = getattr(event, "policy_view", None)
+        context_mode = getattr(policy_view, "context_audit", {}).get(
+            "context_mode", "full"
+        )
+        if context_mode == "gap_bounded" and previous is not None and resolved_gap_added:
+            updated = updated.begin_new_phase(answer_stage_pending=False)
+            # This assessment was generated BEFORE this action executed.
+            # Only earlier source is retired. The just-returned text must
+            # survive so the next call can actually read and assess it.
+            updated.current_phase_source_keys.update(
+                event.observation.metadata.get("returned_source_keys", new_source_keys)
+            )
+            event.observation.metadata["phase_transition_source_keys"] = sorted(new_source_keys)
+            return updated, True, "resolved_gap_with_new_source"
+        return updated, False, None
 
     def add_usage(self, usage: Usage) -> None:
         self._total_usage = self._total_usage + usage

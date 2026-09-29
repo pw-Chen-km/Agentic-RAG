@@ -92,6 +92,7 @@ class PolicyContextBuilder:
         use_state_conditioned_schema: bool = True,
         interface_contract: InterfaceContract | None = None,
         require_evidence_assessment: bool = True,
+        context_mode: str = "full",
     ) -> None:
         if isinstance(enabled_expansions, InterfaceContract) and interface_contract is None:
             interface_contract = enabled_expansions
@@ -102,6 +103,9 @@ class PolicyContextBuilder:
         self.use_state_conditioned_schema = use_state_conditioned_schema
         self.interface_contract = interface_contract
         self.require_evidence_assessment = require_evidence_assessment
+        if context_mode not in {"full", "gap_bounded"}:
+            raise ValueError("context_mode must be 'full' or 'gap_bounded'")
+        self.context_mode = context_mode
         self.entity_visibility_policy = EntityVisibilityPolicy(substrate)
         self.action_space_builder = AvailableActionSpaceBuilder(
             self.enabled_expansions,
@@ -123,16 +127,45 @@ class PolicyContextBuilder:
         if scope_id is not None:
             self.substrate.require_scope(scope_id)
         skill_text = skill.content if isinstance(skill, SkillDocument) else skill
-        display_ids, entity_filter_audit = self._display_ids(state, scope_id)
+        compact_retrieval = (
+            self.context_mode == "gap_bounded"
+            and action_space_mode is ActionSpaceMode.NORMAL
+        )
+        display_ids, entity_filter_audit = self._display_ids(
+            state, scope_id,
+            phase_keys=state.current_phase_source_keys if compact_retrieval else None,
+        )
+        if compact_retrieval:
+            phase_keys = set(state.current_phase_source_keys)
+            phase_node_ids = {
+                key.split(":", 1)[1] for key in phase_keys if ":" in key
+            }
+            # An empty phase is intentional immediately after a resolved-gap
+            # transition: old source is hidden until the next retrieval adds
+            # a new unit. Cumulative navigable entity cards remain visible.
+            display_ids = [
+                node_id for node_id in display_ids
+                if node_id in state.visible_entity_ids or node_id in phase_node_ids
+            ]
         reference_map = self._reference_map(display_ids, state)
         if self.interface_contract is not None:
             # Keep previously displayed sentence labels usable after their text
-            # is subsumed by a complete passage. No new labels are invented.
+            # is subsumed by a complete passage. In gap-bounded retrieval,
+            # only labels belonging to the current phase remain actionable;
+            # the complete registry is restored automatically in answer mode.
+            phase_keys = set(state.current_phase_source_keys)
             for record in trajectory:
                 if record.context_reference_map is None:
                     continue
                 for ref, node in record.context_reference_map.typed_refs.items():
                     if node.node_type == "SENTENCE" and node.stable_id in state.eligible_sentence_ids:
+                        if compact_retrieval:
+                            sentence = self.substrate.sentence_by_id.get(node.stable_id)
+                            if sentence is None or not (
+                                f"sentence:{sentence.sentence_id}" in phase_keys
+                                or f"passage:{sentence.chunk_id}" in phase_keys
+                            ):
+                                continue
                         reference_map.typed_refs.setdefault(ref, node.model_copy(deep=True))
         available_action_space = self.action_space_builder.build(
             state,
@@ -143,21 +176,34 @@ class PolicyContextBuilder:
             return self._build_native_tool_context(
                 query, skill_text, state, trajectory,
                 display_ids, reference_map, available_action_space,
-                entity_filter_audit,
+                entity_filter_audit, scope_id,
+                require_evidence_assessment=(
+                    self.require_evidence_assessment
+                    and action_space_mode is not ActionSpaceMode.ANSWER
+                ),
             )
         tool_definitions = build_tool_definitions(
             available_action_space,
-            require_evidence_assessment=self.require_evidence_assessment,
+            require_evidence_assessment=(
+                self.require_evidence_assessment
+                and action_space_mode is not ActionSpaceMode.ANSWER
+            ),
         )
         decision_format = (
             self.action_schema_builder.build(
                 available_action_space,
-                require_evidence_assessment=self.require_evidence_assessment,
+                require_evidence_assessment=(
+                    self.require_evidence_assessment
+                    and action_space_mode is not ActionSpaceMode.ANSWER
+                ),
             )
             if self.use_state_conditioned_schema
             else policy_decision_model(
                 self.enabled_expansions,
-                require_evidence_assessment=self.require_evidence_assessment,
+                require_evidence_assessment=(
+                    self.require_evidence_assessment
+                    and action_space_mode is not ActionSpaceMode.ANSWER
+                ),
             )
         )
         memory = self._semantic_memory(display_ids, state)
@@ -260,7 +306,7 @@ class PolicyContextBuilder:
         )
 
     def _display_ids(
-        self, state: EpisodeState, scope_id: str | None
+        self, state: EpisodeState, scope_id: str | None, *, phase_keys=None
     ) -> tuple[list[str], list[dict[str, Any]]]:
         visible = (
             state.visible_entity_ids
@@ -308,14 +354,18 @@ class PolicyContextBuilder:
                 self.interface_contract is not None
                 and node_id in self.substrate.sentence_by_id
                 and self.substrate.sentence_by_id[node_id].chunk_id
-                in (state.visible_passage_ids | state.read_chunk_ids)
+                in (
+                    {key.split(":", 1)[1] for key in phase_keys if key.startswith("passage:")}
+                    if phase_keys is not None
+                    else (state.visible_passage_ids | state.read_chunk_ids)
+                )
             )
         ]
         return display_ids, entity_filter_audit
 
     def _build_native_tool_context(
         self, query, skill_text, state, trajectory, display_ids, references,
-        space, entity_filter_audit,
+        space, entity_filter_audit, scope_id=None, *, require_evidence_assessment=True,
     ):
         """Build the native-tool conversation and cumulative observation.
 
@@ -326,7 +376,7 @@ class PolicyContextBuilder:
         """
         tools = build_tool_definitions(
             space,
-            require_evidence_assessment=self.require_evidence_assessment,
+            require_evidence_assessment=require_evidence_assessment,
         )
         memory, spans, entity_cards = [], [], []
         names = {}
@@ -370,10 +420,13 @@ class PolicyContextBuilder:
                 title = self.substrate.document_by_id[chunk.doc_id].title
                 text = f"Sentence {ref}" + (f" — {title}" if title else "") + f"\n{sentence.text}"
                 sentences = [sentence]
-            memory.append({"ref": ref, "text": text, "sentence_ids": [s.sentence_id for s in sentences]})
+            memory.append({"ref": ref, "text": text, "sentence_ids": [s.sentence_id for s in sentences],
+                           "source_key": (f"passage:{node_id}" if node_id in self.substrate.chunk_by_id
+                                          else f"sentence:{node_id}")})
             for sentence in sentences:
                 spans.append({"span_type": "sentence", "sentence_id": sentence.sentence_id,
                               "chunk_id": sentence.chunk_id, "source_ref": ref,
+                              "scope_id": scope_id,
                               "start": 0, "end": len(sentence.text), "text": sentence.text,
                               "visible": True, "complete": True, "seen_by_policy": True})
         latest_decision = next(
@@ -387,15 +440,24 @@ class PolicyContextBuilder:
         )
         content, audit, attempted = render_context(
             memory, spans, entity_cards, trajectory, state,
-            require_assessment=self.require_evidence_assessment,
+            require_assessment=(
+                self.require_evidence_assessment
+                and space.mode is not ActionSpaceMode.ANSWER
+            ),
             budget_finalize=space.mode is ActionSpaceMode.BUDGET_FINALIZE,
+            answer_stage=space.mode is ActionSpaceMode.ANSWER,
+            context_mode=self.context_mode,
             entity_filter_audit=entity_filter_audit,
+            scope_id=scope_id,
         )
         guide = render_action_guide(
             space,
             entity_annotation=self.interface_contract.entity_annotation,
             entity_navigation_possible=bool(self.interface_contract.enabled_expansions),
-            require_evidence_assessment=self.require_evidence_assessment,
+            require_evidence_assessment=(
+                self.require_evidence_assessment
+                and space.mode is not ActionSpaceMode.ANSWER
+            ),
         )
         messages = [
             Message(
@@ -437,6 +499,9 @@ class PolicyContextBuilder:
                     )
                 )
         messages.append(Message(role="user", content=content))
+        audit["tool_history_contains_source_text"] = _tool_history_contains_source_text(
+            messages[:-1], memory
+        )
         view = PolicyView(context_audit=audit, policy_state=PolicyStateView(
             step=state.step, policy_attempts=state.policy_attempts,
             last_assessment=(
@@ -678,6 +743,23 @@ def observation_outcome(observation: Observation | None) -> ObservationOutcome:
     if observation.results:
         return ObservationOutcome.SUCCESS
     return ObservationOutcome.EMPTY
+
+
+def _tool_history_contains_source_text(messages, source_blocks) -> bool:
+    """Detect accidental raw source text in historical tool messages."""
+    source_texts = {
+        block.get("text")
+        for block in source_blocks
+        if isinstance(block.get("text"), str) and block.get("text")
+    }
+    if not source_texts:
+        return False
+    for message in messages:
+        if message.role != "tool" or not message.content:
+            continue
+        if any(text in message.content for text in source_texts):
+            return True
+    return False
 
 
 def project_observation_for_audit(

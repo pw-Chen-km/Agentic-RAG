@@ -1,7 +1,7 @@
 # Agentic RAG Interface v2：實際流程、七個配置與 smoke 記錄
 
 > Historical contract: this record describes an earlier smoke run and its former
-> assessment schema. It is not the contract for new information-gap-v1 runs.
+> assessment schema. It is not the contract for new information-gap-v2-resolved-gaps runs.
 
 此文件依 2026-09-22 的程式實作整理；不是把早期計畫視為已完成的功能。JJ smoke 使用 `qwen3.8:27b-q4_K_M`，與 Brev 計畫的 `Qwen/Qwen3.8-27B-FP8` 不同。這次結果只能證明目前 JJ 模型與執行環境的行為。
 

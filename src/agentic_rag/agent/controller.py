@@ -114,6 +114,11 @@ class AgentController:
                 state,
                 manager.trajectory_snapshot(),
                 scope_id=scope_id,
+                action_space_mode=(
+                    ActionSpaceMode.ANSWER
+                    if state.answer_stage_pending
+                    else ActionSpaceMode.NORMAL
+                ),
             )
             try:
                 decision = self.policy.decide(

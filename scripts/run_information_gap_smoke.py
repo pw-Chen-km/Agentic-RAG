@@ -245,7 +245,7 @@ def main() -> None:
         "host": HOST,
         "conditions": list(CONDITIONS),
         "datasets": {},
-        "assessment_schema_version": "information-gap-v1",
+        "assessment_schema_version": "information-gap-v2-resolved-gaps",
     }
     save(output / "status.json", status)
     config = repo / "configs/interface_study_v62_qwen27b_ollama.yaml"

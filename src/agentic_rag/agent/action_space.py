@@ -57,7 +57,7 @@ class AvailableActionSpaceBuilder:
             for ref, item in references.typed_refs.items()
             if item.can_use_as_evidence
         )
-        if mode is ActionSpaceMode.BUDGET_FINALIZE:
+        if mode in {ActionSpaceMode.BUDGET_FINALIZE, ActionSpaceMode.ANSWER}:
             return AvailableActionSpace(
                 mode=mode,
                 finish_evidence_refs=tuple(evidence_refs),
@@ -70,7 +70,13 @@ class AvailableActionSpaceBuilder:
         # During normal retrieval, FINISH is not an option before any source
         # is visible. This prevents an abstention from consuming a policy turn
         # when the agent has not attempted retrieval yet.
-        finish_available = bool(evidence_refs)
+        # With information-gap assessment enabled, FINISH is exposed only
+        # after the previous valid retrieval assessment reported no remaining
+        # gap. The controller then switches to ANSWER mode, where FINISH is
+        # the sole operation and receives the complete source memory.
+        finish_available = bool(evidence_refs) and (
+            state.last_assessment is None or not state.last_assessment.missing_information
+        )
 
         retrieval_open = (
             state.remaining_step_budget > 0

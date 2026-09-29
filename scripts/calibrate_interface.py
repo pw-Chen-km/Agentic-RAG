@@ -162,7 +162,7 @@ def calibrate(
                 ),
                 "entity_visible_decision_schema_sha256": entity_visible.decision_schema_sha256,
                 "schema_valid": True,
-                "assessment_schema_version": "information-gap-v1",
+                "assessment_schema_version": "information-gap-v2-resolved-gaps",
                 "execution_status": "not_run",
         }
         if policy is not None:
@@ -215,6 +215,10 @@ def calibrate(
                             ),
                             "missing_information": (
                                 decision.assessment.missing_information
+                                if decision.assessment is not None else None
+                            ),
+                            "resolved_gaps": (
+                                decision.assessment.resolved_gaps
                                 if decision.assessment is not None else None
                             ),
                             "decision_count": policy.last_usage_metadata.get("decision_count"),
@@ -300,8 +304,8 @@ def calibrate(
     else:
         gate = "static_contracts_passed"
     return {
-        "calibration_version": "interface-study-native-information-gap-v1",
-        "assessment_schema_version": "information-gap-v1",
+        "calibration_version": "interface-study-native-information-gap-v2",
+        "assessment_schema_version": "information-gap-v2-resolved-gaps",
         "substrate": substrate.root.as_posix(),
         "conditions": rows,
         "schema_valid_rate": static_valid / len(conditions) if conditions else None,

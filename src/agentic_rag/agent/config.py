@@ -121,6 +121,10 @@ class AgentConfig(ConfigModel):
     show_available_action_options: bool = True
     use_state_conditioned_schema: bool = True
     require_evidence_assessment: bool = True
+    # ``full`` is the clean baseline. ``gap_bounded`` resets the
+    # Policy-visible source window after a validated gap transition while
+    # preserving the complete artifact memory for the answer stage.
+    context_mode: Literal["full", "gap_bounded"] = "full"
     protocol: Literal["native_tool_calling"] = "native_tool_calling"
     interface: str | None = None
     policy: PolicyProviderConfig = Field(default_factory=OllamaPolicyConfig)

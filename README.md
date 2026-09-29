@@ -5,18 +5,24 @@
 native tool-calling protocol 與 observation renderer，不覆寫舊結果。原本的
 `agenticRAG_研究` 沒有被修改。
 
-目前正式 protocol 為 `native-tool-calling-v1.2-information-gap`。模型每輪只能回傳一個 registered tool
+目前正式 protocol 為 `native-tool-calling-v1.3-finish-gate`。模型每輪只能回傳一個 registered tool
 call；provider 不使用 `response_format=json_schema`。assessment 若開啟，會作為同一個
-tool call 的參數傳回，且只包含 `missing_information`（最多三項）。工具名稱與參數由 backend validator 再檢查，entity ref 不放入巨大
+tool call 的參數傳回，包含累積的 `resolved_gaps` 與本輪替換的 `missing_information`。工具名稱與參數由 backend validator 再檢查，entity ref 不放入巨大
 enum，而是用目前 observation 的 visible entity mapping 驗證。舊 JSON protocol runs 只作
 歷史比較，不與 native runs 混合。
 
-Context 採用 `sectioned-context-v7-information-gap-assessment`：分開上一輪操作結果、新來源與舊來源，
+Context renderer 使用 `sectioned-context-v10-gap-phases`：分開上一輪操作結果、新來源與舊來源，
 保留完整文字與可用 references。`agent.require_evidence_assessment` 預設為 `true`，
-要求每次工具呼叫附上最多三項具體資訊缺口；設為 `false` 可做對照。Assessment 是模型判斷，
+要求每次工具呼叫附上具體資訊缺口；設為 `false` 可做對照。Assessment 是模型判斷，
 不是 evidence，不會進入 visible source spans。完整 contract 見
-[information_gap_assessment_v1.md](docs/information_gap_assessment_v1.md)；舊版診斷見
+[information_gap_assessment_v2.md](docs/information_gap_assessment_v2.md) 與
+[gap_bounded_context.md](docs/gap_bounded_context.md)；舊版診斷見
 [context_assessment_v3.md](docs/context_assessment_v3.md)。
+`context_mode: full` 是 clean full-evidence baseline；`context_mode: gap_bounded`
+在成功取得新來源且新增 resolved gap 後清除下一輪的 Policy-visible source window，
+保留 assessment、原始問題、action history、entity handles、budget 與完整 artifact。
+當 `missing_information` 變成空列表，runtime 進入只提供 `finish` 的 answer stage，
+並重新提供完整 source memory。
 JJ 使用本機 SSH 與既有 `qwen3.8:27b-q4_K_M`，不同於下方 Brev 的 FP8 設定。
 v6 只在原有歷史區簡短列出工具、參數、狀態與新增文字數，不另加重複的操作清單；
 validator 仍拒絕同一操作，且被拒絕的 decision 照常計入預算。
@@ -45,7 +51,7 @@ python scripts/analyze_context_comparison.py --run /path/to/new-comparison-run -
 比較程式依序執行 assessment 關閉／開啟，各三資料集 × 七配置，合計 42 episodes；
 只做 smoke，不會自動啟動完整實驗。
 
-Information-gap v1 的新 gate 與配對 smoke 使用：
+Information-gap v2 的新 gate 與配對 smoke 使用：
 
 ```powershell
 python scripts/run_information_gap_smoke.py `

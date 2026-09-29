@@ -25,6 +25,11 @@ Reference examples: source_ref: "E2", chunk_ref: "C4", and
 evidence_refs: ["S2", "C1"]. Copy the exact references shown in the current
 observation.
 Never output E#, S#, C#, or another placeholder instead of a reference.
+When assessment is requested, return both `resolved_gaps` and
+`missing_information` in the assessment object. Keep resolved gaps cumulative and
+replace the current missing-information list on each turn. Preserve exact entity
+names and qualifiers so that a missing item can guide a query or an entity hop.
+The assessment is a working judgment, not source evidence.
 Do not finish when no source text is visible or when the current assessment still
 lists a specific missing fact or connection. Choose an available operation instead;
 this rule does not prefer any particular retrieval scope.

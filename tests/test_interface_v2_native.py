@@ -50,7 +50,7 @@ def test_v2_condition_tool_registry_isolated(built_substrate: Path) -> None:
         assert "read_passage" not in _tool_names(built.tool_definitions)
         assert built.provider_tools == built.tool_definitions
         decision_schema = built.decision_format.model_json_schema()
-        assert set(decision_schema["required"]) == {"missing_information", "action"}
+        assert set(decision_schema["required"]) == {"assessment", "action"}
         for tool in built.tool_definitions:
             parameters = tool["function"]["parameters"]
             assert "assessment" in parameters["properties"]
@@ -63,7 +63,7 @@ def test_native_tool_call_decodes_to_existing_action_model() -> None:
             "type": "function",
             "function": {
                 "name": "find_sentences",
-                "arguments": '{"assessment":{"missing_information":["Where Marie Curie was born"]},"query":"Marie Curie"}',
+                "arguments": '{"assessment":{"resolved_gaps":[],"missing_information":["Where Marie Curie was born"]},"query":"Marie Curie"}',
             },
         }
     )
@@ -81,7 +81,7 @@ def test_native_decoder_rejects_historical_supported_facts_argument() -> None:
             "function": {
                 "name": "find_passages",
                 "arguments": {
-                    "assessment": {"missing_information": [], "supported_facts": []},
+                    "assessment": {"resolved_gaps": [], "missing_information": [], "supported_facts": []},
                     "query": "Marie Curie",
                 },
             },
@@ -112,26 +112,24 @@ def test_constrained_decision_is_single_flattened_action(built_substrate: Path) 
     built = PolicyContextBuilder(substrate, interface_contract=get_interface_contract("C1")).build(
         "Question?", SkillDocument.from_text("Answer."), EpisodeState.initial(), [], scope_id="q1")
     model = built.decision_format
-    valid = model.model_validate({"missing_information": ["answer"],
+    valid = model.model_validate({"assessment": {"resolved_gaps": [], "missing_information": ["answer"]},
                                   "action": {"name": "find_sentences", "query": "specific fact"}})
     decision = policy_decision_from_constrained(valid)
     assert decision.action.target.value == "SENTENCE"
+    model.model_validate({"assessment": {"resolved_gaps": [], "missing_information": []},
+                          "action": {"name": "find_passages", "query": "fact"}})
     with pytest.raises(Exception):
-        model.model_validate({"assessment": {"missing_information": []},
+        model.model_validate({"assessment": {"resolved_gaps": [], "missing_information": "[]"},
                               "action": {"name": "find_passages", "query": "fact"}})
     with pytest.raises(Exception):
-        model.model_validate({"missing_information": "[]",
-                              "action": {"name": "find_passages", "query": "fact"}})
-    with pytest.raises(Exception):
-        model.model_validate({"missing_information": [],
+        model.model_validate({"assessment": {"resolved_gaps": [], "missing_information": []},
                               "action": [{"name": "find_passages", "query": "one"},
                                          {"name": "find_passages", "query": "two"}]})
     with pytest.raises(Exception):
-        model.model_validate({"supported_facts": [], "missing_information": [],
+        model.model_validate({"assessment": {"resolved_gaps": [], "missing_information": [], "supported_facts": []},
                               "action": {"name": "find_passages", "query": "fact"}})
-    with pytest.raises(Exception):
-        model.model_validate({"missing_information": ["one", "two", "three", "four"],
-                              "action": {"name": "find_passages", "query": "fact"}})
+    model.model_validate({"assessment": {"resolved_gaps": ["one", "two", "three", "four"], "missing_information": []},
+                          "action": {"name": "find_passages", "query": "fact"}})
 
 
 def test_entity_tools_are_created_only_from_visible_entity_cards(

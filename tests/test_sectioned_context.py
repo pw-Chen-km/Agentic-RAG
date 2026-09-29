@@ -70,6 +70,8 @@ def test_live_shaped_duplicate_feedback_and_assessment_modes(built_substrate, fa
     for step in result.trajectory:
         audit = step.context_audit
         assert not set(audit["new_section_references"]) & set(audit["old_section_references"])
+        assert audit["duplicate_source_count"] == 0
+        assert not audit["tool_history_contains_source_text"]
         assert "Unresolved information" not in [s["text"] for s in step.visible_source_spans]
 
 
@@ -174,8 +176,8 @@ def test_wrong_assessment_keys_receive_specific_safe_guidance():
         validation_error="arguments.assessment is missing a required argument",
         observation=Observation(status="invalid_action", error_code="protocol_invalid"))
     text = action_summary(record)["explanation"]
-    assert "exactly missing_information" in text
-    assert "list of strings" in text
+    assert "resolved_gaps and missing_information" in text
+    assert "lists of non-empty strings" in text
     assert "supported_facts" not in text
 
 
@@ -206,6 +208,45 @@ def test_success_with_no_new_source_and_reorganized_source():
     assert "NEW SOURCE TEXT\nNone." in text
     assert audit["newly_visible_source_spans"] == []
     assert audit["old_section_references"] == ["C1"]
+
+
+def test_duplicate_source_blocks_are_rendered_once_and_audited():
+    state = EpisodeState.initial()
+    span = {"span_type": "sentence", "sentence_id": "s1", "chunk_id": "c1",
+            "start": 0, "end": 4, "text": "Text", "complete": True}
+    blocks = [
+        {"ref": "C1", "text": "Passage C1\nText", "sentence_ids": ["s1"]},
+        {"ref": "C1", "text": "Passage C1\nText", "sentence_ids": ["s1"]},
+    ]
+    text, audit, _ = render_context(
+        blocks, [span], [], [], state, require_assessment=False
+    )
+    assert text.count("Passage C1\nText") == 1
+    assert audit["rendered_source_keys"] == ["C1"]
+    assert audit["unique_source_keys"] == ["C1"]
+    assert audit["duplicate_source_count"] == 0
+    assert audit["duplicate_input_source_keys"] == ["C1"]
+    assert not set(audit["new_section_source_keys"]) & set(audit["previous_section_source_keys"])
+
+
+def test_identical_text_from_distinct_sources_is_not_collapsed():
+    state = EpisodeState.initial()
+    spans = [
+        {"span_type": "sentence", "sentence_id": "s1", "chunk_id": "c1",
+         "start": 0, "end": 4, "text": "Same", "complete": True},
+        {"span_type": "sentence", "sentence_id": "s2", "chunk_id": "c2",
+         "start": 0, "end": 4, "text": "Same", "complete": True},
+    ]
+    blocks = [
+        {"ref": "S1", "text": "Sentence S1\nSame", "sentence_ids": ["s1"]},
+        {"ref": "S2", "text": "Sentence S2\nSame", "sentence_ids": ["s2"]},
+    ]
+    text, audit, _ = render_context(
+        blocks, spans, [], [], state, require_assessment=False
+    )
+    assert text.count("Same") == 2
+    assert audit["rendered_source_keys"] == ["S1", "S2"]
+    assert audit["duplicate_source_count"] == 0
 
 
 def test_new_reference_without_new_text_is_separate_from_source_gain():

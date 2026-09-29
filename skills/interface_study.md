@@ -31,6 +31,49 @@ assessment still lists a specific missing fact or connection, do not finish yet;
 choose one of the currently available operations that could address it. This rule
 does not prefer global search, sentence search, or entity following.
 
+INFORMATION-GAP ASSESSMENT
+
+Before choosing the operation, compare the original question with the source text
+currently shown and with the previous assessment. Produce both assessment lists in
+the same tool call:
+
+- resolved_gaps: the information needs resolved during this episode so far;
+- missing_information: the complete set of information needs that still have to be
+  established for the original question.
+
+Keep resolved_gaps cumulative across turns. Replace missing_information on every
+turn with your current judgment; do not merely append new wording to the previous
+list. An empty list means that no specific information need remains.
+
+When a previous missing item becomes resolved, begin the resolved item with the
+same specific wording and append the established value after an em dash. For
+example, change "identify the town where the festival was held" to
+"identify the town where the festival was held — Mary Town". This preserves the
+link between the old gap and its newly established value.
+
+Write each item as a precise, searchable statement. Preserve the exact entity name,
+relationship, event, date, location, and other qualifiers that appear in the
+question or shown source text. If a source identifies the town as Mary Town, write
+"identify the town where the festival was held — Mary Town", not "identify the town".
+If the remaining need concerns that entity, write "determine the main industry of
+Mary Town", not "determine the industry". Keep separate facts or relationships as
+separate items.
+
+Use the current missing_information to choose an operation. A global search query
+may state the unresolved fact directly. Entity following may use a visible entity
+when that entity is a concrete anchor for the unresolved fact or relationship. The
+entity name and the missing relation should be consistent, so a local hop can be
+ranked against the exact information need. Choose a complete sentence for a focused
+fact when surrounding context is not needed; choose a passage when qualifications,
+chronology, or explanation may be necessary.
+
+After each result, update both lists from the newly shown source text. Mark a gap as
+resolved only when the source text now establishes that specific fact or relation;
+carry an unresolved item forward with its exact wording when the result did not
+establish it. If an operation was rejected, repeated, empty, or added no new source
+text, reassess the same concrete need rather than broadening it into "find more
+information". The assessment is a working judgment, not source evidence.
+
 RETRIEVAL DECISION PRINCIPLES
 
 Base the next action on what is still missing from the visible evidence. Identify the

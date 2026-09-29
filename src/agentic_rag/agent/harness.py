@@ -66,6 +66,7 @@ class AgentHarness:
             show_available_action_options=config.show_available_action_options,
             use_state_conditioned_schema=config.use_state_conditioned_schema,
             require_evidence_assessment=config.require_evidence_assessment,
+            context_mode=config.context_mode,
             interface_contract=self.interface_contract,
         )
         self.controller = AgentController(
@@ -164,6 +165,8 @@ class AgentHarness:
                 ActionSpaceMode.BUDGET_FINALIZE
                 if step.observation is not None
                 and step.observation.metadata.get("budget_finalize") is True
+                else ActionSpaceMode.ANSWER
+                if step.state_before.answer_stage_pending
                 else ActionSpaceMode.NORMAL
             )
             built = self.context_builder.build(
@@ -248,6 +251,9 @@ class AgentHarness:
             ),
             "policy_context": {
                 "assessment_schema_version": ASSESSMENT_SCHEMA_VERSION,
+                "context_mode": self.config.context_mode,
+                "phase_reset_on_resolved_gap": self.config.context_mode == "gap_bounded",
+                "answer_stage_after_empty_missing_information": True,
                 "node_reference_scheme": "episode_local_typed_refs_with_frozen_visibility",
                 "show_available_action_options": (
                     self.config.show_available_action_options
@@ -287,6 +293,7 @@ class AgentHarness:
                 "native_tool_calling": True,
                 "one_decision_per_turn": True,
                 "state_manager": "EpisodeStateManager",
+                "phase_state": "assessment_bounded_source_windows",
                 "controller_role": "stateless_loop_orchestrator",
             },
             "skill": {"sha256": self.skill.sha256, "source_path": self.skill.source_path},

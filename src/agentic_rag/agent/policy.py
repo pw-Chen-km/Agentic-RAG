@@ -62,7 +62,12 @@ class PolicyClient(Protocol):
 
 
 class _WireAssessment(AgentModel):
-    missing_information: list[Annotated[str, Field(min_length=1)]] = Field(max_length=3)
+    resolved_gaps: list[Annotated[str, Field(min_length=1)]] = Field(
+        ..., description="Cumulative concrete information needs resolved in this episode."
+    )
+    missing_information: list[Annotated[str, Field(min_length=1)]] = Field(
+        ..., description="Complete current list of concrete information needs still missing."
+    )
 
 
 class _WireSearchAction(AgentModel):
