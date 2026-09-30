@@ -515,7 +515,6 @@ class AvailableActionSpace(AgentModel):
     read_refs: tuple[TypedReference, ...] = ()
     finish_evidence_refs: tuple[TypedReference, ...] = ()
     finish_available: bool = False
-    forced_entity_navigation: bool = False
 
     @property
     def has_actions(self) -> bool:

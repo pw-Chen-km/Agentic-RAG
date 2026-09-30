@@ -451,19 +451,16 @@ class PolicyContextBuilder:
             entity_filter_audit=entity_filter_audit,
             scope_id=scope_id,
         )
-        # Keep the dynamic navigation gate auditable without turning its
-        # bookkeeping into another Policy instruction.  The model sees the
-        # resulting tool registry; these values explain why that registry may
-        # contain only an entity-hop route after repeated unresolved search.
+        # Keep the repeated-search count auditable without changing the
+        # available action registry.  A separate latest-action block gives
+        # the model a high-salience reminder for the exact call it must not
+        # resubmit.
         audit.update(
             {
                 "consecutive_unresolved_searches": state.consecutive_unresolved_searches,
                 "information_gap_remaining": bool(
                     state.last_assessment is not None
                     and state.last_assessment.missing_information
-                ),
-                "forced_entity_navigation": bool(
-                    getattr(space, "forced_entity_navigation", False)
                 ),
                 "available_entity_navigation": any(
                     str(option.kind.value).startswith("ENTITY_")

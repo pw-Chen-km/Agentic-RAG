@@ -35,7 +35,7 @@ def _state_with_visible_entity(built_substrate) -> tuple[EpisodeState, ContextRe
     )
 
 
-def test_two_unresolved_searches_expose_only_entity_navigation_when_available(
+def test_two_unresolved_searches_do_not_remove_search_when_entity_navigation_is_available(
     built_substrate,
 ) -> None:
     state, references = _state_with_visible_entity(built_substrate)
@@ -47,8 +47,7 @@ def test_two_unresolved_searches_expose_only_entity_navigation_when_available(
         contract.enabled_expansions, contract
     ).build(state, references)
 
-    assert space.forced_entity_navigation is True
-    assert space.search_options == ()
+    assert space.search_options
     assert len(space.expand_options) == 1
     assert space.expand_options[0].kind is ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE
 
@@ -65,7 +64,6 @@ def test_c0_and_c1_keep_search_affordances_without_entity_navigation(
         space = AvailableActionSpaceBuilder(
             contract.enabled_expansions, contract
         ).build(state, references)
-        assert space.forced_entity_navigation is False
         assert space.search_options
         assert space.expand_options == ()
 
@@ -109,7 +107,7 @@ def test_state_counts_only_executed_unresolved_searches_and_resets_on_other_acti
     assert state.consecutive_unresolved_searches == 0
 
 
-def test_forced_navigation_gate_is_recorded_in_policy_context_audit(built_substrate) -> None:
+def test_repeated_search_count_is_audit_only(built_substrate) -> None:
     from agentic_rag.agent.context import PolicyContextBuilder
 
     substrate = Substrate.open(built_substrate)
@@ -122,8 +120,7 @@ def test_forced_navigation_gate_is_recorded_in_policy_context_audit(built_substr
         interface_contract=get_interface_contract("C4"),
     ).build("What is connected?", "Use the available sources.", state, [], scope_id="q1")
 
-    assert built.available_action_space.forced_entity_navigation is True
+    assert built.available_action_space.search_options
     assert built.policy_view.context_audit["consecutive_unresolved_searches"] == 2
     assert built.policy_view.context_audit["information_gap_remaining"] is True
-    assert built.policy_view.context_audit["forced_entity_navigation"] is True
     assert built.policy_view.context_audit["available_entity_navigation"] is True

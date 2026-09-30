@@ -89,9 +89,7 @@ class InterfaceContract:
             "entity_visibility_policy": EntityVisibilityPolicy.version,
             "excluded_entity_types": sorted(EXCLUDED_NER_TYPES),
             "entity_hop_query_policy": "original_question_only",
-            "entity_navigation_fallback_policy": (
-                "two-submitted-searches-with-unresolved-gap-v1"
-            ),
+            "entity_navigation_fallback_policy": "disabled; exact-operation feedback only",
         }
 
     @property

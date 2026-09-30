@@ -255,9 +255,9 @@ class AgentHarness:
                 "phase_reset_on_resolved_gap": self.config.context_mode == "gap_bounded",
                 "answer_stage_after_empty_missing_information": True,
                 "entity_navigation_fallback_policy": {
-                    "version": "two-submitted-searches-with-unresolved-gap-v1",
-                    "threshold": 2,
-                    "counts": "submitted search actions, including duplicate/state-invalid attempts",
+                    "version": "disabled-exact-operation-feedback-v1",
+                    "automatic_route_switch": False,
+                    "counts": "submitted search actions retained for audit only",
                 },
                 "node_reference_scheme": "episode_local_typed_refs_with_frozen_visibility",
                 "show_available_action_options": (

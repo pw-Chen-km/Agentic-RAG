@@ -4,7 +4,7 @@ import pytest
 
 from agentic_rag.agent.config import AgentConfig
 from agentic_rag.agent.context import PolicyContextBuilder
-from agentic_rag.agent.context_rendering import action_summary, output_delivery, render_context
+from agentic_rag.agent.context_rendering import action_summary, blocked_exact_operation, output_delivery, render_context
 from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.agent.interface import get_interface_contract
 from agentic_rag.agent.models import (Assessment, EpisodeState, FinishAction, Usage, StepRecord, Observation,
@@ -67,12 +67,25 @@ def test_live_shaped_duplicate_feedback_and_assessment_modes(built_substrate, fa
     if assessment:
         assert final.context_audit["previous_assessment"]["turn"] == 2
         assert final.decision.assessment.missing_information == []
+        assert 'find_passages("Marie Curie")' in content
+        assert "BLOCKED EXACT OPERATION" in content
     for step in result.trajectory:
         audit = step.context_audit
         assert not set(audit["new_section_references"]) & set(audit["old_section_references"])
         assert audit["duplicate_source_count"] == 0
         assert not audit["tool_history_contains_source_text"]
         assert "Unresolved information" not in [s["text"] for s in step.visible_source_spans]
+
+
+def test_blocked_exact_operation_keeps_same_tool_available_with_new_query():
+    attempt = {
+        "tool": "find_passages",
+        "query": "Mary Town industry",
+        "status": "rejected: repeated action",
+    }
+    rendered = blocked_exact_operation(attempt)
+    assert 'find_passages("Mary Town industry")' in rendered
+    assert "same search operation remains available" in rendered
 
 
 @pytest.mark.parametrize("assessment", [False, True])

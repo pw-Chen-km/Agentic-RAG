@@ -35,9 +35,6 @@ There is no required order among legal retrieval operations, and no retrieval op
 is preferred by default. The same query used with two different search operations is
 allowed. A budget-finalize turn is different: retrieval is closed and the only legal
 call is `finish`, even if the assessment still lists unresolved information.
-If the current operation list states that repeated unresolved searches have temporarily
-closed the global-search options, use one of the listed entity-navigation operations for
-that turn; an operation not listed in the current registry is unavailable.
 Use only references shown in the current observation. Do not invent operations,
 references, entity names, or source text.
 When finishing in a normal retrieval turn, cite visible sources that support the answer.

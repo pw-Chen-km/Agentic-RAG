@@ -123,27 +123,6 @@ class AvailableActionSpaceBuilder:
                 )
             )
 
-        # After two consecutive submitted searches with an unresolved gap,
-        # give the model a different evidence route when one is available.
-        # This is a capability gate, not a preference hint: search actions
-        # disappear for this one normal turn, while entity navigation remains
-        # the only retrieval choice. If no entity route is available (as in
-        # C0/C1), the original search affordances are left untouched.
-        entity_navigation_options = [
-            option
-            for option in expand_options
-            if expected_expansion_source(option.kind) == "ENTITY"
-        ]
-        forced_entity_navigation = bool(
-            state.consecutive_unresolved_searches >= 2
-            and state.last_assessment is not None
-            and state.last_assessment.missing_information
-            and entity_navigation_options
-        )
-        if forced_entity_navigation:
-            expand_options = entity_navigation_options
-            search_options = ()
-
         read_refs = (
             _sorted_refs(
                 ref for ref, item in references.typed_refs.items() if item.can_read
@@ -156,10 +135,9 @@ class AvailableActionSpaceBuilder:
             mode=mode,
             search_options=search_options,
             expand_options=tuple(expand_options),
-            read_refs=() if forced_entity_navigation else tuple(read_refs),
+            read_refs=tuple(read_refs),
             finish_evidence_refs=tuple(evidence_refs),
             finish_available=finish_available,
-            forced_entity_navigation=forced_entity_navigation,
         )
 
 

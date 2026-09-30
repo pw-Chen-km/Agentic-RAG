@@ -185,6 +185,35 @@ def format_action_summary(attempt):
             f'returned {attempt["returned_count"]}; new text {attempt["new_text_source_count"]}')
 
 
+def blocked_exact_operation(attempt):
+    """Render one prior call as a compact, high-salience blocked signature."""
+    tool = attempt.get("tool")
+    if not tool or tool in {"unparsed tool call", "finish"}:
+        return None
+    if tool in {"find_passages", "find_sentences"} and "query" in attempt:
+        call = f'{tool}({json.dumps(attempt["query"], ensure_ascii=False)})'
+        detail = (
+            "The same search operation remains available with a materially "
+            "different query."
+        )
+    elif tool in {"follow_entity_to_passages", "follow_entity_to_sentences"}:
+        call = f'{tool}({json.dumps(attempt.get("entity_ref"), ensure_ascii=False)})'
+        detail = "Another visible entity may still be selected if that operation is listed."
+    elif tool == "read_passage" and "passage_ref" in attempt:
+        call = f'{tool}({json.dumps(attempt["passage_ref"], ensure_ascii=False)})'
+        detail = "Another unread passage may still be read if that operation is listed."
+    else:
+        return None
+    return (
+        "BLOCKED EXACT OPERATION\n"
+        "```text\n"
+        f"{call}\n"
+        "```\n"
+        "Do not submit this exact tool and arguments again. "
+        f"{detail}"
+    )
+
+
 def render_context(
     blocks,
     spans,
@@ -262,6 +291,9 @@ def render_context(
         sections.append("LAST ACTION AND RESULT\n" + format_action_summary(latest) +
                         "\n" + latest["explanation"] +
                         ("\nNew source text is shown below." if new_spans else "\nNo new source text was added."))
+        blocked = blocked_exact_operation(latest)
+        if blocked:
+            sections.append(blocked)
     else:
         sections.append("LAST ACTION AND RESULT\nNo action has been taken.")
     source_heading = (
@@ -323,6 +355,9 @@ def render_context(
              "previous_section_source_keys": previous_section_source_keys,
              "retransmitted_source_keys": retransmitted_source_keys,
              "retransmitted_source_count": len(retransmitted_source_keys),
+             "blocked_exact_operation": (
+                 blocked_exact_operation(attempts[-1]) if attempts else None
+             ),
              "tool_history_contains_source_text": False,
              "latest_action": attempts[-1] if attempts else None,
              "entity_filter_audit": list(entity_filter_audit or [])}

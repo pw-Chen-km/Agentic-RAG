@@ -181,12 +181,6 @@ def render_action_guide(
         "these descriptions explain when a scope may fit but do not require an order or prefer an operation.\n\n"
         + "\n\n".join(ACTION_CARDS[name].render() for name in names),
     ]
-    if space.forced_entity_navigation:
-        sections[0] += (
-            "\n\nThe current state has had two submitted global searches while an information gap remains. "
-            "For this turn, the listed entity-navigation operation is the only retrieval operation in the "
-            "tool registry; do not call an operation that is not listed."
-        )
     reference_rules = [
         "C# labels identify passages shown to you; S# labels identify sentences shown to you.",
         "Only visible C# and S# labels can be used as evidence_refs.",
