@@ -15,7 +15,7 @@ from agentic_rag.agent.tool_calling import decision_from_tool_call
 from agentic_rag.substrate.storage import Substrate
 
 
-@pytest.mark.parametrize("condition", ["C0", "C1", "C2", "C3", "C5", "C4", "A1"])
+@pytest.mark.parametrize("condition", ["C0", "A0", "C1", "C2", "C3", "C5", "C4", "A1"])
 @pytest.mark.parametrize("assessment", [False, True])
 def test_live_shaped_duplicate_feedback_and_assessment_modes(built_substrate, fake_embedder, tmp_path, condition, assessment):
     class Policy:

@@ -52,7 +52,7 @@ python scripts/run_context_comparison.py --data-root /path/to/interface_study_v2
 python scripts/analyze_context_comparison.py --run /path/to/new-comparison-run --output /path/to/comparison.json
 ```
 
-比較程式依序執行 assessment 關閉／開啟，各三資料集 × 七配置，合計 42 episodes；
+比較程式依序執行 assessment 關閉／開啟，各三資料集 × 八配置，合計 48 episodes；
 只做 smoke，不會自動啟動完整實驗。
 
 Information-gap v2 的新 gate 與配對 smoke 使用：
@@ -66,8 +66,8 @@ python scripts/run_information_gap_smoke.py `
   --require-assessment
 ```
 
-它先做三資料集 × 七配置的 provider calibration、backend branch coverage 與 21 題自然流程
-gate；只有 protocol、assessment 與 execution 門檻通過，才會啟動 Novel 70 題加 Medical 70
+它先做三資料集 × 八配置的 provider calibration、backend branch coverage 與 24 題自然流程
+ gate；只有 protocol、assessment 與 execution 門檻通過，才會啟動 Novel 80 題加 Medical 80
 題的 140-episode smoke。`scripts/analyze_information_gap_smoke.py` 會讀取新 run 的 raw
 episode artifacts，輸出缺口、action uptake、錯誤、重複操作、token 與 terminal 完整性診斷。
 
@@ -106,10 +106,11 @@ python scripts/validate_v2_substrate.py --substrate data/.../substrate
 缺少 dense passage/sentence/entity index，或 index dimension 不一致；它不會覆寫既有資料。
 遠端部署流程使用本機 WSL 的 Brev CLI SSH；不使用 Jupyter。
 
-v2 的條件是 C0、C1、C2、C3、C5、C4 與 A1。C0/C1 比較全域 passage 與
-全域 sentence search；C2/C3 比較 entity 導向的 passage/sentence landing；C5/C4
-則測試 global sentence search 加入 local navigation 後的額外效果。A1 是
-annotation-only control，不列入主要 factorial contrasts。
+v2 的條件是 C0、A0、C2、C3、C1、A1、C5、C4。C0/A0 比較只有全域 passage
+search 時，增加 entity annotation 的效果；C2/C3 比較 entity 導向的
+passage/sentence landing；C1/A1 比較全域 sentence search 與 annotation 的效果；
+C5/C4 則測試 global sentence search 加入 local navigation 後的額外效果。
+A0 與 A1 都是 annotation-only control，分別對應沒有／有全域 sentence search。
 
 正式設定使用 `Qwen/Qwen3.8-27B-FP8` 的 vLLM OpenAI-compatible server。
 temperature 0、關閉 thinking、`num_ctx=32768`、每次最多 2,048 output tokens、
@@ -123,7 +124,7 @@ python scripts/run_interface_study.py `
   --source-manifest data/interface_study/source_manifest.json `
   --config configs/interface_study_v2_qwen38_vllm.yaml `
   --output runs/interface-study-v2 `
-  --conditions C0 C1 C2 C3 C5 C4 A1
+  --conditions C0 A0 C2 C3 C1 A1 C5 C4
 python scripts/analyze_interface_study.py --run runs/interface-study-v2
 ```
 
@@ -169,7 +170,7 @@ Novel、Medical、HotpotQA 的 aggregate 分開保存；所有 judge prompt、pa
 provider usage、耗時與 unavailable/not_evaluable 原因都保留在 semantic evaluation
 artifact。GraphRAG-Benchmark 的 indexing structural metrics 不在本研究的主要輸出中。
 
-要對 GraphRAG-Benchmark 全量執行七個介面條件，可使用：
+要對 GraphRAG-Benchmark 全量執行八個介面條件，可使用：
 
 ```powershell
 python scripts/run_interface_study.py `
@@ -179,7 +180,7 @@ python scripts/run_interface_study.py `
   --source-manifest data/graphrag_benchmark/novel/source_manifest.json `
   --judge-config configs/semantic_judge_qwen.yaml `
   --semantic-eval `
-  --conditions C0 C1 C2 C3 C5 C4 A1 `
+  --conditions C0 A0 C2 C3 C1 A1 C5 C4 `
   --output runs/graphrag-novel-v1
 ```
 

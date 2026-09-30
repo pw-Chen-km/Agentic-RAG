@@ -16,6 +16,7 @@ def test_interface_capability_isolation(built_substrate: Path) -> None:
     state = EpisodeState.initial()
     for name, expected_pairs, expected_expansions in (
         ("C0", {"DENSE->CHUNK"}, []),
+        ("A0", {"DENSE->CHUNK"}, []),
         ("C1", {"DENSE->CHUNK", "DENSE->SENTENCE"}, []),
         ("C2", {"DENSE->CHUNK"}, ["ENTITY_MENTIONED_IN_CHUNK"]),
         ("C3", {"DENSE->CHUNK"}, ["ENTITY_MENTIONED_IN_SENTENCE"]),

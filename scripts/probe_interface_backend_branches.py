@@ -22,6 +22,7 @@ from agentic_rag.substrate.storage import Substrate
 
 PATHS = {
     "C0": ("passages",),
+    "A0": ("passages",),
     "C1": ("sentences",),
     "C2": ("passages", "entity_passages"),
     "C3": ("passages", "entity_sentences"),

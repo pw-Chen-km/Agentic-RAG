@@ -19,7 +19,7 @@ mkdir -p "$OUT"
   --source-manifest "$DATA/sources/hotpotqa/source_manifest.json" \
   --config "$CONFIG" --skill "$SKILL" \
   --output "$OUT/hotpotqa" \
-  --conditions C0 C1 C2 C3 C5 C4 A1 --seed 20260805
+  --conditions C0 A0 C2 C3 C1 A1 C5 C4 --seed 20260805
 
 "$PYTHON" "$REPO/scripts/run_interface_study.py" \
   --dataset novel \
@@ -28,7 +28,7 @@ mkdir -p "$OUT"
   --source-manifest "$DATA/sources/graphrag_benchmark/novel/source_manifest.json" \
   --config "$CONFIG" --skill "$SKILL" \
   --output "$OUT/novel" \
-  --conditions C0 C1 C2 C3 C5 C4 A1 --seed 20260805
+  --conditions C0 A0 C2 C3 C1 A1 C5 C4 --seed 20260805
 
 "$PYTHON" "$REPO/scripts/run_interface_study.py" \
   --dataset medical \
@@ -37,4 +37,4 @@ mkdir -p "$OUT"
   --source-manifest "$DATA/sources/graphrag_benchmark/medical/source_manifest.json" \
   --config "$CONFIG" --skill "$SKILL" \
   --output "$OUT/medical" \
-  --conditions C0 C1 C2 C3 C5 C4 A1 --seed 20260805
+  --conditions C0 A0 C2 C3 C1 A1 C5 C4 --seed 20260805

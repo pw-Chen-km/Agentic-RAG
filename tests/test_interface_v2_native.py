@@ -29,6 +29,7 @@ def test_v2_condition_tool_registry_isolated(built_substrate: Path) -> None:
     substrate = Substrate.open(built_substrate)
     expected = {
         "C0": ["find_passages"],
+        "A0": ["find_passages"],
         "C1": ["find_passages", "find_sentences"],
         "C2": ["find_passages"],
         "C3": ["find_passages"],

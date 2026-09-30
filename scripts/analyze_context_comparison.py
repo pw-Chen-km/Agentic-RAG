@@ -125,7 +125,7 @@ def analyze(root):
                     row[k + "_tokens"] = sum(values) if values and all(v is not None for v in values) else None
                 rows[key] = row
             actual = {r['condition'] for r in rows.values() if r['dataset'] == dataset}
-            if actual != {"C0", "C1", "C2", "C3", "C4", "C5", "A1"}:
+            if actual != {"C0", "A0", "C1", "C2", "C3", "C4", "C5", "A1"}:
                 violations.append(f"{stage}/{dataset}:missing_conditions")
         stages[stage] = rows
     # Compare complete YAML configs with the sole intended flag removed.

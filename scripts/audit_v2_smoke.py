@@ -6,7 +6,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-CONDITIONS = {"C0", "C1", "C2", "C3", "C4", "C5", "A1"}
+CONDITIONS = {"C0", "A0", "C1", "C2", "C3", "C4", "C5", "A1"}
 FILES = {"episode.json", "conversation.json", "target_system_prompt.txt",
          "target_user_prompt.txt", "skill.md", "effective_config.json"}
 

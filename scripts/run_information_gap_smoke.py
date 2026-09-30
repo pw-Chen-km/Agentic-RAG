@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 
-CONDITIONS = ("C0", "C1", "C2", "C3", "C5", "C4", "A1")
+CONDITIONS = ("C0", "A0", "C2", "C3", "C1", "A1", "C5", "C4")
 DATASETS = ("hotpotqa", "novel", "medical")
 MODEL = "qwen3.8:27b-q4_K_M"
 HOST = "http://127.0.0.1:11440"

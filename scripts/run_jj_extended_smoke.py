@@ -25,7 +25,7 @@ import yaml
 
 
 SEED = 20260805
-CONDITIONS = ("C0", "C1", "C2", "C3", "C5", "C4", "A1")
+CONDITIONS = ("C0", "A0", "C2", "C3", "C1", "A1", "C5", "C4")
 DATASETS = ("novel", "medical")
 QUESTION_TYPES = ("Complex Reasoning", "Contextual Summarize")
 

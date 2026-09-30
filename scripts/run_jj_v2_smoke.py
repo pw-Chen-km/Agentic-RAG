@@ -47,7 +47,7 @@ def main():
         tags = json.load(resp)
     files = [*sorted((repo / "src").rglob("*.py")), *sorted((repo / "scripts").glob("*.py")), repo / "skills/interface_study.md"]
     save(out / "smoke_manifest.json", dict(
-        created_at=datetime.now(timezone.utc).isoformat(), expected_episodes=21,
+        created_at=datetime.now(timezone.utc).isoformat(), expected_episodes=24,
         seed=20260805, model_tags=tags, code_files={str(f.relative_to(repo)):digest(f) for f in files},
         scope="one first source question per dataset, seven conditions; engineering test only",
         semantic_judge="not run by this target smoke; separate evaluator checks required"))
@@ -76,7 +76,7 @@ def main():
                     "--dataset", ds, "--substrate", str(substrate), "--questions", str(questions),
                     "--source-manifest", str(source_manifest), "--config", str(config_path),
                     "--skill", str(repo / "skills/interface_study.md"), "--output", str(out / ds),
-                    "--seed", "20260805", "--limit", "1", "--conditions", "C0", "C1", "C2", "C3", "C5", "C4", "A1"]
+                    "--seed", "20260805", "--limit", "1", "--conditions", "C0", "A0", "C2", "C3", "C1", "A1", "C5", "C4"]
                 save(out / f"{ds}_command.json", cmd)
                 subprocess.run(cmd, cwd=repo, stdout=log, stderr=subprocess.STDOUT, check=True)
             result = json.loads((out / ds / "summary.json").read_text())

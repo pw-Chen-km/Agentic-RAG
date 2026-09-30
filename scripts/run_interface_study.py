@@ -28,7 +28,7 @@ from agentic_rag.evaluation.question_identity import IDENTITY_VERSION, prepare_q
 from agentic_rag.substrate.storage import EvaluationSidecars, Substrate
 
 
-CONDITIONS = ("C0", "C1", "C2", "C3", "C5", "C4", "A1")
+CONDITIONS = ("C0", "A0", "C2", "C3", "C1", "A1", "C5", "C4")
 
 
 def sha256(path: Path) -> str:

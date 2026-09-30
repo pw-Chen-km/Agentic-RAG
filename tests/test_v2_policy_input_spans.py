@@ -12,7 +12,7 @@ from agentic_rag.agent.tool_calling import decision_from_tool_call
 from agentic_rag.substrate.storage import Substrate
 
 
-@pytest.mark.parametrize("condition", ["C0", "C1", "C2", "C3", "C5", "C4", "A1"])
+@pytest.mark.parametrize("condition", ["C0", "A0", "C1", "C2", "C3", "C5", "C4", "A1"])
 @pytest.mark.parametrize("invalid_after_search", [False, True])
 def test_spans_describe_input_not_new_retrieval(
     built_substrate: Path, fake_embedder, tmp_path: Path,

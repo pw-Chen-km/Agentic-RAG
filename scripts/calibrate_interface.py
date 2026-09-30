@@ -23,7 +23,7 @@ from agentic_rag.agent.tool_calling import tool_schema_sha256
 from agentic_rag.substrate.storage import Substrate
 
 
-CONDITIONS = ("C0", "C1", "C2", "C3", "C5", "C4", "A1")
+CONDITIONS = ("C0", "A0", "C2", "C3", "C1", "A1", "C5", "C4")
 
 
 def calibrate(

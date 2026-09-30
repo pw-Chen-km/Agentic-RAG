@@ -46,7 +46,7 @@ class InterfaceContract:
         return get_interface_contract(name)
 
     def __post_init__(self) -> None:
-        if self.name not in {"C0", "C1", "C2", "C3", "C4", "C5", "A1"}:
+        if self.name not in {"C0", "A0", "C1", "C2", "C3", "C4", "C5", "A1"}:
             raise ValueError(f"unknown interface condition: {self.name}")
         if self.top_k != 5:
             raise ValueError("the interface study fixes top_k=5")
@@ -119,6 +119,7 @@ class InterfaceContract:
 
 INTERFACE_CONTRACTS: dict[str, InterfaceContract] = {
     "C0": InterfaceContract("C0", False, False, EntityContinuation.NONE),
+    "A0": InterfaceContract("A0", False, True, EntityContinuation.ANNOTATION_ONLY),
     "C1": InterfaceContract("C1", True, False, EntityContinuation.NONE),
     "C2": InterfaceContract("C2", False, True, EntityContinuation.CHUNK),
     "C3": InterfaceContract("C3", False, True, EntityContinuation.SENTENCE),

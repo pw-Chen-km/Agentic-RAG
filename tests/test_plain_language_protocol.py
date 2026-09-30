@@ -14,6 +14,7 @@ from agentic_rag.substrate.storage import Substrate
 
 EXPECTED_INITIAL = {
     "C0": {"find_passages"},
+    "A0": {"find_passages"},
     "C1": {"find_passages", "find_sentences"},
     "C2": {"find_passages"},
     "C3": {"find_passages"},
@@ -78,6 +79,7 @@ def test_initial_action_guide_matches_schema_without_backend_result_count(
         ("C3", "follow_entity_to_sentences"),
         ("C5", "follow_entity_to_passages"),
         ("C4", "follow_entity_to_sentences"),
+        ("A0", None),
         ("A1", None),
     ],
 )

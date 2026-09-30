@@ -21,7 +21,7 @@ import yaml
 
 
 SEED = 20260805
-CONDITIONS = ("C0", "C1", "C2", "C3", "C5", "C4", "A1")
+CONDITIONS = ("C0", "A0", "C2", "C3", "C1", "A1", "C5", "C4")
 TYPES = {
     "hotpotqa": ("bridge", "comparison"),
     "novel": ("Fact Retrieval", "Complex Reasoning", "Contextual Summarize", "Creative Generation"),
@@ -83,7 +83,7 @@ def main() -> None:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "seed": SEED, "model": model, "model_digest": model_by_name[model].get("digest"),
         "embedding_model": embedding, "embedding_digest": model_by_name[embedding].get("digest"),
-        "conditions": CONDITIONS, "expected_episodes": 70, "datasets": {},
+        "conditions": CONDITIONS, "expected_episodes": 80, "datasets": {},
         "skill_sha256": digest(repo / "skills/interface_study.md"),
         "runner_sha256": digest(repo / "scripts/run_interface_study.py"),
     }

@@ -26,7 +26,7 @@ def test_duplicate_rows_have_unique_stable_ids_and_correct_judge_answers():
     lookup = question_lookup(questions)
     assert "duplicate" not in lookup
     assert [lookup[r["id"]].answer for r in result] == [r["answer"] for r in rows]
-    assert len({f"{c}--{r['id']}" for r in result for c in ("C0", "C1", "C2", "C3", "C5", "C4", "A1")}) == 21
+    assert len({f"{c}--{r['id']}" for r in result for c in ("C0", "A0", "C1", "C2", "C3", "C5", "C4", "A1")}) == 24
     assert result[0]["source"] == "original-document"
     assert result[2]["substrate_question_id"] == questions[2].question_id
 
