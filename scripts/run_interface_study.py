@@ -144,10 +144,9 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
             repo_root / "src/agentic_rag/agent/entity_visibility.py"
         ),
         "entity_navigation_fallback_policy": {
-            "version": "two-submitted-searches-with-unresolved-gap-v1",
-            "threshold": 2,
-            "scope": "entity-enabled conditions with a visible navigable entity",
-            "counts": "submitted search actions, including duplicate/state-invalid attempts",
+            "version": "disabled-exact-operation-feedback-v1",
+            "automatic_route_switch": False,
+            "counts": "submitted search actions retained for audit only",
         },
         "budget": {
             "normal_policy_decisions": 15,
