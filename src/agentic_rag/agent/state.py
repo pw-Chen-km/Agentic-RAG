@@ -9,6 +9,7 @@ from agentic_rag.agent.models import (
     Assessment,
     EpisodeState,
     Observation,
+    ObservationStatus,
     SearchAction,
     SentencePreview,
 )
@@ -109,6 +110,17 @@ class StateUpdater:
 
         if action_signature is not None:
             updated.action_signatures.add(action_signature)
+
+        if observation.status is ObservationStatus.DUPLICATE_ACTION:
+            updated.consecutive_duplicate_actions += 1
+            if updated.consecutive_duplicate_actions >= 3:
+                updated.interface_cannot_express_new_route = True
+                observation.metadata["interface_cannot_express_new_route"] = True
+                observation.metadata["consecutive_duplicate_actions"] = (
+                    updated.consecutive_duplicate_actions
+                )
+        else:
+            updated.consecutive_duplicate_actions = 0
 
         # Keep a small, deterministic signal for the action-space builder.
         # A submitted SearchAction with an explicitly unresolved assessment

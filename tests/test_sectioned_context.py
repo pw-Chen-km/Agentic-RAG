@@ -172,7 +172,7 @@ def test_duplicate_with_closed_gap_commits_assessment_and_opens_answer_stage(
     assert result.termination_reason.value == "finish"
     assert len(result.trajectory) == 3
     duplicate = result.trajectory[1]
-    assert duplicate.observation.error_code == "duplicate_action"
+    assert duplicate.observation.error_code == "assessment_closed_retrieval"
     assert duplicate.assessment_status == "provided"
     assert duplicate.state_after.last_assessment is not None
     assert duplicate.state_after.last_assessment.missing_information == []

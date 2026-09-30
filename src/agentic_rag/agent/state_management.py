@@ -213,6 +213,13 @@ class EpisodeStateManager:
         """
         if not event.assessment:
             return updated, False, None
+        if (
+            event.validation_status is not ValidationStatus.VALID
+            and event.observation.error_code == "assessment_closed_retrieval"
+            and updated.all_source_keys
+        ):
+            updated.answer_stage_pending = True
+            return updated, True, "answer_stage_ready_after_closed_assessment"
         # A duplicate retrieval is not executed, but its assessment is still
         # a valid model judgment.  Preserve the normal answer-stage transition
         # when that judgment closes the remaining gap and source evidence is
@@ -222,6 +229,9 @@ class EpisodeStateManager:
             event.validation_status is not ValidationStatus.VALID
             and event.observation.status is ObservationStatus.DUPLICATE_ACTION
         ):
+            if updated.interface_cannot_express_new_route and updated.all_source_keys:
+                updated.answer_stage_pending = True
+                return updated, True, "interface_cannot_express_new_route"
             if not event.assessment.missing_information and updated.all_source_keys:
                 updated.answer_stage_pending = True
                 return updated, True, "answer_stage_ready_after_duplicate"

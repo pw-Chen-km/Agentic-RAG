@@ -222,6 +222,57 @@ class AgentController:
                 )
                 continue
 
+            # A retrieval call and its assessment arrive in the same model
+            # response. If that response closes the information gap while
+            # evidence is already visible, do not execute a retrieval action
+            # from the stale half of the response. Record the inconsistency,
+            # commit the assessment, and make the next turn answer-only.
+            if (
+                not isinstance(resolved.action, ResolvedFinishAction)
+                and resolved.assessment is not None
+                and not resolved.assessment.missing_information
+                and state.all_source_keys
+            ):
+                observation = Observation(
+                    action_id=manager.next_action_id,
+                    status=ObservationStatus.INVALID_ACTION,
+                    action=resolved.action,
+                    error_code="assessment_closed_retrieval",
+                    message=(
+                        "The assessment reports no remaining information gap. "
+                        "Retrieval was not executed; the next turn is answer-only."
+                    ),
+                    metadata={"failure_category": "state_invalid"},
+                )
+                manager.record_attempt(
+                    AttemptEvent(
+                        decision=decision,
+                        resolved_decision=resolved,
+                        validation_status=ValidationStatus.INVALID,
+                        validation_error=observation.message,
+                        observation=observation,
+                        assessment=resolved.assessment,
+                        action_signature=None,
+                        usage=usage,
+                        policy_view=built.policy_view,
+                        context_reference_map=built.reference_map,
+                        available_action_space=built.available_action_space,
+                        decision_schema_sha256=built.decision_schema_sha256,
+                        decision_schema=built.decision_schema,
+                        commit_assessment=True,
+                        consume_step=True,
+                        invalid_attempt=True,
+                        messages=tuple(built.messages),
+                        tool_definitions=built.tool_definitions,
+                        visible_source_spans=built.visible_source_spans,
+                        provider_metadata={
+                            **self._provider_metadata(built.messages),
+                            "failure_category": "state_invalid",
+                        },
+                    )
+                )
+                continue
+
             validation = self.validator.validate(resolved, state, scope_id)
             if not validation.ok:
                 observation = Observation(

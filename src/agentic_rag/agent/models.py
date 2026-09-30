@@ -380,6 +380,11 @@ class EpisodeState(AgentModel):
     current_phase_source_keys: set[str] = Field(default_factory=set)
     all_source_keys: set[str] = Field(default_factory=set)
     answer_stage_pending: bool = False
+    # Number of consecutive exact retrieval submissions rejected by the
+    # validator. This is a safety valve for interfaces that cannot express
+    # another useful route for the current information gap.
+    consecutive_duplicate_actions: int = Field(default=0, ge=0)
+    interface_cannot_express_new_route: bool = False
     # Count consecutive submitted global searches while the latest
     # assessment still reports an information gap.  The interface
     # uses this only as a safety valve: after two such searches, any
@@ -569,6 +574,8 @@ class PolicyStateView(AgentModel):
     step: int = Field(ge=0)
     policy_attempts: int = Field(ge=0)
     consecutive_unresolved_searches: int = Field(default=0, ge=0)
+    consecutive_duplicate_actions: int = Field(default=0, ge=0)
+    interface_cannot_express_new_route: bool = False
     last_assessment: Assessment | None = None
     semantic_memory: list[SemanticMemoryItem] = Field(default_factory=list)
     latest_attempt: dict[str, Any] | None = None

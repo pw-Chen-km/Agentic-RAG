@@ -89,6 +89,18 @@ def action_summary(record):
     if code == "duplicate_action" or status == "duplicate_action":
         executed, outcome = False, "rejected: repeated action"
         explanation = "The same tool and arguments were already executed. This request was not executed. No new source text was added."
+        if observation and observation.metadata.get("interface_cannot_express_new_route"):
+            explanation += (
+                " The same exact operation has now been rejected three consecutive "
+                "times; the interface cannot express a new retrieval route for the "
+                "current gap, so the next turn is answer-only."
+            )
+    elif code == "assessment_closed_retrieval":
+        executed, outcome = False, "rejected: assessment closed"
+        explanation = (
+            "The assessment reported no remaining information gap. Retrieval was "
+            "not executed; the next turn provides only FINISH."
+        )
     elif status == "invalid_action" or record.validation_status.value == "invalid":
         executed, outcome = False, "rejected"
         if (record.validation_error or "").startswith("arguments.assessment"):
@@ -334,7 +346,9 @@ def render_context(
                         "if no source is visible or missing_information is non-empty, choose retrieval; if source "
                         "is visible and missing_information is empty, choose FINISH. If the latest action was "
                         "rejected, repeated, empty, or added no new source text, do not submit the same tool and "
-                        "arguments again. Reassess the same gap and choose another legal retrieval operation, or "
+                        "arguments again. If an exact operation is blocked, either choose another legal operation "
+                        "or write a materially different query targeting a different missing fact or relation; "
+                        "a synonym-only rewrite is not a new search. Reassess the same gap and choose another legal retrieval operation, or "
                         "FINISH when the gap is empty and source text is visible. These rules do not prefer any "
                         "particular retrieval operation.")
     elif not budget_finalize:

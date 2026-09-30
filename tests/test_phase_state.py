@@ -6,6 +6,9 @@ from agentic_rag.agent.models import (
     Observation,
     ObservationStatus,
     ValidationStatus,
+    SearchAction,
+    SearchMethod,
+    SearchTarget,
 )
 from agentic_rag.agent.state import StateUpdater
 from agentic_rag.agent.state_management import EpisodeStateManager
@@ -195,6 +198,52 @@ def test_new_source_without_resolved_gap_keeps_current_policy_window(built_subst
     assert reason is None
     assert transitioned.phase_index == 0
     assert transitioned.current_phase_source_keys
+
+
+def test_three_duplicate_rejections_mark_route_unexpressible_and_open_answer_stage(
+    built_substrate,
+) -> None:
+    from agentic_rag.substrate.storage import Substrate
+
+    substrate = Substrate.open(built_substrate)
+    state = EpisodeState.initial()
+    state.all_source_keys.add("passage:already-visible")
+    action = SearchAction(
+        query="same query",
+        method=SearchMethod.DENSE,
+        target=SearchTarget.CHUNK,
+    )
+    assessment = Assessment(missing_information=["the remaining fact"])
+    updater = StateUpdater(substrate)
+    observations = []
+    for _ in range(3):
+        observation = Observation(
+            status=ObservationStatus.DUPLICATE_ACTION,
+            action=action,
+            error_code="duplicate_action",
+        )
+        observations.append(observation)
+        state = updater.apply(
+            state,
+            assessment=assessment,
+            observation=observation,
+            action_signature=None,
+        )
+
+    assert state.consecutive_duplicate_actions == 3
+    assert state.interface_cannot_express_new_route is True
+    event = SimpleNamespace(
+        validation_status=ValidationStatus.INVALID,
+        observation=observations[-1],
+        assessment=assessment,
+        policy_view=SimpleNamespace(context_audit={"context_mode": "full"}),
+    )
+    transitioned, did_transition, reason = EpisodeStateManager._apply_phase_transition(
+        EpisodeState.model_validate(state.model_dump()), state, event
+    )
+    assert did_transition is True
+    assert reason == "interface_cannot_express_new_route"
+    assert transitioned.answer_stage_pending is True
 
 
 def test_answer_stage_reopens_complete_memory_and_closes_retrieval(built_substrate) -> None:

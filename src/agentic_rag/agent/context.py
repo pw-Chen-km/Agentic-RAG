@@ -213,6 +213,8 @@ class PolicyContextBuilder:
                 step=state.step,
                 policy_attempts=state.policy_attempts,
                 consecutive_unresolved_searches=state.consecutive_unresolved_searches,
+                consecutive_duplicate_actions=state.consecutive_duplicate_actions,
+                interface_cannot_express_new_route=state.interface_cannot_express_new_route,
                 last_assessment=(
                     state.last_assessment.model_copy(deep=True)
                     if state.last_assessment is not None
@@ -458,6 +460,8 @@ class PolicyContextBuilder:
         audit.update(
             {
                 "consecutive_unresolved_searches": state.consecutive_unresolved_searches,
+                "consecutive_duplicate_actions": state.consecutive_duplicate_actions,
+                "interface_cannot_express_new_route": state.interface_cannot_express_new_route,
                 "information_gap_remaining": bool(
                     state.last_assessment is not None
                     and state.last_assessment.missing_information
@@ -523,6 +527,8 @@ class PolicyContextBuilder:
         view = PolicyView(context_audit=audit, policy_state=PolicyStateView(
             step=state.step, policy_attempts=state.policy_attempts,
             consecutive_unresolved_searches=state.consecutive_unresolved_searches,
+            consecutive_duplicate_actions=state.consecutive_duplicate_actions,
+            interface_cannot_express_new_route=state.interface_cannot_express_new_route,
             last_assessment=(
                 latest_decision.assessment.model_copy(deep=True)
                 if latest_decision is not None and self.require_evidence_assessment
