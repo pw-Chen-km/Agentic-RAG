@@ -250,8 +250,14 @@ def render_context(
         key for key in rendered_source_keys if key in previous_source_keys
     ]
     attempts = [action_summary(record) for record in trajectory]
+    latest_attempt = attempts[-1] if attempts else None
+    blocked = blocked_exact_operation(latest_attempt) if latest_attempt else None
     sections = []
     previous = None
+    # Put the exact-operation guard first so it cannot be diluted by the
+    # assessment, source, and history sections that follow it.
+    if blocked:
+        sections.append(blocked)
     if answer_stage:
         sections.append(
             "ANSWER STAGE\n"
@@ -291,9 +297,6 @@ def render_context(
         sections.append("LAST ACTION AND RESULT\n" + format_action_summary(latest) +
                         "\n" + latest["explanation"] +
                         ("\nNew source text is shown below." if new_spans else "\nNo new source text was added."))
-        blocked = blocked_exact_operation(latest)
-        if blocked:
-            sections.append(blocked)
     else:
         sections.append("LAST ACTION AND RESULT\nNo action has been taken.")
     source_heading = (
@@ -356,7 +359,7 @@ def render_context(
              "retransmitted_source_keys": retransmitted_source_keys,
              "retransmitted_source_count": len(retransmitted_source_keys),
              "blocked_exact_operation": (
-                 blocked_exact_operation(attempts[-1]) if attempts else None
+                 blocked
              ),
              "tool_history_contains_source_text": False,
              "latest_action": attempts[-1] if attempts else None,

@@ -69,6 +69,8 @@ def test_live_shaped_duplicate_feedback_and_assessment_modes(built_substrate, fa
         assert final.decision.assessment.missing_information == []
         assert 'find_passages("Marie Curie")' in content
         assert "BLOCKED EXACT OPERATION" in content
+        assert content.index("BLOCKED EXACT OPERATION") < content.index("PREVIOUS ASSESSMENT")
+        assert content.index("BLOCKED EXACT OPERATION") < content.index("LAST ACTION AND RESULT")
     for step in result.trajectory:
         audit = step.context_audit
         assert not set(audit["new_section_references"]) & set(audit["old_section_references"])
