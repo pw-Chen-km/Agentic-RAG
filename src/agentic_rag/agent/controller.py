@@ -29,6 +29,7 @@ from agentic_rag.agent.policy import (
     PolicyTransportError,
 )
 from agentic_rag.agent.references import ReferenceResolutionError, resolve_decision
+from agentic_rag.agent.routing import routing_metadata
 from agentic_rag.agent.router import ActionRouter
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.agent.state import StateUpdater
@@ -138,6 +139,7 @@ class AgentController:
                     message=str(exc),
                     metadata={"failure_category": failure_category},
                 )
+                self._attach_routing_metadata(observation, None, built, state, manager)
                 manager.record_attempt(
                     AttemptEvent(
                         decision=None,
@@ -193,6 +195,7 @@ class AgentController:
                     message=exc.message,
                     metadata={"failure_category": "state_invalid"},
                 )
+                self._attach_routing_metadata(observation, None, built, state, manager)
                 manager.record_attempt(
                     AttemptEvent(
                         decision=decision,
@@ -244,6 +247,9 @@ class AgentController:
                     ),
                     metadata={"failure_category": "state_invalid"},
                 )
+                self._attach_routing_metadata(
+                    observation, resolved.action, built, state, manager
+                )
                 manager.record_attempt(
                     AttemptEvent(
                         decision=decision,
@@ -286,6 +292,14 @@ class AgentController:
                     error_code=validation.code,
                     message=validation.message,
                     metadata={"failure_category": "state_invalid"},
+                )
+                self._attach_routing_metadata(
+                    observation,
+                    resolved.action,
+                    built,
+                    state,
+                    manager,
+                    exact_duplicate_blocked=validation.code == "duplicate_action",
                 )
                 manager.record_attempt(
                     AttemptEvent(
@@ -345,6 +359,9 @@ class AgentController:
                 )
                 observation.metadata.setdefault(
                     "parsed_arguments", decision.action.model_dump(mode="json")
+                )
+                self._attach_routing_metadata(
+                    observation, resolved.action, built, state, manager
                 )
             except Exception as exc:
                 self._record_runtime_error(
@@ -416,6 +433,27 @@ class AgentController:
     def _policy_usage(self) -> Usage:
         usage = getattr(self.policy, "last_usage", Usage())
         return usage if isinstance(usage, Usage) else Usage()
+
+    def _attach_routing_metadata(
+        self,
+        observation: Observation,
+        action,
+        built,
+        state: EpisodeState,
+        manager: EpisodeStateManager,
+        *,
+        exact_duplicate_blocked: bool = False,
+    ) -> None:
+        observation.metadata.update(
+            routing_metadata(
+                policy=self.context_builder.routing_policy,
+                action=action,
+                space=built.available_action_space,
+                state=state,
+                trajectory=manager.trajectory_snapshot(),
+                exact_duplicate_blocked=exact_duplicate_blocked,
+            )
+        )
 
     def _provider_metadata(self, messages: Sequence[Message]) -> dict:
         metadata = dict(getattr(self.policy, "last_usage_metadata", {}) or {})
@@ -528,23 +566,31 @@ class AgentController:
                 consume_step=False,
                 messages=messages,
             )
+        budget_observation = Observation(
+            action_id=manager.next_action_id,
+            status=ObservationStatus.INVALID_ACTION,
+            action=resolved.action,
+            error_code="budget_finalize_requires_finish",
+            message=validation.message or "Budget finalization requires FINISH",
+            metadata={
+                "budget_finalize": True,
+                "failure_category": "state_invalid",
+            },
+        )
+        self._attach_routing_metadata(
+            budget_observation,
+            resolved.action,
+            built,
+            state,
+            manager,
+        )
         manager.record_attempt(
             AttemptEvent(
                 decision=decision,
                 resolved_decision=resolved,
                 validation_status=ValidationStatus.INVALID,
                 validation_error=validation.message,
-                observation=Observation(
-                    action_id=manager.next_action_id,
-                    status=ObservationStatus.INVALID_ACTION,
-                    action=resolved.action,
-                    error_code="budget_finalize_requires_finish",
-                    message=validation.message or "Budget finalization requires FINISH",
-                    metadata={
-                        "budget_finalize": True,
-                        "failure_category": "state_invalid",
-                    },
-                ),
+                observation=budget_observation,
                 assessment=resolved.assessment,
                 action_signature=None,
                 usage=usage,
@@ -619,6 +665,9 @@ class AgentController:
                 ],
             },
         )
+        self._attach_routing_metadata(
+            observation, canonical_action, built, state, manager,
+        )
         manager.record_attempt(
             AttemptEvent(
                 decision=decision,
@@ -661,20 +710,28 @@ class AgentController:
         error_code: str,
         error_message: str,
     ) -> None:
+        observation = Observation(
+            action_id=manager.next_action_id,
+            status=ObservationStatus.ERROR,
+            action=resolved.action,
+            error_code=error_code,
+            message=error_message,
+            metadata={"failure_category": "execution_error"},
+        )
+        self._attach_routing_metadata(
+            observation,
+            resolved.action,
+            built,
+            manager.snapshot(),
+            manager,
+        )
         manager.record_attempt(
             AttemptEvent(
                 decision=decision,
                 resolved_decision=resolved,
                 validation_status=ValidationStatus.VALID,
                 validation_error=None,
-                observation=Observation(
-                    action_id=manager.next_action_id,
-                    status=ObservationStatus.ERROR,
-                    action=resolved.action,
-                    error_code=error_code,
-                    message=error_message,
-                    metadata={"failure_category": "execution_error"},
-                ),
+                observation=observation,
                 assessment=resolved.assessment,
                 action_signature=signature,
                 usage=usage,

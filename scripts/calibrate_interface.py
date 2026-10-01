@@ -18,7 +18,7 @@ from agentic_rag.agent.context import PolicyContextBuilder
 from agentic_rag.agent.entity_visibility import EXCLUDED_NER_TYPES
 from agentic_rag.agent.interface import get_interface_contract
 from agentic_rag.agent.models import EpisodeState, Message
-from agentic_rag.agent.skill import SkillDocument
+from agentic_rag.agent.skill import SkillDocument, load_custom_skill, load_skill_version
 from agentic_rag.agent.tool_calling import tool_schema_sha256
 from agentic_rag.substrate.storage import Substrate
 
@@ -37,13 +37,18 @@ def calibrate(
     max_output_tokens: int = 512,
     repetitions: int = 1,
     seed: int | None = 20260805,
+    skill_version: str = "neutral",
+    skill_path: Path | None = None,
 ) -> dict[str, Any]:
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
     substrate = Substrate.open(substrate_path)
-    study_skill = SkillDocument.load(
-        Path(__file__).resolve().parents[1] / "skills" / "interface_study.md"
+    profile = (
+        load_custom_skill(skill_path)
+        if skill_path is not None
+        else load_skill_version(skill_version, repo_root=Path(__file__).resolve().parents[1])
     )
+    study_skill = profile.document
     rows: list[dict[str, Any]] = []
     static_valid = 0
     scope_id = next(iter(substrate.doc_ids_by_scope))
@@ -94,7 +99,10 @@ def calibrate(
             )
         contract = get_interface_contract(name)
         builder = PolicyContextBuilder(
-            substrate, interface_contract=contract, require_evidence_assessment=True
+            substrate,
+            interface_contract=contract,
+            require_evidence_assessment=True,
+            routing_policy=profile.routing_policy,
         )
         initial = builder.build(
             "Calibration question",
@@ -104,7 +112,10 @@ def calibrate(
             scope_id=scope_id,
         )
         initial_names = [str(item["function"]["name"]) for item in initial.tool_definitions]
-        expected_initial = {"find_passages", "finish"}
+        # FINISH is intentionally unavailable before any source is visible;
+        # the action-space tests and normal workflow both require retrieval
+        # to be attempted first.
+        expected_initial = {"find_passages"}
         if contract.global_sentence_search:
             expected_initial.add("find_sentences")
         if set(initial_names) != expected_initial:
@@ -306,6 +317,9 @@ def calibrate(
     return {
         "calibration_version": "interface-study-native-information-gap-v2",
         "assessment_schema_version": "information-gap-v2-resolved-gaps",
+        "skill_version": profile.name,
+        "routing_policy": profile.routing_policy,
+        "skill_sha256": profile.document.sha256,
         "substrate": substrate.root.as_posix(),
         "conditions": rows,
         "schema_valid_rate": static_valid / len(conditions) if conditions else None,
@@ -353,6 +367,12 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=20260805)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--skill-version",
+        choices=("neutral", "configuration-dependent"),
+        default="neutral",
+    )
+    parser.add_argument("--skill", type=Path, default=None, help="explicit custom skill path")
     args = parser.parse_args()
     report = calibrate(
         args.substrate,
@@ -364,6 +384,8 @@ def main() -> None:
         max_output_tokens=args.max_output_tokens,
         repetitions=args.repetitions,
         seed=args.seed,
+        skill_version=args.skill_version,
+        skill_path=args.skill,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

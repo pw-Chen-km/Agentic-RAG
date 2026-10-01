@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from agentic_rag.agent.artifacts import ArtifactWriter
 from agentic_rag.agent.contract_versions import (
@@ -10,6 +11,7 @@ from agentic_rag.agent.contract_versions import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_RENDERER_VERSION,
     NATIVE_PROTOCOL_VERSION,
+    ROUTING_POLICY_VERSION,
 )
 from agentic_rag.agent.config import AgentConfig, OllamaPolicyConfig, OpenAICompatiblePolicyConfig
 from agentic_rag.agent.context import PolicyContextBuilder
@@ -38,12 +40,16 @@ class AgentHarness:
         policy: PolicyClient,
         output_root: str | Path,
         embedding_backend: EmbeddingBackend | None = None,
+        routing_policy: Literal["neutral", "configuration-dependent"] = "neutral",
+        skill_version: str = "custom",
     ) -> None:
         self.substrate = substrate
         self.config = config
         self.skill = skill
         self.policy = policy
         self.output_root = Path(output_root)
+        self.routing_policy = routing_policy
+        self.skill_version = skill_version
         self.interface_contract: InterfaceContract | None = (
             get_interface_contract(config.interface) if config.interface else None
         )
@@ -68,6 +74,7 @@ class AgentHarness:
             require_evidence_assessment=config.require_evidence_assessment,
             context_mode=config.context_mode,
             interface_contract=self.interface_contract,
+            routing_policy=routing_policy,
         )
         self.controller = AgentController(
             policy=policy,
@@ -99,6 +106,8 @@ class AgentHarness:
         *,
         policy: PolicyClient | None = None,
         embedding_backend: EmbeddingBackend | None = None,
+        routing_policy: Literal["neutral", "configuration-dependent"] = "neutral",
+        skill_version: str = "custom",
     ) -> "AgentHarness":
         resolved_config = config if isinstance(config, AgentConfig) else AgentConfig.from_yaml(config)
         substrate = Substrate.open(substrate_path)
@@ -109,6 +118,8 @@ class AgentHarness:
             policy=policy or _policy_from_config(resolved_config),
             output_root=output_root,
             embedding_backend=embedding_backend,
+            routing_policy=routing_policy,
+            skill_version=skill_version,
         )
 
     @classmethod
@@ -122,6 +133,8 @@ class AgentHarness:
         skill_source_path: str | None = None,
         policy: PolicyClient | None = None,
         embedding_backend: EmbeddingBackend | None = None,
+        routing_policy: Literal["neutral", "configuration-dependent"] = "neutral",
+        skill_version: str = "custom",
     ) -> "AgentHarness":
         resolved_config = config if isinstance(config, AgentConfig) else AgentConfig.from_yaml(config)
         substrate = Substrate.open(substrate_path)
@@ -132,6 +145,8 @@ class AgentHarness:
             policy=policy or _policy_from_config(resolved_config),
             output_root=output_root,
             embedding_backend=embedding_backend,
+            routing_policy=routing_policy,
+            skill_version=skill_version,
         )
 
     def run(
@@ -301,7 +316,17 @@ class AgentHarness:
                 "phase_state": "assessment_bounded_source_windows",
                 "controller_role": "stateless_loop_orchestrator",
             },
-            "skill": {"sha256": self.skill.sha256, "source_path": self.skill.source_path},
+            "skill": {
+                "version": self.skill_version,
+                "sha256": self.skill.sha256,
+                "source_path": self.skill.source_path,
+            },
+            "routing_policy": self.routing_policy,
+            "routing_policy_version": (
+                ROUTING_POLICY_VERSION
+                if self.routing_policy == "configuration-dependent"
+                else "neutral-v1"
+            ),
             "substrate": {
                 "root": self.substrate.root.as_posix(),
                 "corpus_id": manifest.corpus_id,

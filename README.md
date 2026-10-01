@@ -47,6 +47,27 @@ python scripts/compare_compact_history_smoke.py --before /path/to/v5-run \
 順序；每張 capability card 同時提供給 prompt 與 decision schema，兩者由同一份 action
 catalog 生成。設計與測試見 [action_guide_v6_1.md](docs/action_guide_v6_1.md)。
 
+本工作區同時保留兩個可切換的 retrieval skill。`neutral` 不偏好任何合法
+operation，適合觀察模型自然選擇；`configuration-dependent` 會要求模型在仍有
+資訊缺口且有合理可導航 entity 時優先使用 entity navigation，沒有 local anchor
+時改用新的 global query。兩者使用相同的 tool registry、substrate、模型與 budget，
+但 routing policy 不同，因此必須使用不同 run 目錄，也不能混合 aggregate。
+
+使用 `--skill-version` 切換：
+
+```powershell
+python scripts/run_interface_study.py `
+  --skill-version neutral `
+  --output runs/interface-study-neutral
+
+python scripts/run_interface_study.py `
+  --skill-version configuration-dependent `
+  --output runs/interface-study-controlled-routing
+```
+
+`--skill PATH` 仍可用於診斷自訂 skill；正式結果應使用上面兩個固定版本。
+每個 manifest 會保存 skill、routing policy 與各自的 SHA-256，resume 時會檢查版本一致。
+
 ```bash
 python scripts/run_context_comparison.py --data-root /path/to/interface_study_v2 --output /path/to/new-comparison-run
 python scripts/analyze_context_comparison.py --run /path/to/new-comparison-run --output /path/to/comparison.json

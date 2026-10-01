@@ -157,6 +157,11 @@ def main() -> None:
     parser.add_argument("--per-type", type=int, default=5)
     parser.add_argument("--require-assessment", action="store_true",
                         help="include the optional evidence assessment in tool arguments")
+    parser.add_argument(
+        "--skill-version",
+        choices=("neutral", "configuration-dependent"),
+        default="neutral",
+    )
     parser.add_argument("--selection-manifest", type=Path,
                         help="reuse exact prior question rows after verifying source hashes")
     args = parser.parse_args()
@@ -196,7 +201,13 @@ def main() -> None:
         "baseline_selection_manifest_sha256": (
             digest(args.selection_manifest) if args.selection_manifest else None
         ),
-        "datasets": {}, "skill_sha256": digest(repo / "skills/interface_study.md"),
+        "datasets": {}, "skill_sha256": digest(
+            repo / (
+                "skills/interface_study_configuration_dependent.md"
+                if args.skill_version == "configuration-dependent"
+                else "skills/interface_study.md"
+            )
+        ), "skill_version": args.skill_version,
         "runner_sha256": digest(repo / "scripts/run_interface_study.py"),
     }
     status: dict[str, Any] = {"status": "running", "datasets": {}}
@@ -240,10 +251,10 @@ def main() -> None:
             with log_path.open("w", encoding="utf-8") as log:
                 commands = (
                     ("validate_v2_substrate.py", ["--substrate", str(substrate), "--output", str(output / f"{dataset}_substrate_validation.json")]),
-                    ("calibrate_interface.py", ["--substrate", str(substrate), "--output", str(output / f"{dataset}_static_calibration.json")]),
+                    ("calibrate_interface.py", ["--substrate", str(substrate), "--skill-version", args.skill_version, "--output", str(output / f"{dataset}_static_calibration.json")]),
                     ("run_interface_study.py", ["--dataset", dataset, "--substrate", str(substrate), "--questions", str(source),
                         "--source-manifest", str(source_manifest), "--config", str(config_path),
-                        "--skill", str(repo / "skills/interface_study.md"), "--output", str(output / dataset),
+                        "--skill-version", args.skill_version, "--output", str(output / dataset),
                         "--seed", str(SEED), "--question-indices", *(str(index) for index in selected_indices),
                         "--conditions", *CONDITIONS]),
                 )

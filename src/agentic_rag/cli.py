@@ -10,6 +10,7 @@ import typer
 
 from agentic_rag.agent.config import AgentConfig
 from agentic_rag.agent.harness import AgentHarness
+from agentic_rag.agent.skill import load_custom_skill, load_skill_version
 from agentic_rag.config import BuildConfig
 from agentic_rag.substrate.builder import SubstrateBuilder
 from agentic_rag.substrate.retrieval import Retriever
@@ -67,13 +68,31 @@ def read(
 def run(
     substrate: Annotated[Path, typer.Option("--substrate")],
     config: Annotated[Path, typer.Option("--config")],
-    skill: Annotated[Path, typer.Option("--skill")],
     output: Annotated[Path, typer.Option("--output")],
     question: Annotated[str, typer.Option("--question")],
     scope: Annotated[str, typer.Option("--scope")],
+    skill: Annotated[Path | None, typer.Option("--skill")] = None,
+    skill_version: Annotated[
+        str | None,
+        typer.Option("--skill-version", help="neutral or configuration-dependent"),
+    ] = None,
     episode_id: Annotated[str | None, typer.Option("--episode-id")] = None,
 ) -> None:
-    harness = AgentHarness.from_config(substrate, config, skill, output)
+    if skill is not None and skill_version is not None:
+        raise typer.BadParameter("--skill and --skill-version cannot be combined")
+    profile = (
+        load_custom_skill(skill)
+        if skill is not None
+        else load_skill_version(skill_version or "neutral")
+    )
+    harness = AgentHarness.from_config(
+        substrate,
+        config,
+        profile.path,
+        output,
+        routing_policy=profile.routing_policy,
+        skill_version=profile.name,
+    )
     _emit(harness.run(question, scope, episode_id=episode_id))
 
 

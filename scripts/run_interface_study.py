@@ -17,11 +17,17 @@ from agentic_rag.agent.contract_versions import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_RENDERER_VERSION,
     NATIVE_PROTOCOL_VERSION,
+    ROUTING_POLICY_VERSION,
 )
 from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.agent.harness import _policy_from_config
 from agentic_rag.agent.interface import get_interface_contract
-from agentic_rag.agent.skill import SkillDocument
+from agentic_rag.agent.skill import (
+    SkillDocument,
+    SkillProfile,
+    load_custom_skill,
+    load_skill_version,
+)
 from agentic_rag.evaluation.interface_study import aggregate, evaluate_episode
 from agentic_rag.evaluation.gold_sidecars import sha256 as file_sha256, validate_gold_sidecars
 from agentic_rag.evaluation.question_identity import IDENTITY_VERSION, prepare_question_rows
@@ -38,6 +44,24 @@ def sha256(path: Path) -> str:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _resolve_skill_selection(args: argparse.Namespace) -> SkillProfile:
+    """Resolve one immutable built-in skill or an explicit diagnostic path."""
+
+    repo_root = Path(__file__).resolve().parents[1]
+    explicit_path = getattr(args, "skill", None)
+    requested_version = getattr(args, "skill_version", None)
+    if explicit_path is not None and requested_version is not None:
+        raise ValueError("--skill and --skill-version cannot be combined")
+    if explicit_path is not None:
+        profile = load_custom_skill(explicit_path)
+    else:
+        profile = load_skill_version(requested_version or "neutral", repo_root=repo_root)
+    args.skill = profile.path
+    args.skill_version = profile.name
+    args.routing_policy = profile.routing_policy
+    return profile
 
 
 def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[str, ...]) -> dict[str, Any]:
@@ -97,6 +121,13 @@ def _manifest(args: argparse.Namespace, config: AgentConfig, conditions: tuple[s
         "config_sha256": sha256(args.config),
         "skill": args.skill.resolve().as_posix(),
         "skill_sha256": sha256(args.skill),
+        "skill_version": getattr(args, "skill_version", "custom"),
+        "routing_policy": getattr(args, "routing_policy", "neutral"),
+        "routing_policy_version": (
+            ROUTING_POLICY_VERSION
+            if getattr(args, "routing_policy", "neutral") == "configuration-dependent"
+            else "neutral-v1"
+        ),
         "judge_config_sha256": sha256(args.judge_config) if args.judge_config else None,
         "evaluator_code_sha256": sha256(repo_root / "src/agentic_rag/evaluation/graphrag_bench.py"),
         "semantic_metric_version": "graphrag-benchmark-logic-v1",
@@ -184,6 +215,7 @@ def _load_progress(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    _resolve_skill_selection(args)
     conditions = tuple(args.conditions)
     if not conditions:
         raise ValueError("at least one condition is required")
@@ -279,6 +311,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             skill=skill,
             policy=_policy_from_config(condition_config),
             output_root=args.output / "episodes",
+            routing_policy=args.routing_policy,
+            skill_version=args.skill_version,
         )
     completed = _load_progress(args.output / "progress.jsonl")
     if args.limit is not None:
@@ -357,7 +391,13 @@ def main() -> None:
         type=Path,
         default=Path("configs/interface_study_v2_qwen38_vllm.yaml"),
     )
-    parser.add_argument("--skill", type=Path, default=Path("skills/interface_study.md"))
+    parser.add_argument("--skill", type=Path, default=None, help="explicit custom skill path")
+    parser.add_argument(
+        "--skill-version",
+        choices=("neutral", "configuration-dependent"),
+        default=None,
+        help="select an immutable built-in retrieval skill",
+    )
     parser.add_argument("--output", type=Path, default=Path("runs/interface-study-v2"))
     parser.add_argument("--seed", type=int, default=20260805)
     parser.add_argument("--conditions", nargs="+", default=list(CONDITIONS), choices=CONDITIONS)

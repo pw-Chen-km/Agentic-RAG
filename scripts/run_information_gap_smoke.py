@@ -228,6 +228,11 @@ def main() -> None:
         action="store_true",
         help="required gate: run the information-gap schema rather than the legacy contract",
     )
+    parser.add_argument(
+        "--skill-version",
+        choices=("neutral", "configuration-dependent"),
+        default="neutral",
+    )
     args = parser.parse_args()
     if not args.require_assessment:
         raise ValueError("this runner requires --require-assessment")
@@ -246,6 +251,7 @@ def main() -> None:
         "conditions": list(CONDITIONS),
         "datasets": {},
         "assessment_schema_version": "information-gap-v2-resolved-gaps",
+        "skill_version": args.skill_version,
     }
     save(output / "status.json", status)
     config = repo / "configs/interface_study_v62_qwen27b_ollama.yaml"
@@ -275,6 +281,8 @@ def main() -> None:
                     HOST,
                     "--seed",
                     str(SEED),
+                    "--skill-version",
+                    args.skill_version,
                     "--output",
                     str(output / f"{dataset}.live_calibration.json"),
                 ],
@@ -298,7 +306,14 @@ def main() -> None:
                     "--config",
                     str(config),
                     "--skill",
-                    str(repo / "skills/interface_study.md"),
+                    str(
+                        repo
+                        / (
+                            "skills/interface_study_configuration_dependent.md"
+                            if args.skill_version == "configuration-dependent"
+                            else "skills/interface_study.md"
+                        )
+                    ),
                     "--output",
                     str(output / f"{dataset}.backend_branches"),
                 ],
@@ -320,6 +335,8 @@ def main() -> None:
                 str(output / "natural_21"),
                 "--assessment",
                 "on",
+                "--skill-version",
+                args.skill_version,
             ],
             cwd=repo,
             log=output / "natural_21.log",
@@ -341,6 +358,8 @@ def main() -> None:
                 "--output",
                 str(args.extended_output.resolve()),
                 "--require-assessment",
+                "--skill-version",
+                args.skill_version,
                 "--selection-manifest",
                 str(args.selection_manifest.resolve()),
             ],

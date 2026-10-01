@@ -21,7 +21,7 @@ from agentic_rag.agent.models import (
     SearchAction,
 )
 from agentic_rag.agent.providers.ollama import OllamaChatPolicy
-from agentic_rag.agent.skill import SkillDocument
+from agentic_rag.agent.skill import SkillDocument, load_custom_skill, load_skill_version
 from agentic_rag.substrate.storage import Substrate
 
 
@@ -96,6 +96,7 @@ def run_probe(
     *,
     model: str,
     host: str,
+    routing_policy: str = "neutral",
 ) -> dict[str, object]:
     scope_id = next(iter(substrate.doc_ids_by_scope))
     policy = OllamaChatPolicy(
@@ -117,6 +118,7 @@ def run_probe(
             built = PolicyContextBuilder(
                 substrate,
                 interface_contract=get_interface_contract(condition),
+                routing_policy=routing_policy,
             ).build(question, skill, state, [], scope_id=scope_id)
             available = [
                 item["properties"]["name"]["const"] for item in built.decision_format.model_json_schema()
@@ -178,18 +180,36 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--substrate", type=Path, required=True)
     parser.add_argument("--question", required=True)
-    parser.add_argument("--skill", type=Path, default=Path("skills/interface_study.md"))
+    parser.add_argument("--skill", type=Path, default=None, help="explicit custom skill path")
+    parser.add_argument(
+        "--skill-version",
+        choices=("neutral", "configuration-dependent"),
+        default=None,
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", default="qwen3.8:27b-q4_K_M")
     parser.add_argument("--host", default="http://127.0.0.1:11440")
     args = parser.parse_args()
+    if args.skill is not None and args.skill_version is not None:
+        parser.error("--skill and --skill-version cannot be combined")
+    profile = (
+        load_custom_skill(args.skill)
+        if args.skill is not None
+        else load_skill_version(
+            args.skill_version or "neutral",
+            repo_root=Path(__file__).resolve().parents[1],
+        )
+    )
     report = run_probe(
         Substrate.open(args.substrate),
         args.question,
-        SkillDocument.load(args.skill),
+        profile.document,
         model=args.model,
         host=args.host,
+        routing_policy=profile.routing_policy,
     )
+    report["skill_version"] = profile.name
+    report["routing_policy"] = profile.routing_policy
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"output": args.output.as_posix(), "rows": len(report["rows"])}, ensure_ascii=False))

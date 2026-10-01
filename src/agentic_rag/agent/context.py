@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -93,6 +93,7 @@ class PolicyContextBuilder:
         interface_contract: InterfaceContract | None = None,
         require_evidence_assessment: bool = True,
         context_mode: str = "full",
+        routing_policy: Literal["neutral", "configuration-dependent"] = "neutral",
     ) -> None:
         if isinstance(enabled_expansions, InterfaceContract) and interface_contract is None:
             interface_contract = enabled_expansions
@@ -103,6 +104,9 @@ class PolicyContextBuilder:
         self.use_state_conditioned_schema = use_state_conditioned_schema
         self.interface_contract = interface_contract
         self.require_evidence_assessment = require_evidence_assessment
+        if routing_policy not in {"neutral", "configuration-dependent"}:
+            raise ValueError(f"unknown routing policy: {routing_policy}")
+        self.routing_policy = routing_policy
         if context_mode not in {"full", "gap_bounded"}:
             raise ValueError("context_mode must be 'full' or 'gap_bounded'")
         self.context_mode = context_mode
@@ -470,6 +474,16 @@ class PolicyContextBuilder:
                     str(option.kind.value).startswith("ENTITY_")
                     for option in space.expand_options
                 ),
+                "routing_policy": self.routing_policy,
+                "entity_navigation_available": any(
+                    str(option.kind.value).startswith("ENTITY_")
+                    for option in space.expand_options
+                ),
+                "visible_navigable_entity_count": len({
+                    ref
+                    for option in space.expand_options
+                    for ref in option.source_refs
+                }),
             }
         )
         guide = render_action_guide(
@@ -480,6 +494,7 @@ class PolicyContextBuilder:
                 self.require_evidence_assessment
                 and space.mode is not ActionSpaceMode.ANSWER
             ),
+            routing_policy=self.routing_policy,
         )
         messages = [
             Message(

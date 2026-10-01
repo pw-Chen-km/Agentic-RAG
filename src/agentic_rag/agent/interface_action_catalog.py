@@ -8,6 +8,7 @@ the wording or the suggested retrieval policy.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from agentic_rag.agent.models import (
     AvailableActionSpace,
@@ -170,15 +171,30 @@ def render_action_guide(
     entity_annotation: bool,
     entity_navigation_possible: bool,
     require_evidence_assessment: bool,
+    routing_policy: Literal["neutral", "configuration-dependent"] = "neutral",
 ) -> str:
     names = available_action_names(space)
     if not names:
         raise ValueError("the study action guide needs at least one action")
+    if routing_policy == "neutral":
+        selection_guidance = (
+            "The order of this list has no meaning. Choose a scope that matches the information you still need; "
+            "these descriptions explain when a scope may fit but do not require an order or prefer an operation."
+        )
+    elif routing_policy == "configuration-dependent":
+        selection_guidance = (
+            "The selected routing skill defines how to compare these operations. It gives priority to a visible "
+            "entity-follow operation when a visible entity is a plausible anchor for the current information gap; "
+            "when no such local anchor is available, it uses a global search with a revised query. The registry "
+            "still lists every legal operation, and the model chooses the entity when local navigation applies."
+        )
+    else:
+        raise ValueError(f"unknown routing policy: {routing_policy}")
     sections = [
         "OPERATIONS AVAILABLE NOW\n\n"
         "This is the complete list of operations available in the current state. "
-        "The order of this list has no meaning. Choose a scope that matches the information you still need; "
-        "these descriptions explain when a scope may fit but do not require an order or prefer an operation.\n\n"
+        + selection_guidance
+        + "\n\n"
         + "\n\n".join(ACTION_CARDS[name].render() for name in names),
     ]
     reference_rules = [

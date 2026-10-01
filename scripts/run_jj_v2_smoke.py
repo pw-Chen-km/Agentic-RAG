@@ -31,6 +31,11 @@ def main():
     p.add_argument("--data-root", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--assessment", choices=("on", "off"), default="on")
+    p.add_argument(
+        "--skill-version",
+        choices=("neutral", "configuration-dependent"),
+        default="neutral",
+    )
     a = p.parse_args()
     root = a.data_root.resolve()
     out = a.output.resolve()
@@ -45,12 +50,18 @@ def main():
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     with urllib.request.urlopen("http://127.0.0.1:11440/api/tags", timeout=30) as resp:
         tags = json.load(resp)
-    files = [*sorted((repo / "src").rglob("*.py")), *sorted((repo / "scripts").glob("*.py")), repo / "skills/interface_study.md"]
+    skill_path = repo / (
+        "skills/interface_study_configuration_dependent.md"
+        if a.skill_version == "configuration-dependent"
+        else "skills/interface_study.md"
+    )
+    files = [*sorted((repo / "src").rglob("*.py")), *sorted((repo / "scripts").glob("*.py")), skill_path]
     save(out / "smoke_manifest.json", dict(
         created_at=datetime.now(timezone.utc).isoformat(), expected_episodes=24,
         seed=20260805, model_tags=tags, code_files={str(f.relative_to(repo)):digest(f) for f in files},
         scope="one first source question per dataset, seven conditions; engineering test only",
-        semantic_judge="not run by this target smoke; separate evaluator checks required"))
+        semantic_judge="not run by this target smoke; separate evaluator checks required",
+        skill_version=a.skill_version, skill_sha256=digest(skill_path)))
     status = {"status":"running", "datasets":{}}
     save(out / "status.json", status)
     for ds in ("hotpotqa", "novel", "medical"):
@@ -70,12 +81,13 @@ def main():
             with (out / f"{ds}.log").open("w", encoding="utf-8") as log:
                 # Static registry validation is explicitly separate from live outcomes.
                 subprocess.run([sys.executable, str(repo / "scripts/calibrate_interface.py"),
-                    "--substrate", str(substrate), "--output", str(out / f"{ds}_static_calibration.json")],
+                    "--substrate", str(substrate), "--skill-version", a.skill_version,
+                    "--output", str(out / f"{ds}_static_calibration.json")],
                     cwd=repo, stdout=log, stderr=subprocess.STDOUT, check=True)
                 cmd = [sys.executable, "-u", str(repo / "scripts/run_interface_study.py"),
                     "--dataset", ds, "--substrate", str(substrate), "--questions", str(questions),
                     "--source-manifest", str(source_manifest), "--config", str(config_path),
-                    "--skill", str(repo / "skills/interface_study.md"), "--output", str(out / ds),
+                    "--skill-version", a.skill_version, "--output", str(out / ds),
                     "--seed", "20260805", "--limit", "1", "--conditions", "C0", "A0", "C2", "C3", "C1", "A1", "C5", "C4"]
                 save(out / f"{ds}_command.json", cmd)
                 subprocess.run(cmd, cwd=repo, stdout=log, stderr=subprocess.STDOUT, check=True)
