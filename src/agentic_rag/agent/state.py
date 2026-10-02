@@ -5,13 +5,23 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agentic_rag.agent.models import Assessment, EpisodeState, Observation, SentencePreview
+from agentic_rag.agent.models import (
+    Assessment,
+    EpisodeState,
+    Observation,
+    ObservationStatus,
+    SearchAction,
+    SentencePreview,
+)
+from agentic_rag.agent.entity_visibility import EntityVisibilityPolicy
+from agentic_rag.agent.interface import InterfaceContract
 from agentic_rag.substrate.storage import Substrate
 
 _VISIBILITY_FIELDS = (
     "visible_entity_ids",
     "visible_sentence_ids",
     "visible_chunk_ids",
+    "visible_passage_ids",
     "eligible_sentence_ids",
     "read_chunk_ids",
 )
@@ -21,8 +31,12 @@ _SUMMARY_LIMIT = 160
 class StateUpdater:
     """Pure transition logic used only by the episode State Manager."""
 
-    def __init__(self, substrate: Substrate) -> None:
+    def __init__(
+        self, substrate: Substrate, interface_contract: InterfaceContract | None = None
+    ) -> None:
         self.substrate = substrate
+        self.interface_contract = interface_contract
+        self.entity_visibility_policy = EntityVisibilityPolicy(substrate)
 
     def apply(
         self,
@@ -31,14 +45,17 @@ class StateUpdater:
         assessment: Assessment | None,
         observation: Observation,
         action_signature: str | None,
+        scope_id: str | None = None,
         commit_assessment: bool = True,
         consume_step: bool = True,
+        consume_policy_attempt: bool = True,
     ) -> EpisodeState:
         updated = state.model_copy(deep=True)
-        updated.policy_attempts += 1
-        updated.remaining_policy_attempt_budget = max(
-            0, updated.remaining_policy_attempt_budget - 1
-        )
+        if consume_policy_attempt:
+            updated.policy_attempts += 1
+            updated.remaining_policy_attempt_budget = max(
+                0, updated.remaining_policy_attempt_budget - 1
+            )
         if consume_step:
             updated.step += 1
             updated.remaining_step_budget = max(0, updated.remaining_step_budget - 1)
@@ -73,19 +90,115 @@ class StateUpdater:
                     known.add(node_id)
                     updated.semantic_memory_node_ids.append(node_id)
 
+            # Keep source memory separate from the semantic visibility sets.
+            # Passage text is the canonical unit when a complete passage was
+            # returned; nested sentence rows must not create duplicate phase
+            # units. Sentence retrieval remains sentence-granular.
+            returned_passages = set(delta.get("visible_passage_ids", []))
+            returned_sentences = set(delta.get("eligible_sentence_ids", []))
+            source_keys = {f"passage:{chunk_id}" for chunk_id in returned_passages}
+            for sentence_id in returned_sentences:
+                sentence = self.substrate.sentence_by_id.get(sentence_id)
+                if sentence is not None and sentence.chunk_id in returned_passages:
+                    continue
+                source_keys.add(f"sentence:{sentence_id}")
+            if source_keys:
+                updated.current_phase_source_keys.update(source_keys)
+                updated.all_source_keys.update(source_keys)
+                observation.metadata["returned_source_keys"] = sorted(source_keys)
+                observation.metadata["source_keys"] = sorted(source_keys - state.all_source_keys)
+
         if action_signature is not None:
             updated.action_signatures.add(action_signature)
+
+        if observation.status is ObservationStatus.DUPLICATE_ACTION:
+            updated.consecutive_duplicate_actions += 1
+            if updated.consecutive_duplicate_actions >= 3:
+                updated.recovery_mode = True
+                updated.interface_cannot_express_new_route = True
+                updated.recovery_trigger_action = observation.metadata.get(
+                    "blocked_call"
+                ) or observation.message
+                if action_signature is not None:
+                    updated.blocked_action_signatures.add(action_signature)
+                observation.metadata["interface_cannot_express_new_route"] = True
+                observation.metadata["recovery_mode"] = True
+                observation.metadata["recovery_triggered"] = True
+                observation.metadata["blocked_action_signature"] = action_signature
+                observation.metadata["consecutive_duplicate_actions"] = (
+                    updated.consecutive_duplicate_actions
+                )
+        else:
+            updated.consecutive_duplicate_actions = 0
+
+            # A valid, non-duplicate action exits recovery.  The blocked
+            # signature remains in state so that the same call can never be
+            # executed again during this episode.
+            if (
+                action_signature is not None
+                and observation.status is ObservationStatus.OK
+            ):
+                updated.recovery_mode = False
+                updated.interface_cannot_express_new_route = False
+                updated.recovery_trigger_action = None
+
+        # Keep a small, deterministic signal for the action-space builder.
+        # A submitted SearchAction with an explicitly unresolved assessment
+        # contributes to the consecutive count, including a duplicate or
+        # other state rejection.  Counting the rejected attempt is important:
+        # otherwise ``search -> duplicate search`` could leave the same global
+        # operation available forever.  A different action, or a closed/absent
+        # assessment, breaks the run.
+        if isinstance(observation.action, SearchAction):
+            if (
+                assessment is not None
+                and assessment.missing_information
+            ):
+                updated.consecutive_unresolved_searches += 1
+            else:
+                updated.consecutive_unresolved_searches = 0
+        elif observation.action is not None:
+            updated.consecutive_unresolved_searches = 0
+
         if commit_assessment and assessment is not None:
-            updated.last_assessment = assessment.model_copy(deep=True)
+            # ``resolved_gaps`` is cumulative state.  The provider response is
+            # kept verbatim in the trajectory, but the state used for the next
+            # prompt unions earlier resolved items so one imperfect response
+            # cannot make a solved gap look unresolved again.  The current
+            # ``missing_information`` list is intentionally replaced.
+            prior_resolved = (
+                list(updated.last_assessment.resolved_gaps)
+                if updated.last_assessment is not None
+                else []
+            )
+            resolved = list(prior_resolved)
+            for item in assessment.resolved_gaps:
+                if item not in resolved:
+                    resolved.append(item)
+            updated.last_assessment = Assessment(
+                resolved_gaps=resolved,
+                missing_information=list(assessment.missing_information),
+            )
         updated.newest_observation = observation
-        self._update_references_and_previews(updated, observation)
+        self._update_references_and_previews(updated, observation, scope_id=scope_id)
         return updated
 
     def _update_references_and_previews(
-        self, state: EpisodeState, observation: Observation
+        self, state: EpisodeState, observation: Observation, *, scope_id: str | None
     ) -> None:
         registry = state.reference_registry
-        for entity_id in sorted(state.visible_entity_ids):
+        entity_ids = state.visible_entity_ids
+        interface_contract = getattr(self, "interface_contract", None)
+        if interface_contract is not None:
+            if not interface_contract.entity_annotation:
+                entity_ids = set()
+            elif scope_id is not None:
+                landing = interface_contract.entity_continuation.value
+                entity_ids, _ = self.entity_visibility_policy.evaluate(
+                    state, scope_id,
+                    landing=landing if landing in {"chunk", "sentence"} else None,
+                )
+        for entity_id in sorted(entity_ids):
             registry.register(entity_id, "ENTITY")
         for chunk_id in sorted(state.visible_chunk_ids):
             registry.register(chunk_id, "CHUNK")

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from agentic_rag.agent.expansion import ExpansionEngine
+from agentic_rag.agent.interface import InterfaceContract
+from agentic_rag.agent.observation_projection import ObservationProjector
 from agentic_rag.agent.models import (
     EpisodeState,
     Observation,
@@ -39,10 +42,20 @@ class ActionRouter:
         substrate: Substrate,
         retriever: Retriever,
         expansion_engine: ExpansionEngine,
+        interface_contract: InterfaceContract | None = None,
     ) -> None:
         self.substrate = substrate
         self.retriever = retriever
         self.expansion_engine = expansion_engine
+        self.interface_contract = interface_contract
+        self.projector = ObservationProjector(
+            substrate,
+            expose_entities=(
+                interface_contract.entity_annotation
+                if interface_contract is not None
+                else False
+            ),
+        )
 
     def execute(
         self,
@@ -53,7 +66,15 @@ class ActionRouter:
         scope_id: str,
         action_id: str,
     ) -> Observation:
+        started = time.perf_counter()
         if isinstance(action, SearchAction):
+            if self.interface_contract is not None and not self.interface_contract.allows_search(
+                action.method, action.target
+            ):
+                raise NodeNotFoundError(
+                    f"SEARCH pair is not enabled by {self.interface_contract.name}: "
+                    f"{action.method.value}->{action.target.value}"
+                )
             hits = self.retriever.search(
                 query=action.query,
                 method=action.method.value,
@@ -70,17 +91,39 @@ class ActionRouter:
                 "query_used": action.query,
             }
         elif isinstance(action, ResolvedExpandAction):
+            if self.interface_contract is not None and not self.interface_contract.allows_expansion(action.kind):
+                raise NodeNotFoundError(
+                    f"EXPAND kind is not enabled by {self.interface_contract.name}: {action.kind.value}"
+                )
+            excluded_target_ids = (
+                frozenset(state.visible_passage_ids)
+                if action.kind.value == "ENTITY_MENTIONED_IN_CHUNK"
+                else frozenset(state.visible_sentence_ids)
+                if action.kind.value == "ENTITY_MENTIONED_IN_SENTENCE"
+                else frozenset()
+            )
             expanded = self.expansion_engine.expand(
-                action, question, scope_id
+                action, question, scope_id,
+                excluded_target_ids=excluded_target_ids,
             )
             raw_results = _json_results(expanded.results)
             metadata = {
                 "kind": action.kind.value,
                 "query_used": expanded.query_used,
+                "query_source": (
+                    "original_question"
+                    if action.kind.value in {
+                        "ENTITY_MENTIONED_IN_CHUNK",
+                        "ENTITY_MENTIONED_IN_SENTENCE",
+                    }
+                    else "action_query_or_original_question"
+                ),
                 "source_degree": expanded.source_degree,
                 "candidate_count_before_truncation": (
                     expanded.candidate_count_before_truncation
                 ),
+                "previously_visible_target_count": len(excluded_target_ids),
+                "unseen_candidate_count": expanded.candidate_count,
                 "internal_request": _json_value(expanded.internal_request),
             }
         elif isinstance(action, ResolvedReadAction):
@@ -91,6 +134,10 @@ class ActionRouter:
                 )
             read = self.substrate.read_chunk(action.chunk_id)
             raw_result = read.model_dump(mode="json")
+            projected_read, projected_delta, projection_audit = self.projector.project(
+                [raw_result], action_type="READ"
+            )
+            raw_result = projected_read[0]
             result_tokens = _count_result_tokens(raw_result)
             if result_tokens > state.remaining_retrieved_token_budget:
                 return Observation(
@@ -105,7 +152,9 @@ class ActionRouter:
                     metadata={"retrieved_budget_exhausted": True},
                 )
             delta = {
+                **projected_delta,
                 "visible_chunk_ids": [read.chunk_id],
+                "visible_passage_ids": [read.chunk_id],
                 "read_chunk_ids": [read.chunk_id],
                 "visible_sentence_ids": [
                     item.sentence_id for item in read.sentences
@@ -123,7 +172,11 @@ class ActionRouter:
                 retrieved_tokens=result_tokens,
                 novel_node_ids=novel,
                 already_seen_node_ids=already,
-                metadata={"visibility_delta": delta},
+                metadata={
+                    "visibility_delta": delta,
+                    "wall_time_ms": (time.perf_counter() - started) * 1000,
+                    **projection_audit,
+                },
             )
         else:
             raise TypeError(
@@ -149,10 +202,19 @@ class ActionRouter:
                 },
             )
 
-        delta = _visibility_delta(kept)
+        kept, visibility_delta, projection_audit = self.projector.project(
+            kept, action_type=action.type,
+        )
+        metadata["candidate_count"] = len(raw_results)
+        # The projector derives this delta solely from the kept, displayed
+        # results. Re-scanning nested result payloads does not add a visibility
+        # check and can be unsafe for large benchmark passages.
+        delta = visibility_delta
         novel, already = _novelty(delta, state)
         metadata["visibility_delta"] = delta
         metadata["truncated_by_retrieved_token_budget"] = truncated
+        metadata["wall_time_ms"] = (time.perf_counter() - started) * 1000
+        metadata.update(projection_audit)
         return Observation(
             action_id=action_id,
             status=ObservationStatus.OK,
@@ -206,6 +268,7 @@ def _count_result_tokens(value: Any, *, key: str | None = None) -> int:
         return sum(
             _count_result_tokens(child, key=str(child_key))
             for child_key, child in value.items()
+            if not (child_key == "sentences" and isinstance(value.get("text"), str))
         )
     if isinstance(value, list):
         return sum(_count_result_tokens(child, key=key) for child in value)
@@ -218,6 +281,7 @@ def _visibility_delta(
     visible_entities: set[str] = set()
     visible_sentences: set[str] = set()
     visible_chunks: set[str] = set()
+    visible_passages: set[str] = set()
     eligible_sentences: set[str] = set()
 
     for result in results:
@@ -229,10 +293,17 @@ def _visibility_delta(
             eligible_sentences=eligible_sentences,
             navigation_only=bool(result.get("navigation_only", False)),
         )
+        chunk_id = result.get("chunk_id") or result.get("parent_chunk_id")
+        if (
+            result.get("target") == "CHUNK"
+            and isinstance(chunk_id, str)
+        ):
+            visible_passages.add(chunk_id)
     return {
         "visible_entity_ids": sorted(visible_entities),
         "visible_sentence_ids": sorted(visible_sentences),
         "visible_chunk_ids": sorted(visible_chunks),
+        "visible_passage_ids": sorted(visible_passages),
         "eligible_sentence_ids": sorted(eligible_sentences),
         "read_chunk_ids": [],
     }

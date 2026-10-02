@@ -3,12 +3,18 @@
 from agentic_rag.agent.config import (
     AgentConfig,
     OllamaPolicyConfig,
-    OpenAIPolicyConfig,
     PolicyConfig,
 )
 from agentic_rag.agent.context import BuiltPolicyContext, PolicyContextBuilder
 from agentic_rag.agent.controller import AgentController
 from agentic_rag.agent.harness import AgentHarness
+from agentic_rag.agent.interface import (
+    EntityContinuation,
+    InterfaceContract,
+    get_interface_contract,
+    compile_interface_contract,
+)
+from agentic_rag.agent.observation_projection import ObservationProjector
 from agentic_rag.agent.models import (
     AgentAction,
     Assessment,
@@ -69,6 +75,7 @@ __all__ = [
     "AgentConfig",
     "AgentController",
     "AgentHarness",
+    "EntityContinuation",
     "Assessment",
     "BuiltPolicyContext",
     "ChunkMemoryItem",
@@ -90,7 +97,6 @@ __all__ = [
     "ObservationOutcome",
     "ObservationStatus",
     "OllamaPolicyConfig",
-    "OpenAIPolicyConfig",
     "PolicyClient",
     "PolicyConfig",
     "PolicyConfigurationError",
@@ -121,6 +127,10 @@ __all__ = [
     "StepRecord",
     "TerminationReason",
     "Usage",
+    "InterfaceContract",
+    "ObservationProjector",
+    "get_interface_contract",
+    "compile_interface_contract",
     "ValidationStatus",
     "policy_decision_model",
     "resolve_decision",

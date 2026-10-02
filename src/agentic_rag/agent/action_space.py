@@ -16,6 +16,7 @@ from agentic_rag.agent.models import (
     SearchMethod,
     SearchTarget,
 )
+from agentic_rag.agent.interface import InterfaceContract
 from agentic_rag.agent.references import expected_expansion_source
 
 
@@ -32,8 +33,17 @@ _SEARCH_OPTION_ORDER = (
 class AvailableActionSpaceBuilder:
     """Compute legal structural variants without choosing a strategy."""
 
-    def __init__(self, enabled_expansions: Sequence[ExpansionKind]) -> None:
-        self.enabled_expansions = tuple(enabled_expansions)
+    def __init__(
+        self,
+        enabled_expansions: Sequence[ExpansionKind],
+        interface_contract: InterfaceContract | None = None,
+    ) -> None:
+        self.interface_contract = interface_contract
+        self.enabled_expansions = tuple(
+            interface_contract.enabled_expansions
+            if interface_contract is not None
+            else enabled_expansions
+        )
 
     def build(
         self,
@@ -47,11 +57,26 @@ class AvailableActionSpaceBuilder:
             for ref, item in references.typed_refs.items()
             if item.can_use_as_evidence
         )
-        if mode is ActionSpaceMode.BUDGET_FINALIZE:
+        if mode in {ActionSpaceMode.BUDGET_FINALIZE, ActionSpaceMode.ANSWER}:
             return AvailableActionSpace(
                 mode=mode,
                 finish_evidence_refs=tuple(evidence_refs),
+                # Retrieval is closed at this point. The one finalize call
+                # must still be able to return an answer when no evidence was
+                # found, so an empty evidence list is intentionally legal.
+                finish_available=True,
             )
+
+        # During normal retrieval, FINISH is not an option before any source
+        # is visible. This prevents an abstention from consuming a policy turn
+        # when the agent has not attempted retrieval yet.
+        # With information-gap assessment enabled, FINISH is exposed only
+        # after the previous valid retrieval assessment reported no remaining
+        # gap. The controller then switches to ANSWER mode, where FINISH is
+        # the sole operation and receives the complete source memory.
+        finish_available = bool(evidence_refs) and (
+            state.last_assessment is None or not state.last_assessment.missing_information
+        ) and not state.recovery_mode
 
         retrieval_open = (
             state.remaining_step_budget > 0
@@ -62,11 +87,18 @@ class AvailableActionSpaceBuilder:
             return AvailableActionSpace(
                 mode=mode,
                 finish_evidence_refs=tuple(evidence_refs),
+                finish_available=finish_available,
             )
 
+        pairs = (
+            self.interface_contract.legal_search_pairs
+            if self.interface_contract is not None
+            else frozenset(_SEARCH_OPTION_ORDER)
+        )
         search_options = tuple(
             SearchActionOption(method=method, target=target)
             for method, target in _SEARCH_OPTION_ORDER
+            if (method, target) in pairs
         )
         expand_options: list[ExpandActionOption] = []
         for kind in self.enabled_expansions:
@@ -91,8 +123,13 @@ class AvailableActionSpaceBuilder:
                 )
             )
 
-        read_refs = _sorted_refs(
-            ref for ref, item in references.typed_refs.items() if item.can_read
+        read_refs = (
+            _sorted_refs(
+                ref for ref, item in references.typed_refs.items() if item.can_read
+            )
+            if self.interface_contract is None
+            or self.interface_contract.expose_read_action
+            else []
         )
         return AvailableActionSpace(
             mode=mode,
@@ -100,6 +137,7 @@ class AvailableActionSpaceBuilder:
             expand_options=tuple(expand_options),
             read_refs=tuple(read_refs),
             finish_evidence_refs=tuple(evidence_refs),
+            finish_available=finish_available,
         )
 
 

@@ -1,0 +1,13 @@
+corpus_id: hotpotqa-interface-study-v1-qwen3-embedding
+split: dev
+dataset: hotpotqa
+source_format: hotpotqa_global_provenance
+benchmark_scope_id: hotpotqa:benchmark_exact:dev
+validate_benchmark_profile: true
+max_chunk_tokens: 256
+spacy_model: en_core_web_sm
+enable_abbreviations: true
+embedding_model: Qwen/Qwen3-Embedding-0.6B
+embedding_backend: sentence_transformers
+embedding_batch_size: 32
+embedding_device: cpu

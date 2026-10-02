@@ -1,0 +1,16 @@
+agent:
+  max_steps: 15
+  max_policy_attempts: 15
+  max_retrieved_tokens: 12000
+  episode_timeout_seconds: 3600
+  interface: C4
+  policy:
+    provider: openai_compatible
+    model: Qwen/Qwen3.8-27B-FP8
+    base_url: http://127.0.0.1:8000/v1
+    api_key: EMPTY
+    temperature: 0
+    timeout_seconds: 600
+    max_retries: 2
+    num_ctx: 32768
+    max_output_tokens: 2048

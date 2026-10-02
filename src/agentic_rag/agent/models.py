@@ -66,10 +66,26 @@ class ExpansionDirection(StrEnum):
 
 
 class Assessment(AgentModel):
-    """The Policy's semantic judgment, deliberately free of references."""
+    """The Policy's information-gap judgment, deliberately free of references.
 
-    supported_facts: list[str] = Field(default_factory=list, max_length=5)
-    missing_information: list[str] = Field(default_factory=list, max_length=3)
+    This is a short, model-generated planning aid.  It is not source evidence
+    and must never be used as an evidence reference by the evaluator.
+    """
+
+    # Episode-level working record, not source evidence. Keep concrete
+    # entities and qualifiers in resolved items so later hops have a precise
+    # anchor (for example, "identify the town ... — Mary Town").
+    resolved_gaps: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    # The current list is replaced on every turn. There is no arbitrary
+    # item-count cap; the provider output budget is the operational bound.
+    missing_information: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+
+    @field_validator("resolved_gaps", "missing_information")
+    @classmethod
+    def gaps_must_not_be_blank(cls, values: list[str]) -> list[str]:
+        if any(not item.strip() for item in values):
+            raise ValueError("information gaps must contain non-whitespace characters")
+        return values
 
 
 _TYPED_REF_PATTERN = r"^[ESC][1-9][0-9]*$"
@@ -148,7 +164,11 @@ class ReadAction(AgentModel):
 class FinishAction(AgentModel):
     type: Literal["FINISH"] = "FINISH"
     answer: str = Field(min_length=1)
-    evidence_refs: list[TypedReference] = Field(min_length=1, max_length=20)
+    # Evidence is collected by the harness from the source units actually
+    # shown in answer mode.  The field is retained as an empty compatibility
+    # field for scripted/legacy callers, but is no longer exposed in the
+    # current tool schema or used to determine episode evidence.
+    evidence_refs: list[TypedReference] = Field(default_factory=list, max_length=20)
 
     @field_validator("answer")
     @classmethod
@@ -179,7 +199,7 @@ AgentAction = Annotated[
 
 
 class PolicyDecision(AgentModel):
-    assessment: Assessment
+    assessment: Assessment | None = None
     action: AgentAction
 
 
@@ -213,7 +233,7 @@ class ResolvedReadAction(AgentModel):
 class ResolvedFinishAction(AgentModel):
     type: Literal["FINISH"] = "FINISH"
     answer: str = Field(min_length=1)
-    evidence_refs: list[EvidenceRef] = Field(min_length=1, max_length=20)
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list, max_length=20)
 
 
 ResolvedAction = Annotated[
@@ -223,7 +243,7 @@ ResolvedAction = Annotated[
 
 
 class ResolvedDecision(AgentModel):
-    assessment: Assessment
+    assessment: Assessment | None = None
     action: ResolvedAction
 
 
@@ -355,9 +375,38 @@ class ReferenceRegistry(AgentModel):
 class EpisodeState(AgentModel):
     step: int = Field(default=0, ge=0)
     policy_attempts: int = Field(default=0, ge=0)
+    # Retrieval is organised into source-memory phases.  The phase counter
+    # does not reset the episode budget or trajectory; it only identifies the
+    # current compact-context window.
+    phase_index: int = Field(default=0, ge=0)
+    current_phase_source_keys: set[str] = Field(default_factory=set)
+    all_source_keys: set[str] = Field(default_factory=set)
+    answer_stage_pending: bool = False
+    # Number of consecutive exact retrieval submissions rejected by the
+    # validator. This is a safety valve for interfaces that cannot express
+    # another useful route for the current information gap.
+    consecutive_duplicate_actions: int = Field(default=0, ge=0)
+    interface_cannot_express_new_route: bool = False
+    # A temporary, one-turn recovery overlay is activated after the same
+    # retrieval call has been rejected three consecutive times.  It changes
+    # the next decision instruction, not the underlying research task.
+    recovery_mode: bool = False
+    recovery_trigger_action: str | None = None
+    blocked_action_signatures: set[str] = Field(default_factory=set)
+    # Count consecutive submitted global searches while the latest
+    # assessment still reports an information gap.  The interface
+    # uses this only as a safety valve: after two such searches, any
+    # available entity-navigation route is exposed on its own for the next
+    # normal retrieval turn.  Conditions without entity navigation keep
+    # their ordinary search affordances.
+    consecutive_unresolved_searches: int = Field(default=0, ge=0)
     visible_entity_ids: set[str] = Field(default_factory=set)
     visible_sentence_ids: set[str] = Field(default_factory=set)
     visible_chunk_ids: set[str] = Field(default_factory=set)
+    # Chunks that were actually returned as complete passages.  A sentence
+    # result still records its parent chunk for provenance, but that parent is
+    # not exposed as a passage unless it was itself returned.
+    visible_passage_ids: set[str] = Field(default_factory=set)
     eligible_sentence_ids: set[str] = Field(default_factory=set)
     read_chunk_ids: set[str] = Field(default_factory=set)
     action_signatures: set[str] = Field(default_factory=set)
@@ -385,15 +434,39 @@ class EpisodeState(AgentModel):
         )
 
     @field_serializer(
+        "current_phase_source_keys",
+        "all_source_keys",
         "visible_entity_ids",
         "visible_sentence_ids",
         "visible_chunk_ids",
+        "visible_passage_ids",
         "eligible_sentence_ids",
         "read_chunk_ids",
         "action_signatures",
+        "blocked_action_signatures",
     )
     def serialize_sets(self, values: set[str]) -> list[str]:
         return sorted(values)
+
+    def begin_new_phase(self, *, answer_stage_pending: bool = False) -> "EpisodeState":
+        """Return a state copy with a fresh Policy-visible source window.
+
+        The complete source memory, trajectory, budgets, action signatures,
+        reference registry, and visible entity state are intentionally kept.
+        Only the compact-context source window is cleared.  Keeping this
+        operation on the state model gives the controller one unambiguous,
+        serializable phase transition primitive.
+        """
+
+        updated = self.model_copy(deep=True)
+        updated.phase_index += 1
+        updated.current_phase_source_keys.clear()
+        # A new information gap starts a fresh search streak.  Carrying the
+        # previous phase's count would force an entity hop before the new gap
+        # has had any global-search attempt.
+        updated.consecutive_unresolved_searches = 0
+        updated.answer_stage_pending = answer_stage_pending
+        return updated
 
 
 class ValidationStatus(StrEnum):
@@ -426,6 +499,7 @@ class ContextReferenceMap(AgentModel):
 
 class ActionSpaceMode(StrEnum):
     NORMAL = "NORMAL"
+    ANSWER = "ANSWER"
     BUDGET_FINALIZE = "BUDGET_FINALIZE"
 
 
@@ -454,6 +528,7 @@ class AvailableActionSpace(AgentModel):
     expand_options: tuple[ExpandActionOption, ...] = ()
     read_refs: tuple[TypedReference, ...] = ()
     finish_evidence_refs: tuple[TypedReference, ...] = ()
+    finish_available: bool = False
 
     @property
     def has_actions(self) -> bool:
@@ -461,7 +536,7 @@ class AvailableActionSpace(AgentModel):
             self.search_options
             or self.expand_options
             or self.read_refs
-            or self.finish_evidence_refs
+            or self.finish_available
         )
 
 
@@ -507,6 +582,11 @@ SemanticMemoryItem = Annotated[
 class PolicyStateView(AgentModel):
     step: int = Field(ge=0)
     policy_attempts: int = Field(ge=0)
+    consecutive_unresolved_searches: int = Field(default=0, ge=0)
+    consecutive_duplicate_actions: int = Field(default=0, ge=0)
+    interface_cannot_express_new_route: bool = False
+    recovery_mode: bool = False
+    recovery_trigger_action: str | None = None
     last_assessment: Assessment | None = None
     semantic_memory: list[SemanticMemoryItem] = Field(default_factory=list)
     latest_attempt: dict[str, Any] | None = None
@@ -517,14 +597,66 @@ class PolicyStateView(AgentModel):
 class PolicyView(AgentModel):
     instruction: Literal["Produce the next PolicyDecision."] = "Produce the next PolicyDecision."
     policy_state: PolicyStateView
+    context_audit: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolFunctionCall(AgentModel):
+    name: str
+    arguments: dict[str, Any] | str
+
+
+class ToolCall(AgentModel):
+    id: str = Field(min_length=1)
+    type: Literal["function"] = "function"
+    function: ToolFunctionCall
 
 
 class Message(AgentModel):
-    role: Literal["system", "user", "assistant"]
-    content: str
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str | None = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
+    tool_name: str | None = None
 
-    def as_openai_input(self) -> dict[str, str]:
-        return {"role": self.role, "content": self.content}
+    def as_openai_input(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "role": self.role,
+            "content": None if self.tool_calls and not self.content else self.content,
+        }
+        if self.tool_calls:
+            payload["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": call.type,
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": (
+                            call.function.arguments
+                            if isinstance(call.function.arguments, str)
+                            else json.dumps(call.function.arguments, ensure_ascii=False, separators=(",", ":"))
+                        ),
+                    },
+                }
+                for call in self.tool_calls
+            ]
+        if self.tool_call_id is not None:
+            payload["tool_call_id"] = self.tool_call_id
+        return payload
+
+    def as_ollama_input(self) -> dict[str, Any]:
+        payload = self.as_openai_input()
+        if self.tool_calls and not self.content:
+            payload.pop("content", None)
+        else:
+            payload["content"] = self.content or ""
+        payload.pop("tool_call_id", None)
+        if self.tool_name:
+            payload["tool_name"] = self.tool_name
+        for call in payload.get("tool_calls", []):
+            arguments = call["function"]["arguments"]
+            if isinstance(arguments, str):
+                call["function"]["arguments"] = json.loads(arguments)
+        return payload
 
 
 class StepRecord(AgentModel):
@@ -546,6 +678,15 @@ class StepRecord(AgentModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    decision_schema: dict[str, Any] = Field(default_factory=dict)
+    tool_definitions: list[dict[str, Any]] = Field(default_factory=list)
+    messages: list[Message] = Field(default_factory=list)
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
+    visible_source_spans: list[dict[str, Any]] = Field(default_factory=list)
+    visibility_contract: str = "policy-input-v2"
+    telemetry: dict[str, Any] = Field(default_factory=dict)
+    context_audit: dict[str, Any] = Field(default_factory=dict)
+    assessment_status: Literal["provided", "not_requested", "unavailable"] = "unavailable"
 
 
 class TerminationReason(StrEnum):
@@ -562,6 +703,14 @@ class EpisodeResult(AgentModel):
     termination_reason: TerminationReason
     answer: str | None = None
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    # All source references actually displayed to the model in the final
+    # answer-stage context, deduplicated by source unit.  This is the primary
+    # evidence-acquisition record; it is generated by the harness, not chosen
+    # by the model.
+    visible_source_refs: list[EvidenceRef] = Field(default_factory=list)
+    evidence_refs_source: Literal["model_selected", "programmatic_visible_source_refs"] = (
+        "model_selected"
+    )
     resolved_evidence: list[ResolvedEvidence] = Field(default_factory=list)
     trajectory: list[StepRecord] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)

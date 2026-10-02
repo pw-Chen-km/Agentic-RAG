@@ -131,6 +131,18 @@ def _normalize_supporting_facts(raw: object) -> list[tuple[str, int]]:
     raise InputFormatError("supporting_facts must be a list or columnar object")
 
 
+def _normalize_evidence(raw: object) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        # GraphRAG-Bench stores one or more evidence statements as text.
+        parts = [item.strip() for item in raw.replace("\r", "").split("\n") if item.strip()]
+        return tuple(parts or ([raw.strip()] if raw.strip() else []))
+    if isinstance(raw, (list, tuple)):
+        return tuple(str(item).strip() for item in raw if str(item).strip())
+    return (str(raw).strip(),) if str(raw).strip() else ()
+
+
 class HotpotQAAdapter:
     """Parse HotpotQA-style query-scoped contexts."""
 
@@ -632,6 +644,9 @@ class BenchmarkExactAdapter:
                         None if self._legacy_question_ids else source_question_id
                     ),
                     source_row_index=(None if self._legacy_question_ids else row_index),
+                    evidence=_normalize_evidence(row.get("evidence")),
+                    evidence_triple=(str(row["evidence_triple"]) if row.get("evidence_triple") is not None else None),
+                    evidence_relations=_normalize_evidence(row.get("evidence_relations")),
                 )
             )
 

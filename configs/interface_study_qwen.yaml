@@ -1,0 +1,20 @@
+agent:
+  interface: C0
+  max_steps: 15
+  max_policy_attempts: 15
+  max_retrieved_tokens: 12000
+  episode_timeout_seconds: 3600
+  show_available_action_options: true
+  use_state_conditioned_schema: true
+  protocol: native_tool_calling
+policy:
+  provider: ollama
+  model: qwen3.5:4b
+  host: http://localhost:11434
+  temperature: 0
+  think: false
+  timeout_seconds: 600
+  num_ctx: 32768
+  max_output_tokens: 2048
+  seed: 20260805
+  max_retries: 2

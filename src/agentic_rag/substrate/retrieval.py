@@ -12,7 +12,7 @@ import numpy as np
 from agentic_rag.substrate.bm25_index import BM25Index
 from agentic_rag.substrate.embedding import (
     EmbeddingBackend,
-    SentenceTransformerEmbeddingBackend,
+    create_embedding_backend,
     load_dense_index,
     normalize_embeddings,
 )
@@ -26,9 +26,10 @@ from agentic_rag.substrate.models import (
     EntityHit,
     SearchHit,
     SentenceHit,
-    SentencePreview,
+    SentenceResult,
 )
 from agentic_rag.substrate.storage import Substrate
+from agentic_rag.substrate.ranking import RankingService
 from agentic_rag.substrate.text import normalize_entity_name
 
 Method = Literal["LEXICAL", "BM25", "DENSE"]
@@ -50,11 +51,15 @@ class Retriever:
         substrate: Substrate | str | Path,
         *,
         embedding_backend: EmbeddingBackend | None = None,
+        ranking_service: RankingService | None = None,
     ) -> None:
         self.substrate = (
             substrate if isinstance(substrate, Substrate) else Substrate.open(substrate)
         )
         self._embedding_backend = embedding_backend
+        self.ranking_service = ranking_service or RankingService(
+            self.substrate, embedding_backend=embedding_backend
+        )
         self._bm25: dict[str, BM25Index] = {}
         self._dense: dict[str, tuple[list[str], np.ndarray]] = {}
         lookup_path = (
@@ -146,22 +151,15 @@ class Retriever:
     def _search_dense(
         self, query: str, target: Target, scope_id: str, top_k: int
     ) -> list[SearchHit]:
-        backend = self._get_embedding_backend()
-        query_embedding = normalize_embeddings(backend.encode([query]))[0]
-        ids, matrix = self._get_dense(target.lower())
-        if matrix.shape[1] != query_embedding.shape[0]:
-            raise AgenticRAGError(
-                f"Query embedding dimension {query_embedding.shape[0]} does not "
-                f"match index dimension {matrix.shape[1]}"
-            )
-        scores = np.asarray(matrix @ query_embedding, dtype=np.float32)
         if target == "ENTITY":
             allowed = self.substrate.entity_ids_by_scope[scope_id]
         elif target == "SENTENCE":
             allowed = self.substrate.sentence_ids_by_scope[scope_id]
         else:
             allowed = self.substrate.chunk_ids_by_scope[scope_id]
-        ranked = self._rank(ids, scores, allowed, top_k)
+        ranked = self.ranking_service.rank(
+            query, target=target.lower(), candidate_ids=allowed, top_k=top_k
+        )
         if target == "ENTITY":
             return [
                 self._entity_hit(node_id, score, scope_id)
@@ -171,12 +169,10 @@ class Retriever:
             return [
                 self._sentence_hit(node_id, score) for node_id, score in ranked
             ]
-        sentence_ids, sentence_matrix = self._get_dense("sentence")
-        sentence_scores_array = np.asarray(
-            sentence_matrix @ query_embedding, dtype=np.float32
-        )
-        sentence_scores = dict(
-            zip(sentence_ids, sentence_scores_array, strict=True)
+        sentence_scores = self.ranking_service.score(
+            query,
+            target="sentence",
+            candidate_ids=self.substrate.sentence_ids_by_scope[scope_id],
         )
         return [
             self._chunk_hit(node_id, score, sentence_scores)
@@ -217,8 +213,10 @@ class Retriever:
 
     def _get_embedding_backend(self) -> EmbeddingBackend:
         if self._embedding_backend is None:
-            self._embedding_backend = SentenceTransformerEmbeddingBackend(
-                self.substrate.manifest.embedding_model.name
+            self._embedding_backend = create_embedding_backend(
+                self.substrate.manifest.embedding_model.name,
+                backend=self.substrate.manifest.embedding_backend,
+                host=self.substrate.manifest.embedding_host,
             )
         return self._embedding_backend
 
@@ -240,23 +238,23 @@ class Retriever:
     ) -> ChunkHit:
         chunk = self.substrate.chunk_by_id[chunk_id]
         document = self.substrate.document_by_id[chunk.doc_id]
-        contained = self.substrate.sentences_by_chunk.get(chunk_id, [])
-        ranked_sentences = sorted(
-            contained,
-            key=lambda item: (
-                -float(sentence_scores.get(item.sentence_id, 0.0)),
-                item.sentence_id,
-            ),
-        )[:2]
+        sentences = [
+            SentenceResult(
+                sentence_id=item.sentence_id,
+                text=item.text,
+                parent_chunk_id=chunk.chunk_id,
+                document_id=document.doc_id,
+                title=document.title,
+            )
+            for item in self.substrate.sentences_by_chunk.get(chunk_id, [])
+        ]
         return ChunkHit(
             chunk_id=chunk_id,
             score=score,
             doc_id=document.doc_id,
             title=document.title,
-            previews=[
-                SentencePreview(sentence_id=item.sentence_id, text=item.text)
-                for item in ranked_sentences
-            ],
+            text=chunk.text,
+            sentences=sentences,
         )
 
     def _entity_hit(

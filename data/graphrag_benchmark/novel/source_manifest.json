@@ -1,0 +1,37 @@
+{
+  "chunking": {
+    "max_characters": 5000,
+    "method": "deterministic whitespace chunks"
+  },
+  "counts": {
+    "chunks": 972,
+    "corpus_documents": 20,
+    "questions": 2010
+  },
+  "dataset": "novel",
+  "downloaded_at_utc": "2026-09-14T17:34:33.385241+00:00",
+  "files": {
+    "chunks.json": {
+      "path": "data\\graphrag_benchmark\\novel\\chunks.json",
+      "sha256": "72a09d0416860e716bd6561103e7ce15cf2fb9c4986abf2fbea5a1a068a42556",
+      "size_bytes": 4864075
+    },
+    "corpus.json": {
+      "path": "data\\graphrag_benchmark\\novel\\corpus.json",
+      "sha256": "b0b4b2e7dc1b5d72f774783130d08b5d62e922fa9dc3e58612154b78b6089d15",
+      "size_bytes": 4848282
+    },
+    "questions.json": {
+      "path": "data\\graphrag_benchmark\\novel\\questions.json",
+      "sha256": "5c43f58c8619355d2d31704e0ce60ebc27d39f498e7f1f014960fbfcdf09ba9a",
+      "size_bytes": 1422568
+    }
+  },
+  "license": "MIT (repository LICENSE; source datasets retain their upstream notices)",
+  "resolved_commit": "fdbab5959b18c96532580877ffe27d112bccc0ec",
+  "source_repository": "https://github.com/GraphRAG-Bench/GraphRAG-Benchmark",
+  "source_urls": [
+    "https://raw.githubusercontent.com/GraphRAG-Bench/GraphRAG-Benchmark/main/Datasets/Corpus/novel.json",
+    "https://raw.githubusercontent.com/GraphRAG-Bench/GraphRAG-Benchmark/main/Datasets/Questions/novel_questions.json"
+  ]
+}
