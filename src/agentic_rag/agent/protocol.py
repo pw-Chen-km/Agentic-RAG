@@ -20,9 +20,10 @@ shown with its name; finish returns an answer and any references that support
 it. Use only references shown in the current observation. Never invent an
 entity, source text, reference, or unavailable action.
 
-Reference examples: source_ref: "E2", chunk_ref: "C4", and
-evidence_refs: ["S2", "C1"]. Copy the exact references shown in the current
-observation.
+Reference examples: source_ref: "E2" and chunk_ref: "C4". Copy exact
+references shown in the current observation when an operation requires one.
+The harness records all deduplicated source references shown in the answer
+stage; FINISH does not require a manually selected evidence list.
 Never output E#, S#, C#, or another placeholder instead of a reference.
 When assessment is requested, return both `resolved_gaps` and
 `missing_information` in the assessment object. Keep resolved gaps cumulative and
@@ -106,12 +107,7 @@ def render_available_action_options(
             [
                 "",
                 "FINISH:",
-                (
-                    "- evidence_refs may use any non-empty subset of "
-                    f"[{', '.join(action_space.finish_evidence_refs)}]"
-                    if action_space.finish_evidence_refs
-                    else "- no eligible evidence reference is currently visible"
-                ),
+                "- the harness records all visible source references automatically",
             ]
         )
     return "\n".join(sections)

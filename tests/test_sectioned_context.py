@@ -48,6 +48,9 @@ def test_live_shaped_duplicate_feedback_and_assessment_modes(built_substrate, fa
         output_root=tmp_path / "out", embedding_backend=fake_embedder)
     result = harness.run("Where was Marie Curie born?", "q1")
     assert result.termination_reason.value == "finish"
+    assert result.visible_source_refs
+    assert result.evidence_refs == result.visible_source_refs
+    assert result.evidence_refs_source == "programmatic_visible_source_refs"
     initial, duplicate, final = result.trajectory
     assert all(ref.startswith("C") for ref in initial.context_audit["output_delivery"]["returned_references"])
     assert "No action has been taken" in initial.messages[-1].content

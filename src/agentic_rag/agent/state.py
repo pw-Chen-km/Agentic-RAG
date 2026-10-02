@@ -114,13 +114,33 @@ class StateUpdater:
         if observation.status is ObservationStatus.DUPLICATE_ACTION:
             updated.consecutive_duplicate_actions += 1
             if updated.consecutive_duplicate_actions >= 3:
+                updated.recovery_mode = True
                 updated.interface_cannot_express_new_route = True
+                updated.recovery_trigger_action = observation.metadata.get(
+                    "blocked_call"
+                ) or observation.message
+                if action_signature is not None:
+                    updated.blocked_action_signatures.add(action_signature)
                 observation.metadata["interface_cannot_express_new_route"] = True
+                observation.metadata["recovery_mode"] = True
+                observation.metadata["recovery_triggered"] = True
+                observation.metadata["blocked_action_signature"] = action_signature
                 observation.metadata["consecutive_duplicate_actions"] = (
                     updated.consecutive_duplicate_actions
                 )
         else:
             updated.consecutive_duplicate_actions = 0
+
+            # A valid, non-duplicate action exits recovery.  The blocked
+            # signature remains in state so that the same call can never be
+            # executed again during this episode.
+            if (
+                action_signature is not None
+                and observation.status is ObservationStatus.OK
+            ):
+                updated.recovery_mode = False
+                updated.interface_cannot_express_new_route = False
+                updated.recovery_trigger_action = None
 
         # Keep a small, deterministic signal for the action-space builder.
         # A submitted SearchAction with an explicitly unresolved assessment

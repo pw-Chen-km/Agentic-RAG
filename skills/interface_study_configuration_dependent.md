@@ -17,8 +17,9 @@ During normal retrieval:
 
 - If no source text is visible, or missing_information is non-empty, retrieve more
   information. Do not call finish while a specific information gap remains.
-- If source text is visible and missing_information is empty, finish with an answer
-  supported by visible evidence references.
+- If source text is visible and missing_information is empty, finish with an answer.
+  The harness records all deduplicated source units shown in the answer stage;
+  do not construct a citation list.
 - If the previous operation was rejected, repeated, empty, or added no new source
   text, reassess the same concrete gap. Do not submit the same tool and arguments
   again.
@@ -61,7 +62,8 @@ source evidence, and does not create new references.
 
 FIXED ACTION RULES
 
-Use only visible C# and S# labels as evidence_refs. E# labels identify entity names
-and are not evidence citations. Do not invent hidden sources, unavailable operations,
-entity names, or references. A budget-finalize turn is different: retrieval is closed
-and the only legal call is finish, even if a gap remains.
+E# labels identify entity names, while C# and S# labels identify source units. The
+harness records visible source units automatically, so finish does not require an
+evidence_refs list. Do not invent hidden sources, unavailable operations, entity names,
+or references. A budget-finalize turn is different: retrieval is closed and the only
+legal call is finish, even if a gap remains.

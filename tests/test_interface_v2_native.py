@@ -109,6 +109,38 @@ def test_tool_schema_uses_the_same_capability_card_descriptions(built_substrate:
         assert descriptions[name] == ACTION_CARDS[name].schema_description
 
 
+def test_answer_stage_collects_all_visible_sources_without_model_citations(
+    built_substrate: Path,
+) -> None:
+    substrate = Substrate.open(built_substrate)
+    chunk_id = sorted(substrate.chunk_ids_by_scope["q1"])[0]
+    sentence_id = substrate.sentences_by_chunk[chunk_id][0].sentence_id
+    state = EpisodeState.initial()
+    state.visible_chunk_ids.add(chunk_id)
+    state.visible_passage_ids.add(chunk_id)
+    state.visible_sentence_ids.add(sentence_id)
+    state.eligible_sentence_ids.add(sentence_id)
+    state.semantic_memory_node_ids.extend([chunk_id, sentence_id])
+    state.reference_registry.register(chunk_id, "CHUNK")
+    state.reference_registry.register(sentence_id, "SENTENCE")
+
+    built = PolicyContextBuilder(
+        substrate, interface_contract=get_interface_contract("C0")
+    ).build(
+        "Question?",
+        SkillDocument.from_text("Answer."),
+        state,
+        [],
+        scope_id="q1",
+        action_space_mode=ActionSpaceMode.ANSWER,
+    )
+
+    assert built.visible_source_refs == [ChunkRef(id=chunk_id)]
+    finish = next(item for item in built.tool_definitions if item["function"]["name"] == "finish")
+    assert set(finish["function"]["parameters"]["properties"]) == {"answer"}
+    assert finish["function"]["parameters"]["required"] == ["answer"]
+
+
 def test_constrained_decision_is_single_flattened_action(built_substrate: Path) -> None:
     substrate = Substrate.open(built_substrate)
     built = PolicyContextBuilder(substrate, interface_contract=get_interface_contract("C1")).build(

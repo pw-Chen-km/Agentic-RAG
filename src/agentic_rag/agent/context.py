@@ -22,10 +22,12 @@ from agentic_rag.agent.models import (
     ActionSpaceMode,
     AvailableActionSpace,
     ChunkMemoryItem,
+    ChunkRef,
     ContextNodeReference,
     ContextReferenceMap,
     EntityMemoryItem,
     EpisodeState,
+    EvidenceRef,
     ExpandAction,
     ExpansionKind,
     FinishAction,
@@ -41,6 +43,7 @@ from agentic_rag.agent.models import (
     ResolvedReadAction,
     SearchAction,
     SentenceMemoryItem,
+    SentenceRef,
     StepRecord,
     ToolCall,
 )
@@ -51,7 +54,7 @@ from agentic_rag.agent.protocol import (
 )
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.agent.tool_calling import build_tool_definitions, tool_schema_sha256
-from agentic_rag.agent.context_rendering import render_context
+from agentic_rag.agent.context_rendering import render_context, recovery_mode_instruction
 from agentic_rag.agent.entity_visibility import EntityVisibilityPolicy
 from agentic_rag.substrate.storage import Substrate
 
@@ -69,6 +72,7 @@ class BuiltPolicyContext:
     tool_schema_sha256: str
     provider_tools: list[dict[str, Any]] | None = None
     visible_source_spans: list[dict[str, Any]] = field(default_factory=list)
+    visible_source_refs: list[EvidenceRef] = field(default_factory=list)
 
     def __iter__(self):
         return iter(self.messages)
@@ -211,6 +215,7 @@ class PolicyContextBuilder:
             )
         )
         memory = self._semantic_memory(display_ids, state)
+        visible_source_refs = self._visible_source_refs(memory, reference_map)
         attempted_actions = [self._attempt_summary(item) for item in trajectory]
         view = PolicyView(
             policy_state=PolicyStateView(
@@ -219,6 +224,8 @@ class PolicyContextBuilder:
                 consecutive_unresolved_searches=state.consecutive_unresolved_searches,
                 consecutive_duplicate_actions=state.consecutive_duplicate_actions,
                 interface_cannot_express_new_route=state.interface_cannot_express_new_route,
+                recovery_mode=state.recovery_mode,
+                recovery_trigger_action=state.recovery_trigger_action,
                 last_assessment=(
                     state.last_assessment.model_copy(deep=True)
                     if state.last_assessment is not None
@@ -248,14 +255,19 @@ class PolicyContextBuilder:
                 f"{protocol}\n\n"
                 f"{render_available_action_options(available_action_space)}"
             )
+        system_content = (
+            f"{protocol}\n\n"
+            "Current retrieval skill (plain Markdown):\n\n"
+            f"{skill_text}"
+        )
+        if state.recovery_mode:
+            system_content += "\n\n" + recovery_mode_instruction(
+                state.recovery_trigger_action
+            )
         messages = [
             Message(
                 role="system",
-                content=(
-                    f"{protocol}\n\n"
-                    "Current retrieval skill (plain Markdown):\n\n"
-                    f"{skill_text}"
-                ),
+                content=system_content,
             ),
             Message(role="user", content=f"Original question:\n{query}"),
         ]
@@ -310,6 +322,7 @@ class PolicyContextBuilder:
             tool_definitions=tool_definitions,
             tool_schema_sha256=tool_schema_sha256(tool_definitions),
             provider_tools=tool_definitions,
+            visible_source_refs=visible_source_refs,
         )
 
     def _display_ids(
@@ -466,6 +479,8 @@ class PolicyContextBuilder:
                 "consecutive_unresolved_searches": state.consecutive_unresolved_searches,
                 "consecutive_duplicate_actions": state.consecutive_duplicate_actions,
                 "interface_cannot_express_new_route": state.interface_cannot_express_new_route,
+                "recovery_mode": state.recovery_mode,
+                "recovery_trigger_action": state.recovery_trigger_action,
                 "information_gap_remaining": bool(
                     state.last_assessment is not None
                     and state.last_assessment.missing_information
@@ -496,10 +511,15 @@ class PolicyContextBuilder:
             ),
             routing_policy=self.routing_policy,
         )
+        system_content = skill_text.strip() + "\n\n" + self.interface_contract.protocol + "\n\n" + guide
+        if state.recovery_mode:
+            system_content += "\n\n" + recovery_mode_instruction(
+                state.recovery_trigger_action
+            )
         messages = [
             Message(
                 role="system",
-                content=skill_text.strip() + "\n\n" + self.interface_contract.protocol + "\n\n" + guide,
+                content=system_content,
             ),
             Message(role="user", content=f"Original question:\n{query}"),
         ]
@@ -544,6 +564,8 @@ class PolicyContextBuilder:
             consecutive_unresolved_searches=state.consecutive_unresolved_searches,
             consecutive_duplicate_actions=state.consecutive_duplicate_actions,
             interface_cannot_express_new_route=state.interface_cannot_express_new_route,
+            recovery_mode=state.recovery_mode,
+            recovery_trigger_action=state.recovery_trigger_action,
             last_assessment=(
                 latest_decision.assessment.model_copy(deep=True)
                 if latest_decision is not None and self.require_evidence_assessment
@@ -562,7 +584,8 @@ class PolicyContextBuilder:
                                   decision_schema_sha256=decision_schema_sha256(decision_format),
                                   decision_schema=decision_format.model_json_schema(),
                                   tool_definitions=tools, tool_schema_sha256=tool_schema_sha256(tools),
-                                  provider_tools=tools, visible_source_spans=spans)
+                                  provider_tools=tools, visible_source_spans=spans,
+                                  visible_source_refs=self._visible_source_refs(memory, references))
 
     def _reference_map(
         self, display_ids: Sequence[str], state: EpisodeState
@@ -656,6 +679,48 @@ class PolicyContextBuilder:
                 )
             )
         return items
+
+    def _visible_source_refs(
+        self,
+        memory: Sequence[dict[str, Any] | EntityMemoryItem | SentenceMemoryItem | ChunkMemoryItem],
+        references: ContextReferenceMap,
+    ) -> list[EvidenceRef]:
+        """Return source units whose text is present in this Policy snapshot.
+
+        Entity cards are deliberately excluded.  A displayed passage subsumes
+        its displayed sentence children, so the returned list is already the
+        same deterministic, deduplicated source set used for final evidence.
+        """
+        refs: list[EvidenceRef] = []
+        seen: set[tuple[str, str]] = set()
+        for item in memory:
+            ref = item.get("ref") if isinstance(item, dict) else getattr(item, "ref", None)
+            if not ref:
+                continue
+            node = references.typed_refs.get(str(ref))
+            if node is None or not node.can_use_as_evidence:
+                continue
+            if node.node_type == "CHUNK":
+                value: EvidenceRef = ChunkRef(id=node.stable_id)
+            elif node.node_type == "SENTENCE":
+                value = SentenceRef(id=node.stable_id)
+            else:
+                continue
+            key = (value.unit, value.id)
+            if key not in seen:
+                seen.add(key)
+                refs.append(value)
+
+        chunk_ids = {ref.id for ref in refs if isinstance(ref, ChunkRef)}
+        return [
+            ref
+            for ref in refs
+            if not (
+                isinstance(ref, SentenceRef)
+                and self.substrate.sentence_by_id.get(ref.id) is not None
+                and self.substrate.sentence_by_id[ref.id].chunk_id in chunk_ids
+            )
+        ]
 
     def _attempt_summary(self, record: StepRecord) -> dict[str, Any]:
         action: Any = (

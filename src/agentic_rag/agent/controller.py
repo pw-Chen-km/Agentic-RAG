@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import re
+import json
 import time
 from uuid import uuid4
 
@@ -301,6 +302,10 @@ class AgentController:
                     manager,
                     exact_duplicate_blocked=validation.code == "duplicate_action",
                 )
+                if validation.code == "duplicate_action":
+                    observation.metadata["blocked_call"] = _action_call_for_display(
+                        resolved.action
+                    )
                 manager.record_attempt(
                     AttemptEvent(
                         decision=decision,
@@ -309,7 +314,7 @@ class AgentController:
                         validation_error=validation.message,
                         observation=observation,
                         assessment=resolved.assessment,
-                        action_signature=None,
+                        action_signature=validation.signature,
                         usage=usage,
                         policy_view=built.policy_view,
                         context_reference_map=built.reference_map,
@@ -317,10 +322,9 @@ class AgentController:
                         decision_schema_sha256=built.decision_schema_sha256,
                         decision_schema=built.decision_schema,
                         # A duplicate action is a state-level rejection, but
-                        # the assessment was still a structurally valid part
-                        # of the model response. Keep it so an empty
-                        # information-gap assessment can move the episode to
-                        # the answer stage on the next turn.
+                        # the assessment is still a structurally valid part
+                        # of the model response. Keep it for the next
+                        # recovery-aware decision context.
                         commit_assessment=(validation.code == "duplicate_action"),
                         consume_step=True,
                         invalid_attempt=True,
@@ -630,20 +634,26 @@ class AgentController:
         consume_step: bool = True,
         messages: Sequence[Message] | None = None,
     ) -> EpisodeResult:
-        requested_evidence_refs = list(resolved.action.evidence_refs)
-        evidence_refs = self.evidence_resolver.canonicalize_refs(
-            requested_evidence_refs, state, manager.scope_id
+        # FINISH no longer asks the model to choose a citation subset.  The
+        # answer-stage context is the authoritative source snapshot, so use
+        # every complete source unit actually shown there, deduplicated with
+        # passage-over-sentence precedence.
+        visible_source_refs = self.evidence_resolver.canonicalize_refs(
+            built.visible_source_refs, state, manager.scope_id
         )
+        requested_evidence_refs = list(resolved.action.evidence_refs)
         content_overlap_removed = [
-            ref for ref in requested_evidence_refs if ref not in evidence_refs
+            ref for ref in requested_evidence_refs if ref not in visible_source_refs
         ]
         canonical_action = resolved.action.model_copy(
-            update={"evidence_refs": evidence_refs}
+            update={"evidence_refs": visible_source_refs}
         )
         canonical_resolved = resolved.model_copy(
             update={"action": canonical_action}
         )
-        evidence = self.evidence_resolver.resolve(evidence_refs, state, manager.scope_id)
+        evidence = self.evidence_resolver.resolve(
+            visible_source_refs, state, manager.scope_id
+        )
         observation = Observation(
             action_id=manager.next_action_id,
             status=ObservationStatus.OK,
@@ -654,16 +664,26 @@ class AgentController:
                 "budget_finalize": not consume_step,
                 "selected_tool": "finish",
                 "parsed_arguments": canonical_action.model_dump(mode="json"),
+                "evidence_refs_source": "programmatic_visible_source_refs",
+                "visible_source_refs": [
+                    ref.model_dump(mode="json") for ref in visible_source_refs
+                ],
                 "requested_evidence_refs": [
                     ref.model_dump(mode="json") for ref in requested_evidence_refs
                 ],
                 "canonical_evidence_refs": [
-                    ref.model_dump(mode="json") for ref in evidence_refs
+                    ref.model_dump(mode="json") for ref in visible_source_refs
                 ],
                 "content_overlap_removed_refs": [
                     ref.model_dump(mode="json") for ref in content_overlap_removed
                 ],
             },
+        )
+        built.policy_view.context_audit["visible_source_refs"] = [
+            ref.model_dump(mode="json") for ref in visible_source_refs
+        ]
+        built.policy_view.context_audit["evidence_refs_source"] = (
+            "programmatic_visible_source_refs"
         )
         self._attach_routing_metadata(
             observation, canonical_action, built, state, manager,
@@ -694,7 +714,9 @@ class AgentController:
         return manager.result(
             reason=TerminationReason.FINISH,
             answer=resolved.action.answer,
-            evidence_refs=evidence_refs,
+            evidence_refs=visible_source_refs,
+            visible_source_refs=visible_source_refs,
+            evidence_refs_source="programmatic_visible_source_refs",
             resolved_evidence=evidence,
         )
 
@@ -775,3 +797,19 @@ def _tool_name_for_action(action) -> str:
     if action_type == "FINISH":
         return "finish"
     return "unknown"
+
+
+def _action_call_for_display(action) -> str:
+    """Render a compact call signature for the recovery overlay."""
+
+    name = _tool_name_for_action(action)
+    action_type = getattr(action, "type", None)
+    if action_type == "SEARCH":
+        arguments = {"query": getattr(action, "query", None)}
+    elif action_type == "EXPAND":
+        arguments = {"entity_ref": getattr(action, "source_id", None)}
+    elif action_type == "READ":
+        arguments = {"passage_ref": getattr(action, "chunk_id", None)}
+    else:
+        arguments = {}
+    return f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"

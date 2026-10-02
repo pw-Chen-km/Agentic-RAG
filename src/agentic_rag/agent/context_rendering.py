@@ -92,8 +92,8 @@ def action_summary(record):
         if observation and observation.metadata.get("interface_cannot_express_new_route"):
             explanation += (
                 " The same exact operation has now been rejected three consecutive "
-                "times; the interface cannot express a new retrieval route for the "
-                "current gap, so the next turn is answer-only."
+                "times. The next turn enters recovery mode and must use a different "
+                "retrieval operation or a materially different query."
             )
     elif code == "assessment_closed_retrieval":
         executed, outcome = False, "rejected: assessment closed"
@@ -120,6 +120,11 @@ def action_summary(record):
             explanation = (
                 "FINISH was rejected because the assessment still lists missing information. "
                 "Choose an available operation that could address that gap."
+            )
+        elif code == "finish_during_recovery":
+            explanation = (
+                "FINISH was rejected because recovery mode requires a different retrieval "
+                "operation or a materially different query."
             )
         else:
             explanation = "The request did not satisfy the available tool's input requirements."
@@ -223,6 +228,25 @@ def blocked_exact_operation(attempt):
         "```\n"
         "Do not submit this exact tool and arguments again. "
         f"{detail}"
+    )
+
+
+def recovery_mode_instruction(blocked_operation: str | None = None) -> str:
+    """Return the one-turn system overlay used after repeated duplicates."""
+
+    blocked = blocked_operation or "the repeated operation shown in the blocked-operation notice"
+    return (
+        "RECOVERY MODE\n\n"
+        "The same retrieval operation has been rejected three consecutive times.\n"
+        f"Blocked operation: {blocked}\n\n"
+        "For this decision only:\n"
+        "- Do not submit the blocked operation again.\n"
+        "- If another retrieval operation is available, choose a different available operation.\n"
+        "- If no other retrieval operation is available, keep the same tool but write a materially "
+        "different query targeting the unresolved information gap.\n"
+        "- Do not finish while missing_information is non-empty.\n"
+        "The original question and information gap remain unchanged. After one accepted, "
+        "non-duplicate action, return to the normal routing instructions."
     )
 
 
@@ -373,8 +397,12 @@ def render_context(
              "retransmitted_source_keys": retransmitted_source_keys,
              "retransmitted_source_count": len(retransmitted_source_keys),
              "blocked_exact_operation": (
-                 blocked
-             ),
+                  blocked
+              ),
+              "recovery_mode": bool(getattr(state, "recovery_mode", False)),
+              "recovery_trigger_action": getattr(
+                  state, "recovery_trigger_action", None
+              ),
              "tool_history_contains_source_text": False,
              "latest_action": attempts[-1] if attempts else None,
              "entity_filter_audit": list(entity_filter_audit or [])}

@@ -119,7 +119,7 @@ def policy_decision_from_constrained(value: BaseModel | dict[str, Any]) -> Polic
         action = ReadAction(chunk_ref=raw_action["passage_ref"])
     elif name == "finish":
         action = FinishAction(
-            answer=raw_action["answer"], evidence_refs=raw_action["evidence_refs"],
+            answer=raw_action["answer"], evidence_refs=[],
         )
     else:
         raise ValueError(f"unknown constrained action: {name}")
@@ -175,18 +175,10 @@ def _interface_decision_model(cache_key: str) -> type[BaseModel]:
         ))
 
     if action_space.finish_available:
-        if action_space.finish_evidence_refs:
-            evidence_type = _literal(*(str(ref) for ref in action_space.finish_evidence_refs))
-            evidence_list: Any = list[evidence_type]
-            maximum = min(20, len(action_space.finish_evidence_refs))
-        else:
-            evidence_list, maximum = list[str], 0
         action_types.append(create_model(
             f"InterfaceFinish_{digest}", __base__=AgentModel,
             name=(Literal["finish"], Field(description=ACTION_CARDS["finish"].schema_description)),
             answer=(str, Field(min_length=1)),
-            evidence_refs=(evidence_list, Field(min_length=0, max_length=maximum,
-                                                description="Visible source labels supporting the answer.")),
         ))
 
     if not action_types:
@@ -269,31 +261,10 @@ def _state_conditioned_model(
         )
 
     if action_space.finish_available:
-        if action_space.finish_evidence_refs:
-            evidence_type = _literal(
-                *(str(ref) for ref in action_space.finish_evidence_refs)
-            )
-            evidence_list_type = list[evidence_type]
-            evidence_field = Field(
-                min_length=0,
-                max_length=min(20, len(action_space.finish_evidence_refs)),
-                description="Visible complete S# or shown C# refs",
-            )
-        else:
-            evidence_list_type = list[str]
-            evidence_field = Field(
-                min_length=0,
-                max_length=0,
-                description="No eligible evidence is currently visible",
-            )
         action_types.append(
             create_model(
                 f"StateFinishAction_{digest}",
                 __base__=_WireFinishAction,
-                evidence_refs=(
-                    evidence_list_type,
-                    evidence_field,
-                ),
             )
         )
 

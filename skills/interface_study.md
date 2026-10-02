@@ -24,8 +24,8 @@ During normal retrieval, apply this decision rule:
 - If no source text is visible, or `missing_information` is non-empty, choose one
   currently available retrieval operation. Do not call `finish`.
 - If source text is visible and `missing_information` is empty, call `finish` with the
-  answer and the visible evidence references. Do not retrieve more just because a tool
-  is available.
+  answer. The harness records all deduplicated source units shown in the answer stage;
+  do not construct a citation list.
 - If the latest operation was rejected, repeated, empty, or added no new source text,
   reassess the same concrete information need. Never resubmit the exact same tool and
   arguments. If a gap remains, choose another legal retrieval operation; if no gap
@@ -37,7 +37,8 @@ allowed. A budget-finalize turn is different: retrieval is closed and the only l
 call is `finish`, even if the assessment still lists unresolved information.
 Use only references shown in the current observation. Do not invent operations,
 references, entity names, or source text.
-When finishing in a normal retrieval turn, cite visible sources that support the answer.
+When finishing, answer from the visible source text. The harness records the visible
+source units automatically for evidence-acquisition analysis.
 The tool registry and the current observation determine which operations are legal; the
 rules above do not prefer global search, sentence search, or entity following.
 

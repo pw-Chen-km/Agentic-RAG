@@ -50,6 +50,30 @@ def test_controlled_action_guide_changes_policy_wording_only(built_substrate) ->
     assert "gives priority to a visible" not in neutral_prompt
 
 
+def test_duplicate_recovery_overlay_applies_to_both_routing_policies(built_substrate) -> None:
+    substrate = Substrate.open(built_substrate)
+    contract = get_interface_contract("C4")
+    state = EpisodeState.initial()
+    state.recovery_mode = True
+    state.recovery_trigger_action = 'find_passages({"query": "same query"})'
+
+    neutral = PolicyContextBuilder(
+        substrate, interface_contract=contract, routing_policy="neutral"
+    ).build("Question?", "Answer.", state, [], scope_id="q1")
+    controlled = PolicyContextBuilder(
+        substrate,
+        interface_contract=contract,
+        routing_policy="configuration-dependent",
+    ).build("Question?", "Answer.", state, [], scope_id="q1")
+
+    for built in (neutral, controlled):
+        prompt = built.messages[0].content or ""
+        assert "RECOVERY MODE" in prompt
+        assert "same query" in prompt
+        assert "Do not submit the blocked operation again" in prompt
+        assert built.available_action_space.finish_available is False
+
+
 def test_routing_telemetry_does_not_claim_entity_relevance(built_substrate) -> None:
     substrate = Substrate.open(built_substrate)
     contract = get_interface_contract("C4")

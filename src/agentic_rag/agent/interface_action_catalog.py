@@ -115,19 +115,22 @@ ACTION_CARDS = {
     ),
     "finish": ActionCard(
         name="finish",
-        signature="finish(answer, evidence_refs)",
+        signature="finish(answer)",
         description=(
             "Search scope: none.\n"
             "How it works: ends the episode without retrieving new text.\n"
-            "Returns: no new source text.\n"
-            "Limitation: cite only visible passage or sentence labels that support the answer;\n"
+            "Returns: no new source text. The harness supplies the answer stage with all\n"
+            "deduplicated source units that were actually shown during retrieval.\n"
+            "Limitation: answer using the visible source text; source labels are preserved\n"
+            "by the harness for evidence-acquisition measurement;\n"
             "in a normal retrieval turn, use this only when source text is visible and the\n"
             "current assessment has no missing information. If a missing item remains, choose\n"
             "a retrieval operation instead. A budget-finalize turn may require this operation\n"
             "even when evidence is incomplete."
         ),
         schema_description=(
-            "End the episode with an answer and visible source citations. In a normal retrieval turn, "
+            "End the episode with an answer. The harness records all deduplicated source units "
+            "shown in the answer-stage context. In a normal retrieval turn, "
             "use this when source text is visible and no specific information gap remains. "
             "If a gap remains, choose retrieval. The separate budget-finalize turn may require "
             "an answer even when evidence is incomplete."
@@ -199,7 +202,7 @@ def render_action_guide(
     ]
     reference_rules = [
         "C# labels identify passages shown to you; S# labels identify sentences shown to you.",
-        "Only visible C# and S# labels can be used as evidence_refs.",
+        "The harness records visible C# and S# labels automatically; do not select a citation list.",
     ]
     if entity_annotation:
         reference_rules.append(

@@ -92,7 +92,7 @@ def test_dynamic_options_follow_visible_reference_affordances(
     assert "ENTITY_MENTIONED_IN_SENTENCE: source_ref in [E1]" in options
     assert "SENTENCE_MENTIONS_ENTITY" not in options
     assert "chunk_ref in [C1]" in options
-    assert "evidence_refs may use any non-empty subset of [S1, C2]" in options
+    assert "visible source references automatically" in options
     assert "Currently available action options" not in without_prompt
     assert with_options.policy_view == without_options.policy_view
     assert with_options.messages[1:] == without_options.messages[1:]

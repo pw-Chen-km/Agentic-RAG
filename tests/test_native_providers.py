@@ -121,7 +121,7 @@ def test_openai_compatible_constrains_one_flattened_decision() -> None:
     captured = {}
     def fake_request(payload):
         captured.update(payload)
-        return {"choices": [{"message": {"content": '{"assessment":{"resolved_gaps":[],"missing_information":[]},"action":{"name":"finish","answer":"Unknown","evidence_refs":[]}}'}}],
+        return {"choices": [{"message": {"content": '{"assessment":{"resolved_gaps":[],"missing_information":[]},"action":{"name":"finish","answer":"Unknown"}}'}}],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
     policy._request = fake_request  # type: ignore[method-assign]
     decision = policy.decide([Message(role="user", content="Question")],

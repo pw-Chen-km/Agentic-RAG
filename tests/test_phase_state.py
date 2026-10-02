@@ -9,6 +9,7 @@ from agentic_rag.agent.models import (
     SearchAction,
     SearchMethod,
     SearchTarget,
+    action_signature,
 )
 from agentic_rag.agent.state import StateUpdater
 from agentic_rag.agent.state_management import EpisodeStateManager
@@ -200,7 +201,7 @@ def test_new_source_without_resolved_gap_keeps_current_policy_window(built_subst
     assert transitioned.current_phase_source_keys
 
 
-def test_three_duplicate_rejections_mark_route_unexpressible_and_open_answer_stage(
+def test_three_duplicate_rejections_enter_recovery_without_answer_stage(
     built_substrate,
 ) -> None:
     from agentic_rag.substrate.storage import Substrate
@@ -227,11 +228,13 @@ def test_three_duplicate_rejections_mark_route_unexpressible_and_open_answer_sta
             state,
             assessment=assessment,
             observation=observation,
-            action_signature=None,
+                action_signature=action_signature(action),
         )
 
     assert state.consecutive_duplicate_actions == 3
     assert state.interface_cannot_express_new_route is True
+    assert state.recovery_mode is True
+    assert action_signature(action) in state.blocked_action_signatures
     event = SimpleNamespace(
         validation_status=ValidationStatus.INVALID,
         observation=observations[-1],
@@ -241,9 +244,9 @@ def test_three_duplicate_rejections_mark_route_unexpressible_and_open_answer_sta
     transitioned, did_transition, reason = EpisodeStateManager._apply_phase_transition(
         EpisodeState.model_validate(state.model_dump()), state, event
     )
-    assert did_transition is True
-    assert reason == "interface_cannot_express_new_route"
-    assert transitioned.answer_stage_pending is True
+    assert did_transition is False
+    assert reason is None
+    assert transitioned.answer_stage_pending is False
 
 
 def test_answer_stage_reopens_complete_memory_and_closes_retrieval(built_substrate) -> None:

@@ -221,20 +221,13 @@ class EpisodeStateManager:
             updated.answer_stage_pending = True
             return updated, True, "answer_stage_ready_after_closed_assessment"
         # A duplicate retrieval is not executed, but its assessment is still
-        # a valid model judgment.  Preserve the normal answer-stage transition
-        # when that judgment closes the remaining gap and source evidence is
-        # already visible.  This prevents a rejected action from trapping the
-        # episode in a retrieval loop.
+        # retained for the next decision context.  It must never by itself
+        # enter answer stage: after repeated duplicates, recovery mode gives
+        # the model one explicit turn to change route or query.
         if (
             event.validation_status is not ValidationStatus.VALID
             and event.observation.status is ObservationStatus.DUPLICATE_ACTION
         ):
-            if updated.interface_cannot_express_new_route and updated.all_source_keys:
-                updated.answer_stage_pending = True
-                return updated, True, "interface_cannot_express_new_route"
-            if not event.assessment.missing_information and updated.all_source_keys:
-                updated.answer_stage_pending = True
-                return updated, True, "answer_stage_ready_after_duplicate"
             return updated, False, None
         if event.validation_status is not ValidationStatus.VALID:
             return updated, False, None
@@ -295,6 +288,8 @@ class EpisodeStateManager:
         reason: TerminationReason,
         answer: str | None = None,
         evidence_refs: list[EvidenceRef] | None = None,
+        visible_source_refs: list[EvidenceRef] | None = None,
+        evidence_refs_source: str = "model_selected",
         resolved_evidence: list[ResolvedEvidence] | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
@@ -306,6 +301,8 @@ class EpisodeStateManager:
             termination_reason=reason,
             answer=answer,
             evidence_refs=evidence_refs or [],
+            visible_source_refs=visible_source_refs or [],
+            evidence_refs_source=evidence_refs_source,
             resolved_evidence=resolved_evidence or [],
             trajectory=list(self._trajectory),
             usage=self._total_usage.model_copy(deep=True),

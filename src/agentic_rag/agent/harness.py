@@ -10,6 +10,7 @@ from agentic_rag.agent.contract_versions import (
     ASSESSMENT_SCHEMA_VERSION,
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_RENDERER_VERSION,
+    DUPLICATE_RECOVERY_POLICY_VERSION,
     NATIVE_PROTOCOL_VERSION,
     ROUTING_POLICY_VERSION,
 )
@@ -251,6 +252,10 @@ class AgentHarness:
             },
             "policy_calls": policy_calls,
             "termination_reason": result.termination_reason.value,
+            "visible_source_refs": [
+                ref.model_dump(mode="json") for ref in result.visible_source_refs
+            ],
+            "evidence_refs_source": result.evidence_refs_source,
             "total_usage": result.usage.model_dump(mode="json"),
         }
 
@@ -270,8 +275,11 @@ class AgentHarness:
                 "phase_reset_on_resolved_gap": self.config.context_mode == "gap_bounded",
                 "answer_stage_after_empty_missing_information": True,
                 "entity_navigation_fallback_policy": {
-                    "version": "disabled-exact-operation-feedback-v1",
+                    "version": DUPLICATE_RECOVERY_POLICY_VERSION,
                     "automatic_route_switch": False,
+                    "recovery_after_consecutive_duplicates": 3,
+                    "recovery_overlay_turns": 1,
+                    "duplicate_exact_signature_remains_blocked": True,
                     "counts": "submitted search actions retained for audit only",
                 },
                 "node_reference_scheme": "episode_local_typed_refs_with_frozen_visibility",

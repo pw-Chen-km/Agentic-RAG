@@ -103,11 +103,6 @@ class _WireReadAction(AgentModel):
 class _WireFinishAction(AgentModel):
     type: Literal["FINISH"]
     answer: str = Field(min_length=1)
-    evidence_refs: list[str] = Field(
-        min_length=0,
-        max_length=20,
-        description="Visible complete S# or read C# refs",
-    )
 
 
 ScriptedDecision = (

@@ -60,16 +60,27 @@ def evaluate_episode(
             usage = step.get("usage") or {}
             first_complete_tokens = usage.get("total_tokens")
 
+    visible_source_refs = list(episode.get("visible_source_refs") or [])
+    visible_source_ref_ids = {
+        (item.get("id") if isinstance(item, Mapping) else item)
+        for item in visible_source_refs
+    }
+    evidence_refs_source = episode.get("evidence_refs_source") or "model_selected"
     final_refs = {
         (item.get("id") if isinstance(item, Mapping) else item)
         for item in (episode.get("evidence_refs") or [])
     }
     cited_sentence_ids: set[str] = set()
-    for step in episode.get("trajectory", []):
-        refs = (step.get("context_reference_map") or {}).get("typed_refs", {})
-        for ref, node in refs.items():
-            if node.get("stable_id") in final_refs and node.get("node_type") == "SENTENCE":
-                cited_sentence_ids.add(node.get("stable_id"))
+    if evidence_refs_source == "programmatic_visible_source_refs":
+        # The new contract intentionally does not measure model citation
+        # selection.  All visible sources are recorded automatically.
+        cited_sentence_ids = set(visible_sentence_ids)
+    else:
+        for step in episode.get("trajectory", []):
+            refs = (step.get("context_reference_map") or {}).get("typed_refs", {})
+            for ref, node in refs.items():
+                if node.get("stable_id") in final_refs and node.get("node_type") == "SENTENCE":
+                    cited_sentence_ids.add(node.get("stable_id"))
     gold_ids = {item.get("sentence_id") for item in facts if item.get("sentence_id")}
     answer = score_answer(episode.get("answer"), str(question.get("answer") or ""))
     evaluable = bool(facts) and not mapping_missing and bool(gold_ids)
@@ -86,9 +97,17 @@ def evaluate_episode(
         "text_seen_by_policy": len(visible_sentence_ids),
         "evidence_eligible": len(visible_sentence_ids),
         "evidence_cited": len(gold_ids & cited_sentence_ids),
+        "visible_source_ref_count": len(visible_source_ref_ids),
+        "visible_source_refs": sorted(visible_source_ref_ids),
+        "evidence_refs_source": evidence_refs_source,
+        "citation_metric_applicable": evidence_refs_source != "programmatic_visible_source_refs",
         "support_recall": support_recall,
         "complete_support": (bool(evaluable) and gold_ids.issubset(visible_sentence_ids)) if evaluable else None,
-        "complete_support_cited": (bool(evaluable) and gold_ids.issubset(cited_sentence_ids)) if evaluable else None,
+        "complete_support_cited": (
+            (bool(evaluable) and gold_ids.issubset(cited_sentence_ids))
+            if evaluable and evidence_refs_source != "programmatic_visible_source_refs"
+            else None
+        ),
         "first_complete_support_decision": first_complete_decision,
         "first_complete_support_tokens": first_complete_tokens,
         "policy_calls": policy_calls,
@@ -123,6 +142,9 @@ def aggregate(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
         "support_recall": mean("support_recall"),
         "complete_support_rate": mean("complete_support"),
         "complete_support_cited_rate": mean("complete_support_cited"),
+        "citation_metric_applicable_episodes": sum(
+            1 for row in rows if row.get("citation_metric_applicable") is True
+        ),
         "mean_first_complete_support_decision": mean("first_complete_support_decision"),
         "mean_first_complete_support_tokens": mean("first_complete_support_tokens"),
         "policy_calls": sum(int(row.get("policy_calls") or 0) for row in rows),

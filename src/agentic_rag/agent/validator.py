@@ -37,6 +37,7 @@ ValidationCode = Literal[
     "reference_not_evidence",
     "finish_without_source",
     "finish_with_unresolved_gap",
+    "finish_during_recovery",
 ]
 
 
@@ -114,6 +115,14 @@ class DecisionValidator:
             )
 
         signature = action_signature(action)
+        if signature in state.blocked_action_signatures:
+            return ValidationResult(
+                ok=False,
+                code="duplicate_action",
+                message="This exact action is blocked after repeated duplicate submissions",
+                signature=signature,
+                resolved_decision=decision,
+            )
         if signature in state.action_signatures:
             return ValidationResult(
                 ok=False,
@@ -207,6 +216,11 @@ class DecisionValidator:
         *,
         allow_incomplete_finish: bool = False,
     ) -> tuple[ValidationCode, str] | None:
+        if not allow_incomplete_finish and state.recovery_mode:
+            return (
+                "finish_during_recovery",
+                "FINISH is temporarily unavailable while recovery mode requires a different retrieval action",
+            )
         if not allow_incomplete_finish and not state.visible_chunk_ids and not state.eligible_sentence_ids:
             return (
                 "finish_without_source",

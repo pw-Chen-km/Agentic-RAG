@@ -76,7 +76,7 @@ class AvailableActionSpaceBuilder:
         # the sole operation and receives the complete source memory.
         finish_available = bool(evidence_refs) and (
             state.last_assessment is None or not state.last_assessment.missing_information
-        )
+        ) and not state.recovery_mode
 
         retrieval_open = (
             state.remaining_step_budget > 0

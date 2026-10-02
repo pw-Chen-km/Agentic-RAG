@@ -113,12 +113,6 @@ def build_tool_definitions(
         ))
 
     if action_space.finish_available:
-        evidence_refs = list(action_space.finish_evidence_refs)
-        evidence_items: dict[str, Any] = (
-            {"type": "string", "enum": evidence_refs}
-            if evidence_refs
-            else {"type": "string"}
-        )
         tools.append(_function(
             "finish",
             ACTION_CARDS["finish"].schema_description,
@@ -126,14 +120,8 @@ def build_tool_definitions(
                 "type": "object",
                 "properties": {
                     "answer": {"type": "string", "minLength": 1},
-                    "evidence_refs": {
-                        "type": "array",
-                        "items": evidence_items,
-                        "minItems": 0,
-                        "maxItems": min(20, len(evidence_refs)),
-                    },
                 },
-                "required": ["answer", "evidence_refs"],
+                "required": ["answer"],
                 "additionalProperties": False,
             },
         ))
@@ -180,13 +168,16 @@ def decision_from_tool_call(tool_call: Mapping[str, Any], tools=None) -> PolicyD
             "native tool call must include a valid evidence assessment"
         ) from exc
 
+    # Legacy callers may still carry evidence_refs in an archived/scripted
+    # call.  The current tool schema never emits it and the value is ignored.
+    args.pop("evidence_refs", None)
     allowed_arguments = {
         "find_passages": {"query"},
         "find_sentences": {"query"},
         "follow_entity_to_passages": {"entity_ref"},
         "follow_entity_to_sentences": {"entity_ref"},
         "read_passage": {"passage_ref"},
-        "finish": {"answer", "evidence_refs"},
+        "finish": {"answer"},
     }
     unexpected = set(args) - allowed_arguments.get(name, set())
     if unexpected:
@@ -215,7 +206,11 @@ def decision_from_tool_call(tool_call: Mapping[str, Any], tools=None) -> PolicyD
             from agentic_rag.agent.models import ReadAction
             action = ReadAction(chunk_ref=str(args["passage_ref"]))
         elif name == "finish":
-            action = FinishAction(answer=args["answer"], evidence_refs=args["evidence_refs"])
+            # Evidence references are assigned by the harness from the source
+            # units shown in the answer-stage context.  Accepting an optional
+            # legacy value here keeps old scripted callers readable, but the
+            # current native schema never exposes it.
+            action = FinishAction(answer=args["answer"], evidence_refs=[])
         else:
             raise PolicyResponseError(f"unknown native tool: {name}")
     except (KeyError, TypeError, ValueError) as exc:

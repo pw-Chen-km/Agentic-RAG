@@ -115,14 +115,14 @@ def test_schema_and_prompt_share_reference_affordances(built_substrate: Path) ->
     assert space.read_refs == ("C1",)
     assert space.finish_evidence_refs == ("S1", "C2")
     assert "chunk_ref in [C1]" in prompt
-    assert "subset of [S1, C2]" in prompt
+    assert "visible source references automatically" in prompt
 
     built.decision_format.model_validate(
         _decision({"type": "READ", "chunk_ref": "C1"})
     )
     built.decision_format.model_validate(
         _decision(
-            {"type": "FINISH", "answer": "answer", "evidence_refs": ["S1", "C2"]}
+            {"type": "FINISH", "answer": "answer"}
         )
     )
     built.decision_format.model_validate(
