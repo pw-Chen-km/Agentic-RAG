@@ -134,6 +134,10 @@ def _contract(args: argparse.Namespace, config: AgentConfig) -> dict[str, Any]:
         "architecture": "semantic_memory_typed_refs_compact",
         "policy_provider": config.policy.provider,
         "policy_model": config.policy.model,
+        "observation_mode": config.observation_mode,
+        "reader_model": config.reader.model if config.reader is not None else None,
+        "reader_host": config.reader.host if config.reader is not None else None,
+        "reader_thinking": config.reader.think if config.reader is not None else None,
         "judge_model": config.policy.model,
         "judge_host": getattr(config.policy, "host", None),
         "judge_thinking": getattr(config.policy, "think", None),
@@ -159,6 +163,14 @@ def _usage_totals(rows: list[dict[str, Any]]) -> dict[str, int]:
     totals: dict[str, int] = {}
     for row in rows:
         for key, value in row["usage"].items():
+            totals[key] = totals.get(key, 0) + int(value)
+    return totals
+
+
+def _reader_usage_totals(rows: list[dict[str, Any]]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for row in rows:
+        for key, value in (row.get("reader_usage") or {}).items():
             totals[key] = totals.get(key, 0) + int(value)
     return totals
 
@@ -195,6 +207,7 @@ def _summary(
         ),
         "reference_errors": sum(row["reference_errors"] for row in rows),
         "usage": _usage_totals(rows),
+        "reader_usage": _reader_usage_totals(rows),
         "judge_usage": _judge_usage_totals(rows),
         "results": rows,
     }
@@ -361,6 +374,16 @@ def main() -> None:
             "search_after_no_progress": search_after_no_progress,
             "reference_errors": reference_errors,
             "usage": result.usage.model_dump(mode="json"),
+            "reader_usage": {
+                key: sum(
+                    int(getattr(step.reader_usage, key, 0))
+                    for step in result.trajectory
+                )
+                for key in (
+                    "policy_calls", "input_tokens", "output_tokens",
+                    "reasoning_tokens", "total_tokens", "retrieved_tokens",
+                )
+            },
             "judge_usage": evaluation.judge_usage.model_dump(mode="json"),
             "artifact_dir": result.artifact_dir,
         }

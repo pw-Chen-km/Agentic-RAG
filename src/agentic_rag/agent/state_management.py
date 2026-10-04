@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from agentic_rag.agent.context import project_observation_for_audit
 from agentic_rag.agent.models import (
@@ -42,6 +42,8 @@ class AttemptEvent:
     commit_assessment: bool = True
     consume_step: bool = True
     invalid_attempt: bool = False
+    rendered_context: dict | None = None
+    reader_usage: Usage = field(default_factory=Usage)
 
 
 class EpisodeStateManager:
@@ -140,6 +142,8 @@ class EpisodeStateManager:
             context_reference_map=event.context_reference_map,
             available_action_space=event.available_action_space,
             decision_schema_sha256=event.decision_schema_sha256,
+            rendered_context=event.rendered_context,
+            reader_usage=event.reader_usage,
         )
         self._state = updated
         self._trajectory.append(record)

@@ -8,6 +8,7 @@ from agentic_rag.agent.config import (
 )
 from agentic_rag.agent.action_schema import native_action_tools
 from agentic_rag.agent.context import BuiltPolicyContext, PolicyContextBuilder
+from agentic_rag.agent.evidence_cards import EvidenceCard, EvidenceCardView, EvidenceRegistry
 from agentic_rag.agent.controller import AgentController
 from agentic_rag.agent.harness import AgentHarness
 from agentic_rag.agent.models import (
@@ -61,6 +62,14 @@ from agentic_rag.agent.policy import (
     ScriptedPolicy,
     policy_decision_model,
 )
+from agentic_rag.agent.reader import (
+    EvidenceReader,
+    OllamaEvidenceReader,
+    ReaderItem,
+    ReaderResult,
+    ReaderSufficiency,
+    ScriptedReader,
+)
 from agentic_rag.agent.references import ReferenceResolutionError, resolve_decision
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.agent.state_management import EpisodeStateManager
@@ -76,6 +85,10 @@ __all__ = [
     "ChunkRef",
     "ContextNodeReference",
     "ContextReferenceMap",
+    "EvidenceCard",
+    "EvidenceCardView",
+    "EvidenceReader",
+    "EvidenceRegistry",
     "DEFAULT_ENABLED_EXPANSIONS",
     "EntityMemoryItem",
     "EpisodeResult",
@@ -112,6 +125,11 @@ __all__ = [
     "ResolvedExpandAction",
     "ResolvedFinishAction",
     "ResolvedReadAction",
+    "ReaderItem",
+    "ReaderResult",
+    "ReaderSufficiency",
+    "OllamaEvidenceReader",
+    "ScriptedReader",
     "ScriptedPolicy",
     "SearchAction",
     "SearchMethod",

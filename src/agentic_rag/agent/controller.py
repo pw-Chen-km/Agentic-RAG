@@ -131,6 +131,8 @@ class AgentController:
                         context_reference_map=built.reference_map,
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
+                        rendered_context=built.rendered_context,
+                        reader_usage=built.reader_usage,
                         commit_assessment=False,
                         consume_step=False,
                         invalid_attempt=True,
@@ -176,6 +178,8 @@ class AgentController:
                         context_reference_map=built.reference_map,
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
+                        rendered_context=built.rendered_context,
+                        reader_usage=built.reader_usage,
                         commit_assessment=False,
                         consume_step=False,
                         invalid_attempt=True,
@@ -210,6 +214,8 @@ class AgentController:
                         context_reference_map=built.reference_map,
                         available_action_space=built.available_action_space,
                         decision_schema_sha256=built.decision_schema_sha256,
+                        rendered_context=built.rendered_context,
+                        reader_usage=built.reader_usage,
                         commit_assessment=False,
                         consume_step=False,
                         invalid_attempt=True,
@@ -267,6 +273,8 @@ class AgentController:
                     context_reference_map=built.reference_map,
                     available_action_space=built.available_action_space,
                     decision_schema_sha256=built.decision_schema_sha256,
+                    rendered_context=built.rendered_context,
+                    reader_usage=built.reader_usage,
                 )
             )
 
@@ -391,6 +399,8 @@ class AgentController:
                 context_reference_map=built.reference_map,
                 available_action_space=built.available_action_space,
                 decision_schema_sha256=built.decision_schema_sha256,
+                rendered_context=built.rendered_context,
+                reader_usage=built.reader_usage,
                 consume_step=consume_step,
             )
         )
@@ -433,5 +443,7 @@ class AgentController:
                 context_reference_map=built.reference_map,
                 available_action_space=built.available_action_space,
                 decision_schema_sha256=built.decision_schema_sha256,
+                rendered_context=built.rendered_context,
+                reader_usage=built.reader_usage,
             )
         )

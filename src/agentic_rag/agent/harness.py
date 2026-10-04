@@ -15,6 +15,7 @@ from agentic_rag.agent.policy import PolicyClient
 from agentic_rag.agent.router import ActionRouter
 from agentic_rag.agent.skill import SkillDocument
 from agentic_rag.agent.validator import DecisionValidator
+from agentic_rag.agent.reader import EvidenceReader
 from agentic_rag.substrate.embedding import EmbeddingBackend
 from agentic_rag.substrate.retrieval import Retriever
 from agentic_rag.substrate.storage import Substrate
@@ -30,11 +31,13 @@ class AgentHarness:
         policy: PolicyClient,
         output_root: str | Path,
         embedding_backend: EmbeddingBackend | None = None,
+        reader: EvidenceReader | None = None,
     ) -> None:
         self.substrate = substrate
         self.config = config
         self.skill = skill
         self.policy = policy
+        self.reader = reader
         self.output_root = Path(output_root)
         retriever = Retriever(substrate, embedding_backend=embedding_backend)
         expansion = ExpansionEngine(substrate, embedding_backend=embedding_backend)
@@ -44,6 +47,8 @@ class AgentHarness:
             config.enabled_expansions,
             show_available_action_options=config.show_available_action_options,
             use_state_conditioned_schema=config.use_state_conditioned_schema,
+            observation_mode=config.observation_mode,
+            reader=reader,
         )
         self.controller = AgentController(
             policy=policy,
@@ -78,6 +83,7 @@ class AgentHarness:
             policy=policy or _policy_from_config(resolved_config),
             output_root=output_root,
             embedding_backend=embedding_backend,
+            reader=_reader_from_config(resolved_config),
         )
 
     @classmethod
@@ -101,6 +107,7 @@ class AgentHarness:
             policy=policy or _policy_from_config(resolved_config),
             output_root=output_root,
             embedding_backend=embedding_backend,
+            reader=_reader_from_config(resolved_config),
         )
 
     def run(
@@ -171,6 +178,8 @@ class AgentHarness:
                         else None
                     ),
                     "decision_schema_sha256": step.decision_schema_sha256,
+                    "rendered_context": step.rendered_context,
+                    "reader_usage": step.reader_usage.model_dump(mode="json"),
                     "validation_status": step.validation_status.value,
                     "validation_error": step.validation_error,
                     "observation": (
@@ -202,6 +211,15 @@ class AgentHarness:
             "architecture": "semantic_memory_typed_refs_compact",
             "agent": self.config.effective_dict(),
             "policy_context": {
+                "observation_mode": self.config.observation_mode,
+                "reader": (
+                    {
+                        "model": self.config.reader.model,
+                        "host": self.config.reader.host,
+                        "think": self.config.reader.think,
+                    }
+                    if self.config.reader is not None else None
+                ),
                 "node_reference_scheme": "episode_local_typed_refs_with_frozen_visibility",
                 "show_available_action_options": (
                     self.config.show_available_action_options
@@ -212,11 +230,10 @@ class AgentHarness:
                 "visible_sections": [
                     "question",
                     "action_protocol",
-                    *(
-                        ["available_action_options"]
-                        if self.config.show_available_action_options
-                        else []
-                    ),
+                    *(["available_action_options"] if (
+                        self.config.show_available_action_options
+                        and self.config.observation_mode == "raw"
+                    ) else []),
                     "skill",
                     "last_assessment",
                     "semantic_memory",
@@ -251,6 +268,24 @@ def _messages_for_role(messages: list[Message], role: str) -> str:
 
 def _first_message_for_role(messages: list[Message], role: str) -> str:
     return next((message.content for message in messages if message.role == role), "")
+
+
+def _reader_from_config(config: AgentConfig) -> EvidenceReader | None:
+    if config.observation_mode not in {"reader", "reader_assessed"}:
+        return None
+    if config.reader is None:
+        raise ValueError("reader mode requires reader configuration")
+    from agentic_rag.agent.reader import OllamaEvidenceReader
+
+    return OllamaEvidenceReader(
+        model=config.reader.model,
+        host=config.reader.host,
+        temperature=config.reader.temperature,
+        num_ctx=config.reader.num_ctx,
+        think=config.reader.think,
+        timeout_seconds=config.reader.timeout_seconds,
+        keep_alive=config.reader.keep_alive,
+    )
 
 
 def _policy_from_config(config: AgentConfig) -> PolicyClient:

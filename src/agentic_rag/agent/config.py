@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from agentic_rag.agent.models import DEFAULT_ENABLED_EXPANSIONS, ExpansionKind
@@ -103,6 +103,8 @@ class AgentConfig(ConfigModel):
     enabled_expansions: tuple[ExpansionKind, ...] = DEFAULT_ENABLED_EXPANSIONS
     show_available_action_options: bool = True
     use_state_conditioned_schema: bool = True
+    observation_mode: Literal["raw", "program", "reader", "reader_assessed"] = "raw"
+    reader: OllamaPolicyConfig | None = None
     policy: PolicyProviderConfig = Field(default_factory=OpenAIPolicyConfig)
 
     @field_validator("policy", mode="before")
@@ -120,6 +122,16 @@ class AgentConfig(ConfigModel):
         if len(value) != len(set(value)):
             raise ValueError("enabled_expansions must not contain duplicates")
         return value
+
+    @model_validator(mode="after")
+    def reader_mode_requires_reader_config(self) -> "AgentConfig":
+        if self.observation_mode in {"reader", "reader_assessed"} and self.reader is None:
+            raise ValueError(
+                "reader or reader_assessed observation_mode requires reader configuration"
+            )
+        if self.reader is not None and self.reader.output_mode != "structured":
+            raise ValueError("the evidence Reader must use structured output")
+        return self
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> Self:

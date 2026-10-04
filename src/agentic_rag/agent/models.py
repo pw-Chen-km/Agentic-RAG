@@ -546,6 +546,8 @@ class StepRecord(AgentModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    rendered_context: dict[str, Any] | None = None
+    reader_usage: Usage = Field(default_factory=Usage)
 
 
 class TerminationReason(StrEnum):

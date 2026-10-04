@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from agentic_rag.agent.action_schema import (
     native_action_tools,
 )
 from agentic_rag.agent.action_space import AvailableActionSpaceBuilder
+from agentic_rag.agent.evidence_cards import EvidenceCard, EvidenceCardView, EvidenceRegistry
 from agentic_rag.agent.models import (
     DEFAULT_ENABLED_EXPANSIONS,
     ActionSpaceMode,
@@ -40,6 +41,7 @@ from agentic_rag.agent.models import (
     SearchAction,
     SentenceMemoryItem,
     StepRecord,
+    Usage,
 )
 from agentic_rag.agent.policy import policy_decision_model
 from agentic_rag.agent.protocol import (
@@ -47,6 +49,7 @@ from agentic_rag.agent.protocol import (
     render_available_action_options,
 )
 from agentic_rag.agent.skill import SkillDocument
+from agentic_rag.agent.reader import EvidenceReader, reader_items_as_dicts
 from agentic_rag.substrate.storage import Substrate
 
 
@@ -60,6 +63,8 @@ class BuiltPolicyContext:
     decision_schema_sha256: str
     native_tools: list[dict[str, Any]]
     native_tool_models: dict[str, type[BaseModel]]
+    rendered_context: dict[str, Any] | None = None
+    reader_usage: Usage = field(default_factory=Usage)
 
     def __iter__(self):
         return iter(self.messages)
@@ -81,11 +86,18 @@ class PolicyContextBuilder:
         *,
         show_available_action_options: bool = True,
         use_state_conditioned_schema: bool = True,
+        observation_mode: str = "raw",
+        reader: EvidenceReader | None = None,
     ) -> None:
         self.substrate = substrate
         self.enabled_expansions = tuple(enabled_expansions)
         self.show_available_action_options = show_available_action_options
         self.use_state_conditioned_schema = use_state_conditioned_schema
+        if observation_mode not in {"raw", "program", "reader", "reader_assessed"}:
+            raise ValueError("unsupported observation_mode")
+        self.observation_mode = observation_mode
+        self.reader = reader
+        self.evidence_registry = EvidenceRegistry(substrate)
         self.action_space_builder = AvailableActionSpaceBuilder(
             self.enabled_expansions
         )
@@ -143,10 +155,55 @@ class PolicyContextBuilder:
             )
         )
         protocol = render_action_protocol(self.enabled_expansions)
-        if self.show_available_action_options:
-            protocol = (
-                f"{protocol}\n\n"
-                f"{render_available_action_options(available_action_space)}"
+        rendered_context: dict[str, Any] | None = None
+        reader_usage = Usage()
+        if self.observation_mode == "raw":
+            if self.show_available_action_options:
+                protocol = (
+                    f"{protocol}\n\n"
+                    f"{render_available_action_options(available_action_space)}"
+                )
+        else:
+            card_view, reader_usage = self._build_evidence_view(
+                query=query,
+                state=state,
+                trajectory=trajectory,
+                action_space=available_action_space,
+            )
+            rendered_context = self._render_observation_context(
+                state=state,
+                trajectory=trajectory,
+                cards=card_view,
+                action_space=available_action_space,
+            )
+            if self.observation_mode == "reader_assessed":
+                sufficiency = rendered_context.get("reader_sufficiency")
+                if sufficiency is not None:
+                    rendered_context["reader_sufficiency"] = sufficiency
+            context_text = self._render_context_text(rendered_context)
+            messages = [
+                Message(role="system", content=protocol),
+                Message(
+                    role="system",
+                    content=(
+                        "Current retrieval skill (plain Markdown):\n\n"
+                        f"{skill_text}"
+                    ),
+                ),
+                Message(role="user", content=f"Original question:\n{query}"),
+                Message(role="user", content=context_text),
+            ]
+            return BuiltPolicyContext(
+                messages=messages,
+                policy_view=view,
+                reference_map=reference_map,
+                available_action_space=available_action_space,
+                decision_format=decision_format,
+                decision_schema_sha256=decision_schema_sha256(decision_format),
+                native_tools=native_tools,
+                native_tool_models=native_tool_models,
+                rendered_context=rendered_context,
+                reader_usage=reader_usage,
             )
         messages = [
             Message(
@@ -180,7 +237,169 @@ class PolicyContextBuilder:
             decision_schema_sha256=decision_schema_sha256(decision_format),
             native_tools=native_tools,
             native_tool_models=native_tool_models,
+            rendered_context=rendered_context,
+            reader_usage=reader_usage,
         )
+
+    def _build_evidence_view(
+        self,
+        *,
+        query: str,
+        state: EpisodeState,
+        trajectory: Sequence[StepRecord],
+        action_space: AvailableActionSpace,
+    ) -> tuple[EvidenceCardView, Usage]:
+        reader_items: tuple[dict[str, Any], ...] = ()
+        reader_error: str | None = None
+        reader_usage = Usage()
+        observation = state.newest_observation
+        if (
+            self.observation_mode in {"reader", "reader_assessed"}
+            and self.reader is not None
+            and observation is not None
+            and observation.results
+        ):
+            try:
+                previous_view = self.evidence_registry.cards(
+                    state,
+                    action_space,
+                    tuple(trajectory),
+                    mode="program",
+                )
+                previous = (
+                    self._render_previous_context(state, trajectory)
+                    + "\n"
+                    + self.evidence_registry.render(previous_view)
+                )
+                result = self.reader.read(
+                    question=query,
+                    previous_context=previous,
+                    observation=observation,
+                    reader_assessment=self.observation_mode == "reader_assessed",
+                )
+                reader_items = reader_items_as_dicts(result)
+                reader_usage = getattr(self.reader, "last_usage", Usage())
+                reader_view = self.evidence_registry.cards(
+                    state,
+                    action_space,
+                    tuple(trajectory),
+                    reader_items=reader_items,
+                    mode=self.observation_mode,
+                )
+                if result.sufficiency is not None:
+                    reader_view = EvidenceCardView(
+                        cards=reader_view.cards,
+                        mode=reader_view.mode,
+                        reader_error=reader_view.reader_error,
+                        reader_sufficiency=result.sufficiency.model_dump(mode="json"),
+                    )
+                return reader_view, reader_usage
+            except Exception as exc:
+                reader_error = str(exc)[:240]
+                reader_usage = getattr(self.reader, "last_usage", Usage())
+        return (
+            self.evidence_registry.cards(
+                state,
+                action_space,
+                tuple(trajectory),
+                mode=self.observation_mode,
+                reader_error=reader_error,
+            ),
+            reader_usage,
+        )
+
+    def _render_observation_context(
+        self,
+        *,
+        state: EpisodeState,
+        trajectory: Sequence[StepRecord],
+        cards: EvidenceCardView,
+        action_space: AvailableActionSpace,
+    ) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "observation_mode": self.observation_mode,
+            "previous_assessment": (
+                state.last_assessment.model_dump(mode="json")
+                if state.last_assessment is not None else None
+            ),
+            "previous_action": (
+                self._compact_previous_action(trajectory[-1]) if trajectory else None
+            ),
+            "evidence_cards": cards.to_dict(),
+            "global_search": "SEARCH is available; choose a legal method/target pair and write a query.",
+            "remaining_budget": {
+                "steps": state.remaining_step_budget,
+                "policy_attempts": state.remaining_policy_attempt_budget,
+                "retrieval_tokens": state.remaining_retrieved_token_budget,
+            },
+        }
+        if cards.reader_sufficiency is not None:
+            value["reader_sufficiency"] = cards.reader_sufficiency
+        return value
+
+    def _render_context_text(self, context: dict[str, Any]) -> str:
+        previous = context.get("previous_assessment")
+        action = context.get("previous_action")
+        lines = [
+            "Previous assessment — model judgment, not verified fact:",
+            json.dumps(previous, ensure_ascii=False) if previous else "None",
+            "\nPrevious action and outcome:",
+            json.dumps(action, ensure_ascii=False) if action else "None",
+            "\n" + self.evidence_registry.render(
+                EvidenceCardView(
+                    cards=tuple(
+                        EvidenceCard(**item)
+                        for item in context["evidence_cards"].get("cards", [])
+                    ),
+                    mode=context["evidence_cards"].get("mode", "program"),
+                    reader_error=context["evidence_cards"].get("reader_error"),
+                    reader_sufficiency=context["evidence_cards"].get("reader_sufficiency"),
+                )
+            ),
+            "\nGlobal SEARCH instruction:",
+            str(context["global_search"]),
+        ]
+        if context.get("reader_sufficiency") is not None:
+            lines.extend([
+                "\nReader assessment — advisory only:",
+                json.dumps(context["reader_sufficiency"], ensure_ascii=False),
+            ])
+        budget = context["remaining_budget"]
+        lines.extend([
+            "\nRemaining budget:",
+            f"- steps: {budget['steps']}",
+            f"- policy attempts: {budget['policy_attempts']}",
+            f"- retrieval tokens: {budget['retrieval_tokens']}",
+        ])
+        return "\n".join(lines)
+
+    def _render_previous_context(
+        self, state: EpisodeState, trajectory: Sequence[StepRecord]
+    ) -> str:
+        return json.dumps(
+            {
+                "previous_assessment": (
+                    state.last_assessment.model_dump(mode="json")
+                    if state.last_assessment else None
+                ),
+                "previous_action": (
+                    self._compact_previous_action(trajectory[-1]) if trajectory else None
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    def _compact_previous_action(self, record: StepRecord) -> dict[str, Any]:
+        attempt = self._attempt_summary(record)
+        compact = {
+            "action": attempt.get("action"),
+            "outcome": attempt.get("outcome"),
+            "error_code": attempt.get("error_code"),
+        }
+        message = attempt.get("message")
+        if message and attempt.get("error_code"):
+            compact["message"] = str(message)[:240]
+        return compact
 
     def _display_ids(self, state: EpisodeState) -> list[str]:
         visible = (
