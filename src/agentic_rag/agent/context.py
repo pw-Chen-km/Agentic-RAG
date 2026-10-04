@@ -123,12 +123,6 @@ class PolicyContextBuilder:
             reference_map,
             mode=action_space_mode,
         )
-        decision_format = (
-            self.action_schema_builder.build(available_action_space)
-            if self.use_state_conditioned_schema
-            else policy_decision_model(self.enabled_expansions)
-        )
-        native_tools, native_tool_models = native_action_tools(available_action_space)
         memory = self._semantic_memory(display_ids, state)
         attempted_actions = [self._attempt_summary(item) for item in trajectory]
         view = PolicyView(
@@ -157,6 +151,12 @@ class PolicyContextBuilder:
         protocol = render_action_protocol(self.enabled_expansions)
         rendered_context: dict[str, Any] | None = None
         reader_usage = Usage()
+        decision_format = (
+            self.action_schema_builder.build(available_action_space)
+            if self.use_state_conditioned_schema
+            else policy_decision_model(self.enabled_expansions)
+        )
+        native_tools, native_tool_models = native_action_tools(available_action_space)
         if self.observation_mode == "raw":
             if self.show_available_action_options:
                 protocol = (
@@ -170,6 +170,19 @@ class PolicyContextBuilder:
                 trajectory=trajectory,
                 action_space=available_action_space,
             )
+            # Reader-organized modes expose only the sources selected by the
+            # Reader.  Keep the action schema in lockstep with that filtered
+            # view so the model cannot select a hidden READ/EXPAND/FINISH ref.
+            if self.observation_mode in {"reader", "reader_assessed"}:
+                available_action_space = self._filter_action_space_for_cards(
+                    available_action_space, card_view
+                )
+            decision_format = (
+                self.action_schema_builder.build(available_action_space)
+                if self.use_state_conditioned_schema
+                else policy_decision_model(self.enabled_expansions)
+            )
+            native_tools, native_tool_models = native_action_tools(available_action_space)
             rendered_context = self._render_observation_context(
                 state=state,
                 trajectory=trajectory,
@@ -283,8 +296,9 @@ class PolicyContextBuilder:
                     state,
                     action_space,
                     tuple(trajectory),
-                    reader_items=reader_items,
+                    reader_items=self._reader_history(trajectory) + reader_items,
                     mode=self.observation_mode,
+                    reader_only=True,
                 )
                 if result.sufficiency is not None:
                     reader_view = EvidenceCardView(
@@ -302,8 +316,10 @@ class PolicyContextBuilder:
                 state,
                 action_space,
                 tuple(trajectory),
+                reader_items=self._reader_history(trajectory),
                 mode=self.observation_mode,
                 reader_error=reader_error,
+                reader_only=self.observation_mode in {"reader", "reader_assessed"},
             ),
             reader_usage,
         )
@@ -336,6 +352,73 @@ class PolicyContextBuilder:
         if cards.reader_sufficiency is not None:
             value["reader_sufficiency"] = cards.reader_sufficiency
         return value
+
+    @staticmethod
+    def _reader_history(
+        trajectory: Sequence[StepRecord],
+    ) -> tuple[dict[str, Any], ...]:
+        """Recover prior Reader selections without exposing their raw text.
+
+        Reader summaries live in the per-step rendered context for audit and
+        are carried into the next turn as compact claim/quote records.  The
+        original text/preview fields are deliberately ignored here.
+        """
+
+        history: dict[str, dict[str, Any]] = {}
+        for record in trajectory:
+            context = record.rendered_context or {}
+            cards = context.get("evidence_cards", {})
+            if not isinstance(cards, dict):
+                continue
+            for card in cards.get("cards", []) or []:
+                if not isinstance(card, dict):
+                    continue
+                ref = card.get("ref")
+                claim = card.get("reader_claim")
+                quote = card.get("reader_quote")
+                if not isinstance(ref, str) or not claim or not quote:
+                    continue
+                history[ref] = {
+                    "source_ref": ref,
+                    "role": card.get("reader_role") or "context",
+                    "claim": str(claim),
+                    "quote": str(quote),
+                    "confidence": card.get("reader_confidence", "medium"),
+                }
+        return tuple(history.values())
+
+    @staticmethod
+    def _filter_action_space_for_cards(
+        action_space: AvailableActionSpace,
+        cards: EvidenceCardView,
+    ) -> AvailableActionSpace:
+        """Restrict source-specific actions to Reader-selected cards."""
+
+        visible_refs = {card.ref for card in cards.cards}
+        expand_options = tuple(
+            option.model_copy(
+                update={
+                    "source_refs": tuple(
+                        ref for ref in option.source_refs if ref in visible_refs
+                    )
+                }
+            )
+            for option in action_space.expand_options
+            if any(ref in visible_refs for ref in option.source_refs)
+        )
+        return action_space.model_copy(
+            update={
+                "expand_options": expand_options,
+                "read_refs": tuple(
+                    ref for ref in action_space.read_refs if ref in visible_refs
+                ),
+                "finish_evidence_refs": tuple(
+                    ref
+                    for ref in action_space.finish_evidence_refs
+                    if ref in visible_refs
+                ),
+            }
+        )
 
     def _render_context_text(self, context: dict[str, Any]) -> str:
         previous = context.get("previous_assessment")

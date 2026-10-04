@@ -85,6 +85,7 @@ class EvidenceRegistry:
         reader_items: tuple[dict[str, Any], ...] = (),
         mode: str = "program",
         reader_error: str | None = None,
+        reader_only: bool = False,
     ) -> EvidenceCardView:
         display_ids = self._display_ids(state)
         new_ids = self._new_ids(state)
@@ -94,6 +95,16 @@ class EvidenceRegistry:
             for item in reader_items
             if isinstance(item, dict) and item.get("source_ref")
         }
+        # In Reader modes the Reader is a visibility filter, not merely an
+        # annotation layer.  Only sources it selected (including summaries
+        # carried forward from previous turns) are shown to the policy model.
+        if reader_only:
+            selected_refs = set(reader_by_ref)
+            display_ids = [
+                stable_id
+                for stable_id in display_ids
+                if state.reference_registry.ref_for(stable_id) in selected_refs
+            ]
         result: list[EvidenceCard] = []
         for stable_id in display_ids:
             ref = state.reference_registry.ref_for(stable_id)
@@ -104,6 +115,12 @@ class EvidenceRegistry:
             if item is not None:
                 card = replace(
                     card,
+                    # Reader-only context must not leak the original source
+                    # body.  The audit record still contains the full card.
+                    text=None if reader_only else card.text,
+                    preview=None if reader_only else card.preview,
+                    name=None if reader_only else card.name,
+                    parent_ref=None if reader_only else card.parent_ref,
                     reader_claim=str(item.get("claim")) if item.get("claim") else None,
                     reader_role=str(item.get("role")) if item.get("role") else None,
                     reader_quote=str(item.get("quote")) if item.get("quote") else None,

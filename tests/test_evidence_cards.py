@@ -76,5 +76,46 @@ def test_reader_items_are_source_grounded_and_rendered_once(built_substrate):
     prompt = "\n".join(message.content for message in built.messages)
     assert "reader summary: The source describes the requested fact." in prompt
     assert "reader quote: The source sentence." in prompt
+    # Reader mode is a filter: original sentence/chunk bodies are not
+    # included separately (the quote is the only source text shown).
+    assert "text:" not in prompt
+    assert "preview:" not in prompt
     assert "Currently available action options" not in prompt
     assert built.reader_usage.policy_calls == 1
+
+
+def test_reader_mode_hides_unselected_sources_and_actions(built_substrate):
+    substrate = Substrate.open(built_substrate)
+    state = _state_with_visible_sources(substrate)
+    sentence_id = next(iter(state.visible_sentence_ids))
+    sentence_ref = state.reference_registry.ref_for(sentence_id, "SENTENCE")
+    reader = ScriptedReader([
+        ReaderResult(items=[ReaderItem(
+            source_ref=sentence_ref,
+            role="direct_answer",
+            claim="Only the selected sentence matters here.",
+            quote="Selected source quote.",
+            confidence="high",
+        )])
+    ])
+    built = PolicyContextBuilder(
+        substrate,
+        (ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,),
+        observation_mode="reader",
+        reader=reader,
+    ).build("Which city?", SkillDocument.from_text("Use evidence."), state, [], scope_id="q1")
+    prompt = "\n".join(message.content for message in built.messages)
+    chunk_ref = state.reference_registry.ref_for(
+        next(iter(state.visible_chunk_ids)), "CHUNK"
+    )
+    entity_ref = state.reference_registry.ref_for(
+        next(iter(state.visible_entity_ids)), "ENTITY"
+    )
+    assert "Only the selected sentence matters here." in prompt
+    rendered_refs = {
+        item["ref"]
+        for item in built.rendered_context["evidence_cards"]["cards"]
+    }
+    assert chunk_ref not in rendered_refs
+    assert entity_ref not in rendered_refs
+    assert chunk_ref not in {ref for ref in built.available_action_space.read_refs}
