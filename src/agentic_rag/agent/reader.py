@@ -113,9 +113,13 @@ class OllamaEvidenceReader:
     ) -> ReaderResult:
         system = (
             "You are an evidence reader inside a retrieval agent. "
-            "Summarize only text present in the new observation. Every item "
-            "must quote its source and preserve the supplied source_ref. "
-            "Do not answer the question and do not invent facts."
+            "Select only the few sources from the new observation that can "
+            "help answer the question or support the next retrieval step; "
+            "omit irrelevant and duplicate sources. Summarize only text "
+            "present in the new observation. Every item must quote its source "
+            "and preserve the supplied source_ref. Returning no items is "
+            "allowed when nothing is useful. Do not answer the question and "
+            "do not invent facts."
         )
         if reader_assessment:
             system += (

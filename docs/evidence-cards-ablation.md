@@ -11,12 +11,13 @@ schema, the retriever, and the validator remain unchanged.
 * `program`: a deterministic Evidence Registry deduplicates stable IDs and
   renders one card per source.  Each card contains only its source content and
   the operations that are already legal for it.
-* `reader`: an additional structured-output Reader summarizes the new
-  observation with source references and quotes.  The main Agent still owns
+* `reader`: an additional structured-output Reader selects and summarizes the
+  new observation with source references and quotes.  The main Agent sees only
+  those selected cards (not the original text/preview) and still owns
   assessment and action selection.
-* `reader_assessed`: the reader mode plus an advisory resolved/still-missing
-  assessment.  It is diagnostic only; the Controller does not force FINISH or
-  continuation.
+* `reader_assessed`: the reader-only context plus an advisory
+  resolved/still-missing assessment.  It is diagnostic only; the Controller
+  does not force FINISH or continuation.
 
 All modes use the same question, Initial Skill, substrate, embedding index,
 model, seed, budget, and temperature.  Reader calls and tokens are reported
@@ -33,9 +34,11 @@ Global SEARCH instruction
 Remaining budget
 ```
 
-READ, EXPAND, and FINISH are attached to the relevant card.  There is no
-second dynamic `Available actions` menu.  SEARCH remains part of the fixed
-protocol and is constrained by the state-conditioned schema.
+READ, EXPAND, and FINISH are attached to the relevant card.  In Reader modes,
+the same selected-card set also filters those source-specific schema options;
+the model cannot choose a hidden source by reference.  There is no second
+dynamic `Available actions` menu.  SEARCH remains part of the fixed protocol
+and is constrained by the state-conditioned schema.
 
 ## Running a pilot
 
