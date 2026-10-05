@@ -90,6 +90,7 @@ def test_reader_items_are_source_grounded_and_rendered_once(built_substrate):
     built = PolicyContextBuilder(
         substrate,
         (ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,),
+        show_available_action_options=False,
         observation_mode="reader",
         reader=reader,
     ).build("Which city?", SkillDocument.from_text("Use evidence."), state, [], scope_id="q1")
