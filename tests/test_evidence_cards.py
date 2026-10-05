@@ -84,7 +84,9 @@ def test_reader_items_are_source_grounded_and_rendered_once(built_substrate):
     assert built.reader_usage.policy_calls == 1
 
 
-def test_reader_mode_hides_unselected_sources_and_actions(built_substrate):
+def test_reader_mode_hides_unselected_sources_but_keeps_full_action_space(
+    built_substrate,
+):
     substrate = Substrate.open(built_substrate)
     state = _state_with_visible_sources(substrate)
     sentence_id = next(iter(state.visible_sentence_ids))
@@ -118,4 +120,8 @@ def test_reader_mode_hides_unselected_sources_and_actions(built_substrate):
     }
     assert chunk_ref not in rendered_refs
     assert entity_ref not in rendered_refs
-    assert chunk_ref not in {ref for ref in built.available_action_space.read_refs}
+    # Reader filters what the model sees, not what the Controller considers
+    # legal.  The complete state-conditioned action space is preserved so a
+    # selective Reader cannot accidentally remove all legal actions.
+    assert chunk_ref in set(built.available_action_space.read_refs)
+    assert sentence_ref in set(built.available_action_space.finish_evidence_refs)

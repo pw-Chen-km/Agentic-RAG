@@ -170,19 +170,6 @@ class PolicyContextBuilder:
                 trajectory=trajectory,
                 action_space=available_action_space,
             )
-            # Reader-organized modes expose only the sources selected by the
-            # Reader.  Keep the action schema in lockstep with that filtered
-            # view so the model cannot select a hidden READ/EXPAND/FINISH ref.
-            if self.observation_mode in {"reader", "reader_assessed"}:
-                available_action_space = self._filter_action_space_for_cards(
-                    available_action_space, card_view
-                )
-            decision_format = (
-                self.action_schema_builder.build(available_action_space)
-                if self.use_state_conditioned_schema
-                else policy_decision_model(self.enabled_expansions)
-            )
-            native_tools, native_tool_models = native_action_tools(available_action_space)
             rendered_context = self._render_observation_context(
                 state=state,
                 trajectory=trajectory,
@@ -386,39 +373,6 @@ class PolicyContextBuilder:
                     "confidence": card.get("reader_confidence", "medium"),
                 }
         return tuple(history.values())
-
-    @staticmethod
-    def _filter_action_space_for_cards(
-        action_space: AvailableActionSpace,
-        cards: EvidenceCardView,
-    ) -> AvailableActionSpace:
-        """Restrict source-specific actions to Reader-selected cards."""
-
-        visible_refs = {card.ref for card in cards.cards}
-        expand_options = tuple(
-            option.model_copy(
-                update={
-                    "source_refs": tuple(
-                        ref for ref in option.source_refs if ref in visible_refs
-                    )
-                }
-            )
-            for option in action_space.expand_options
-            if any(ref in visible_refs for ref in option.source_refs)
-        )
-        return action_space.model_copy(
-            update={
-                "expand_options": expand_options,
-                "read_refs": tuple(
-                    ref for ref in action_space.read_refs if ref in visible_refs
-                ),
-                "finish_evidence_refs": tuple(
-                    ref
-                    for ref in action_space.finish_evidence_refs
-                    if ref in visible_refs
-                ),
-            }
-        )
 
     def _render_context_text(self, context: dict[str, Any]) -> str:
         previous = context.get("previous_assessment")
