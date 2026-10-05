@@ -34,11 +34,13 @@ Global SEARCH instruction
 Remaining budget
 ```
 
-READ, EXPAND, and FINISH are attached to the relevant card.  In Reader modes,
-the same selected-card set also filters those source-specific schema options;
-the model cannot choose a hidden source by reference.  There is no second
-dynamic `Available actions` menu.  SEARCH remains part of the fixed protocol
-and is constrained by the state-conditioned schema.
+READ, EXPAND, and FINISH are attached to the relevant card when that card is
+shown.  Reader selection changes only the evidence text visible in the
+context.  It does **not** filter the Controller's legal action space or the
+state-conditioned schema; those are computed from the complete State snapshot
+and remain identical across observation modes.  There is no second dynamic
+`Available actions` menu.  SEARCH remains part of the fixed protocol and is
+constrained by the state-conditioned schema.
 
 ## Running a pilot
 
