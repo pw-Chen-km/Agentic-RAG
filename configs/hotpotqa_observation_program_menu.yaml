@@ -1,0 +1,18 @@
+agent:
+  max_steps: 10
+  max_policy_attempts: 12
+  max_retrieved_tokens: 12000
+  show_available_action_options: true
+  use_state_conditioned_schema: true
+  observation_mode: program
+policy:
+  provider: ollama
+  model: qwen3.8:27b-q4_K_M
+  host: http://127.0.0.1:11440
+  output_mode: structured
+  temperature: 0
+  think: false
+  timeout_seconds: 900
+  keep_alive: 30m
+  max_retries: 2
+  num_ctx: 65536

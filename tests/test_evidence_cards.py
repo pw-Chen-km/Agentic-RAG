@@ -34,7 +34,27 @@ def _state_with_visible_sources(substrate: Substrate) -> EpisodeState:
     return state
 
 
-def test_program_context_uses_one_card_block_without_action_menu(built_substrate):
+def test_program_context_without_action_menu_uses_one_card_block(built_substrate):
+    substrate = Substrate.open(built_substrate)
+    state = _state_with_visible_sources(substrate)
+    built = PolicyContextBuilder(
+        substrate,
+        (ExpansionKind.ENTITY_MENTIONED_IN_SENTENCE,),
+        show_available_action_options=False,
+        observation_mode="program",
+    ).build("Which city?", SkillDocument.from_text("Use evidence."), state, [], scope_id="q1")
+    prompt = "\n".join(message.content for message in built.messages)
+    assert "Evidence cards:" in prompt
+    assert "can do:" in prompt
+    assert "Currently available action options" not in prompt
+    assert "returned_units" not in prompt
+    assert "retrieved_tokens" not in prompt
+    assert prompt.count("S1") <= 3
+
+
+def test_program_context_can_add_the_same_centralized_action_menu(
+    built_substrate,
+):
     substrate = Substrate.open(built_substrate)
     state = _state_with_visible_sources(substrate)
     built = PolicyContextBuilder(
@@ -45,11 +65,11 @@ def test_program_context_uses_one_card_block_without_action_menu(built_substrate
     ).build("Which city?", SkillDocument.from_text("Use evidence."), state, [], scope_id="q1")
     prompt = "\n".join(message.content for message in built.messages)
     assert "Evidence cards:" in prompt
-    assert "can do:" in prompt
-    assert "Currently available action options" not in prompt
-    assert "returned_units" not in prompt
-    assert "retrieved_tokens" not in prompt
-    assert prompt.count("S1") <= 3
+    assert "Currently available action options" in prompt
+    assert "READ:" in prompt
+    assert "FINISH:" in prompt
+    assert built.available_action_space.read_refs
+    assert built.available_action_space.finish_evidence_refs
 
 
 def test_reader_items_are_source_grounded_and_rendered_once(built_substrate):

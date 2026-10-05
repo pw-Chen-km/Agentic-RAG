@@ -175,6 +175,7 @@ class PolicyContextBuilder:
                 trajectory=trajectory,
                 cards=card_view,
                 action_space=available_action_space,
+                include_available_action_options=self.show_available_action_options,
             )
             if self.observation_mode == "reader_assessed":
                 sufficiency = rendered_context.get("reader_sufficiency")
@@ -318,6 +319,7 @@ class PolicyContextBuilder:
         trajectory: Sequence[StepRecord],
         cards: EvidenceCardView,
         action_space: AvailableActionSpace,
+        include_available_action_options: bool = False,
     ) -> dict[str, Any]:
         value: dict[str, Any] = {
             "observation_mode": self.observation_mode,
@@ -336,6 +338,10 @@ class PolicyContextBuilder:
                 "retrieval_tokens": state.remaining_retrieved_token_budget,
             },
         }
+        if include_available_action_options:
+            value["available_action_options"] = render_available_action_options(
+                action_space
+            )
         if cards.reader_sufficiency is not None:
             value["reader_sufficiency"] = cards.reader_sufficiency
         return value
@@ -393,9 +399,13 @@ class PolicyContextBuilder:
                     reader_sufficiency=context["evidence_cards"].get("reader_sufficiency"),
                 )
             ),
+        ]
+        if context.get("available_action_options"):
+            lines.append("\n" + str(context["available_action_options"]))
+        lines.extend([
             "\nGlobal SEARCH instruction:",
             str(context["global_search"]),
-        ]
+        ])
         if context.get("reader_sufficiency") is not None:
             lines.extend([
                 "\nReader assessment — advisory only:",
