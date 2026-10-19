@@ -1,159 +1,58 @@
-# Agentic RAG
+# A-RAG + SkillOpt: Novel Reflection48k
 
-A single-agent, multi-substrate retrieval system for 2WikiMultiHopQA,
-HotpotQA, Medical and Novel from GraphRAG-Bench, and MuSiQue. The repository
-contains one production architecture: Semantic Memory, episode-local typed
-references, centralized State Management, and a stateless Controller.
+Latest reusable code from the completed Novel Initial / Optimized / Original
+A-RAG experiment. `v6r3` is an experiment revision label, not another model.
+This public branch is a deliberately source-only, portable export. Generic runtime
+modules, selected current runners, prompts and Skills are copied without changes;
+old machine-specific deployment scripts, historical configs, raw records,
+datasets/indexes, weights, virtualenvs and private paths are not published.
+Their original versions and experimental lineage belong to the private data backup.
 
-```mermaid
-flowchart LR
-    Q["Question"] --> CB["Context Builder"]
-    SM["State Management"] --> CB
-    SK["Selected Skill"] --> CB
-    CB --> P["LLM Policy"]
-    P --> C["Stateless Controller"]
-    C --> RV["Reference Resolver + Validator"]
-    RV --> ENV["Multi-substrate Retrieval Environment"]
-    ENV --> O["Observation"]
-    O --> SM
-    C --> F["Final Answer"]
+## Get this version
+
+```bash
+git clone --branch novel-reflection48k-v6r3 --single-branch https://github.com/pw-Chen-km/Agentic-RAG.git
+cd Agentic-RAG
+# Later, while on this branch:
+git pull --ff-only
 ```
 
-## Design
+Cloning or pulling does not install packages, fetch models or run inference.
+On a suitable future Linux machine, create a Python 3.10+ environment and install
+the package with `python -m pip install -e '.[full,dev]'` as needed. This explicit
+optional installation can be large; do not run it on a space-constrained laptop.
+Baseline runtime was Ubuntu 22.04, Python 3.10 and Ollama 0.35.0. The captured
+package inventory is in the private backup; `pyproject.toml` is not a lockfile.
 
-The Policy sees the question, neutral action protocol, selected Skill, last
-assessment, complete visible Semantic Memory, semantic action history, and one
-compact remaining-budget line. It chooses exactly one `SEARCH`, `EXPAND`,
-`READ`, or `FINISH` action.
+## Contents and entry points
 
-State Management is the only state owner. It accumulates novel entities,
-sentences, chunks, observations, action history, usage, and budgets. The
-Controller stores nothing; it resolves the current frozen `E#/S#/C#` map,
-validates the decision, executes retrieval, and returns the observation to
-State Management.
+- `src/arag`: Agent, tools, exact Ollama context/output guards.
+- `src/arag_skillopt`: Phase1, Meta, gates, sealed test and cache lineage checks.
+- `prompts/`, `skills/`: runtime/Optimizer prompts and initial/final retrieval rules.
+- `configs/novel_reflection48k.example.yaml`: derived portable config; only paths
+  were changed from the original frozen run config. Use it explicitly with `--config`.
+- `scripts/run_workflow.py`, `run_phase1.py`, `run_final_test.py`: guarded runners.
+- `experiment_extensions/run_original_test.py`, `compare_three_way.py`: Original
+  arm and three-way comparison entry points; use `--help` for required paths.
+- `tests/`: selected synthetic offline unit tests with their fixture dependencies;
+  not the complete historical deployment test suite. No tests/inference are auto-run.
+- `backup_tools/`: read-only private backup integrity helpers.
+- `provenance/published-source.json`: exact copied-file hashes and export policy.
 
-`SEARCH` never needs a reference. `EXPAND` and `READ` use currently visible
-typed refs. `FINISH` answers directly and cites only a complete visible `S#` or
-an already-read `C#`. Invalid attempts consume a Policy call but do not consume
-a retrieval step.
+The example retains Agent context 65536 / answer 4096 / input 60928 / safety 512,
+no truncation/shift, two workers, seed 42, Optimizer medium / output 8192 /
+Reflection and Merge input 48000. Judge retains its separate original settings;
+known timeout and grading-quality limitations have not been fixed by this export.
+The sealed final Skill is a small JSON/Markdown retrieval policy, not model weights.
 
-See [architecture.md](docs/architecture.md),
-[action-contract.md](docs/action-contract.md), and
-[evaluation.md](docs/evaluation.md). For a clean-machine setup, the pinned
-five-dataset collection, local Qwen SkillOpt, and the A-RAG baseline procedure, use the
-[reproduction and A-RAG baseline guide](docs/reproduction-and-arag-baseline.md).
+## Experiment boundaries
 
-## Install
+Novel used the project's fixed 402 TRAIN / 402 validation / 1206 test split.
+History spans multiple revisions, cached rollouts and previously analyzed test
+data: it is not a clean all-48k rerun or fresh blind test. Initial-vs-Optimized
+isolates Skill changes; Original-vs-new-framework is a whole-system comparison.
+Unknown evaluations must remain unknown, not zeros. Novel evidence recall is N/A.
+Test results must not feed Optimizer, gates or Skill selection. Hotpot remains
+deferred and requires new human authorization; no auto-start queue is included.
 
-Python 3.12 is required.
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-```
-
-For SkillOpt:
-
-```powershell
-pip install -e ".[dev,skillopt]"
-```
-
-Secrets belong in an untracked `.env` or the process environment. Never put an
-API key in YAML, a trajectory, or a commit.
-
-## Build benchmark substrates
-
-The canonical `benchmark_exact` adapter supports these dataset keys:
-`2wikimultihop`, `hotpotqa`, `medical`, `musique`, and `novel`. Each checked-in
-build config pins its dataset profile and validates the official row counts.
-
-```powershell
-agentic-rag build data\rag_test artifacts\medical_benchmark_exact `
-  --config configs\datasets\medical.yaml
-agentic-rag validate artifacts\medical_benchmark_exact
-```
-
-Use the corresponding file under `configs\datasets\` for the other four
-datasets. Gold questions and answers are written only to the evaluation
-sidecar; they never enter retrieval or Policy context.
-
-### Query-scoped HotpotQA input
-
-The separate `hotpotqa_scoped` input format remains available for custom
-Hotpot-style records whose context is attached to each question:
-
-```powershell
-agentic-rag build data\hotpotqa.json artifacts\hotpotqa `
-  --corpus-id hotpotqa-dev `
-  --source-format hotpotqa_scoped
-agentic-rag validate artifacts\hotpotqa
-```
-
-## Run one episode
-
-Ollama Qwen:
-
-```powershell
-agentic-rag run artifacts\hotpotqa_benchmark_exact `
-  "Which person was born earlier?" `
-  --scope-id hotpotqa:benchmark_exact:dev `
-  --skill-file skills\baseline.md `
-  --config configs\hotpotqa_qwen.yaml `
-  --output runs\qwen
-```
-
-The Policy configs are dataset-independent despite their historical filenames.
-OpenAI Luna uses `configs/hotpotqa_luna.yaml` and reads `OPENAI_API_KEY` from
-the environment.
-
-Three interchangeable Skill conditions share the exact same runtime contract:
-
-- `skills/baseline.md`: neutral evidence-adaptive baseline.
-- `skills/chunk_entity_expert.md`: chunk-first, entity drill-down procedure.
-- `skills/guarded_procedure.md`: post-hoc experimental failure guard.
-
-## Artifacts
-
-Each episode writes the final record, full trajectory, frozen reference maps,
-Policy conversation, Skill snapshot, and effective configuration. Stable
-substrate IDs remain audit-only and never enter Policy context.
-
-## Evaluation and SkillOpt
-
-```powershell
-python scripts\run_benchmark_eval.py --help
-python scripts\judge_benchmark.py --help
-python scripts\run_benchmark_matrix.py --help
-agentic-rag skillopt-prepare --help
-agentic-rag skillopt-train --help
-```
-
-With the five standard substrates and deterministic smoke splits in place,
-one command runs the same V3.2 Policy and Skill over every test split:
-
-```powershell
-python scripts\run_benchmark_matrix.py `
-  --config configs\hotpotqa_qwen.yaml `
-  --skill skills\guarded_procedure.md `
-  --output runs\qwen_all_datasets
-```
-
-The matrix runner writes one complete result directory per dataset and a
-`matrix_summary.json`. Use `judge_benchmark.py --dataset <dataset>` for semantic
-accuracy. Medical and Novel intentionally report LLM accuracy rather than
-contain accuracy because their answers are long-form.
-
-The standard metrics are exact match, contain accuracy, Luna-as-judge,
-invalid attempts, Policy calls/tokens, retrieved tokens, and action counts.
-
-## Verification
-
-```powershell
-pytest
-python -m compileall src\agentic_rag
-```
-
-The multi-version research snapshot remains available in branch
-`codex/pre-singularity-version-archive` and tag
-`pre-singularity-v3.2-20260806`; it is not part of this mainline runtime.
+See [restoration notes](docs/RESTORE_AND_REUSE.md) and [attribution](NOTICE.md).

@@ -1,0 +1,22 @@
+{
+  "schema_version": "arag-skill-v1",
+  "source_prompt_sha256": "cc4aba23711a8a1939d948b9dc0357501e6ed9c86bf4d4a4410778d221255881",
+  "retrieval_policy": [
+    {
+      "rule_id": "R01",
+      "title": "Iterative retrieval",
+      "when": "Answering questions with the document tools",
+      "action_sequence": [
+        "Work iteratively: search → read → evaluate → search → read → ... → answer."
+      ]
+    },
+    {
+      "rule_id": "R02",
+      "title": "Multi-hop questions",
+      "when": "For multi-hop questions",
+      "action_sequence": [
+        "Decompose the problem and tackle each sub-question step by step."
+      ]
+    }
+  ]
+}

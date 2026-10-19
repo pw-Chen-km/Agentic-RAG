@@ -1,0 +1,55 @@
+cff-version: 1.2.0
+message: "If you use A-RAG in your research, please cite our paper."
+title: "A-RAG: Scaling Agentic Retrieval-Augmented Generation via Hierarchical Retrieval Interfaces"
+type: software
+authors:
+  - family-names: Du
+    given-names: Mingxuan
+    affiliation: "University of Science and Technology of China"
+    email: dumingxuan@mail.ustc.edu.cn
+  - family-names: Xu
+    given-names: Benfeng
+    affiliation: "Metastone Technology"
+  - family-names: Zhu
+    given-names: Chiwei
+    affiliation: "University of Science and Technology of China"
+  - family-names: Wang
+    given-names: Shaohan
+    affiliation: "University of Science and Technology of China"
+  - family-names: Wang
+    given-names: Pengyu
+    affiliation: "University of Science and Technology of China"
+  - family-names: Wang
+    given-names: Xiaorui
+    affiliation: "Metastone Technology"
+  - family-names: Mao
+    given-names: Zhendong
+    affiliation: "University of Science and Technology of China"
+version: "0.1.0"
+date-released: "2026-02-04"
+license: MIT
+url: "https://github.com/Ayanami0730/arag"
+repository-code: "https://github.com/Ayanami0730/arag"
+preferred-citation:
+  type: article
+  title: "A-RAG: Scaling Agentic Retrieval-Augmented Generation via Hierarchical Retrieval Interfaces"
+  authors:
+    - family-names: Du
+      given-names: Mingxuan
+    - family-names: Xu
+      given-names: Benfeng
+    - family-names: Zhu
+      given-names: Chiwei
+    - family-names: Wang
+      given-names: Shaohan
+    - family-names: Wang
+      given-names: Pengyu
+    - family-names: Wang
+      given-names: Xiaorui
+    - family-names: Mao
+      given-names: Zhendong
+  year: 2026
+  identifiers:
+    - type: other
+      value: "arXiv:2602.03442"
+  url: "https://arxiv.org/abs/2602.03442"

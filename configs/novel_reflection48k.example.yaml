@@ -1,0 +1,120 @@
+# Portable DERIVED example; original frozen configuration is in the private data backup.
+# Only filesystem locations differ; never overwrite archived contracts with this example.
+name: novel_question_entities_skillopt_reflection48k_v6r3
+prompt_mode: formatted
+prompt_path: prompts/arag_entityhop_no_keyword_question_entities.txt
+skill_path: skills/arag_entityhop_question_entities_initial_rules.json
+optimizer_prompt_version: diagnosis_skill_v6r1
+output: results/novel_reflection48k
+experiment:
+  dataset: novel
+  split_counts:
+    train: 402
+    validation: 402
+    test: 1206
+  reviewed_test_manifest: data/novel/test_sample_manifest.json
+  preparation_manifest: data/novel/preparation_manifest.json
+  ablation_reference: data/novel/ablation-reference
+  exact_evidence_recall: unavailable_reference_text_annotations
+  reflection_budget_revision:
+    version: reflection48k-continuation-v1
+    from_input_tokens: 16000
+    to_input_tokens: 48000
+    applies_to:
+    - phase1_reflection
+    - meta_reflection
+  runtime_context_revision:
+    version: qwen-context64-v1
+    from_context_length: 32768
+    to_context_length: 65536
+phase1:
+  rollout_batch_size: 40
+  reflection_minibatch_size: 5
+  max_reflection_edits: 2
+  max_batch_edits: 3
+  max_rule_tokens: 300
+  max_skill_tokens: 1500
+  max_input_tokens: 48000
+  max_retries: 3
+  episode_workers: 2
+  reflection_workers: 2
+  min_support_cases: 1
+  analysis_protocol: state-action-diagnosis-to-edits-v6
+  max_token_cost_increase: 0.1
+  max_call_cost_increase: 0.05
+  min_validation_pair_coverage: 0.95
+  max_merge_input_tokens: 48000
+  diagnostic_format_repair: redundant-outer-case-id-v1
+meta:
+  enabled: true
+  comparison_batch_size: 40
+  reflection_minibatch_size: 5
+llm:
+  transport: ollama_exact
+  context_length: 65536
+  input_token_limit: 60928
+  context_safety_tokens: 512
+  expected_digest: 25b843619e944cd0ae6069f94ff4e5e26a16e109ccbc0a66a0f05979ed70098e
+  base_url: http://127.0.0.1:11441/v1
+  base_urls: &id001
+  - http://127.0.0.1:11441/v1
+  - http://127.0.0.1:11442/v1
+  api_key: ollama
+  model: qwen3.8:27b-q4_K_M
+  temperature: 0
+  reasoning_effort: none
+  seed: 42
+  max_tokens: 4096
+  require_complete_output: true
+optimizer:
+  transport: ollama_exact
+  context_length: 65536
+  input_token_limit: 48000
+  context_safety_tokens: 256
+  expected_digest: 25b843619e944cd0ae6069f94ff4e5e26a16e109ccbc0a66a0f05979ed70098e
+  base_url: http://127.0.0.1:11441/v1
+  base_urls: *id001
+  api_key: ollama
+  model: qwen3.8:27b-q4_K_M
+  temperature: 0
+  reasoning_effort: medium
+  seed: 42
+  max_tokens: 8192
+  request_read_timeout: 600
+  request_total_timeout: 2400
+judge:
+  url: http://127.0.0.1:11441
+  urls:
+  - http://127.0.0.1:11441
+  - http://127.0.0.1:11442
+  model: qwen3.8:27b-q4_K_M
+  expected_digest: 25b843619e944cd0ae6069f94ff4e5e26a16e109ccbc0a66a0f05979ed70098e
+  think: false
+  num_ctx: 32768
+agent:
+  max_loops: 10
+  token_budget: 28672
+embedding:
+  model: sentence-transformers/all-MiniLM-L6-v2
+  device: cpu
+  query_prompt_name: null
+  isolate_process: true
+keyword_search:
+  enabled: false
+entity_hop:
+  enabled: true
+  backend: direct_bm25
+  index_file: data/novel/direct_bm25.json
+  top_entities: 3
+  top_k: 5
+  max_top_k: 20
+  entity_source: question_or_visible_evidence
+data:
+  source_questions: data/novel/source_questions.json
+  train: data/novel/train.jsonl
+  validation: data/novel/validation.jsonl
+  test: data/novel/test.jsonl
+  questions: data/novel/questions.json
+  support_map: data/novel/support_map.json
+  chunks_file: data/novel/chunks.json
+  index_dir: data/novel/index

@@ -1,0 +1,29 @@
+{
+  "schema_version": "arag-skill-v1",
+  "retrieval_policy": [
+    {
+      "rule_id": "R01",
+      "title": "Iterative retrieval",
+      "when": "Answering questions with the document tools",
+      "action_sequence": [
+        "search → read → evaluate → entity_hop when a concrete entity in the question or visible evidence may lead to missing information → read → answer"
+      ]
+    },
+    {
+      "rule_id": "R02",
+      "title": "Multi-hop questions",
+      "when": "For multi-hop questions",
+      "action_sequence": [
+        "Decompose the problem and tackle each sub-question step by step"
+      ]
+    },
+    {
+      "rule_id": "R03",
+      "title": "Evidence-conditioned entity hopping",
+      "when": "The question or visible evidence contains a concrete entity and related information is still missing",
+      "action_sequence": [
+        "Use that entity with entity_hop to find related chunks, then read useful returned chunks"
+      ]
+    }
+  ]
+}
