@@ -12,8 +12,17 @@ from .meta_comparison import (
     load_branch,
     make_comparison,
     render_comparisons_with_audit,
+    rule_differences,
 )
 from .paired_summary import HRO_VERSION, compact_pair_record
+from .hro_v1 import (
+    GROUPS,
+    UNSCORED,
+    build_stage_a_context,
+    build_stage_b_context,
+    group_summary,
+    pair_group,
+)
 from .phase1 import Phase1
 from .skill_rules import compile_initial_skill, skill_sha256
 from .support import digest
@@ -29,6 +38,7 @@ class MetaConfig:
     max_edits_per_update: int = 1
     min_informative_pairs: int = 3
     accuracy_floor: float | None = None
+    hro_v1: bool = False
 
     def __post_init__(self):
         if (
@@ -48,6 +58,10 @@ class MetaConfig:
             or not 0 <= self.accuracy_floor <= 1
         ):
             raise ValueError("accuracy_floor must be a fraction in [0,1]")
+        if type(self.hro_v1) is not bool:
+            raise ValueError("hro_v1 must be boolean")
+        if self.hro_v1 and self.max_edits_per_update != 1:
+            raise ValueError("HRO v1 permits at most one logical edit per Meta update")
 
 
 class MetaStage(Phase1):
@@ -64,6 +78,7 @@ class MetaStage(Phase1):
             phase1.tool_guidance,
             phase1.cfg,
             phase1.support_map,
+            action_space=phase1.action_space,
         )
         self.phase1 = phase1
         self.meta_cfg = config
@@ -72,6 +87,7 @@ class MetaStage(Phase1):
             hro_version=HRO_VERSION,
             meta_config=asdict(config),
             phase1_contract_hash=digest(phase1.contract),
+            hro_v1=self.meta_cfg.hro_v1,
         )
 
     def episode(self, question, skill, split, version):
@@ -101,6 +117,21 @@ class MetaStage(Phase1):
     def reflect_comparisons(self, skill, comparisons, directory, name,
                             historical_skill_a=None, historical_skill_b=None):
         ids = [c["question_id"] for c in comparisons]
+        if self.meta_cfg.hro_v1:
+            if not comparisons:
+                raise ValueError("HRO Stage A requires at least one informative pair")
+            diffs = comparisons[0].get("rule_differences", [])
+            context = build_stage_a_context(
+                pair_group(comparisons[0]),
+                comparisons,
+                changed_rule_ids=[d["rule_id"] for d in diffs],
+                parent_rules=(historical_skill_a or {}).get("retrieval_policy", []),
+                candidate_rules=(historical_skill_b or {}).get("retrieval_policy", []),
+                action_space=self.action_space,
+            )
+            save_checkpoint(
+                directory / "stage_a_context" / (name + ".json"), context
+            )
         payload, render_audit = render_comparisons_with_audit(
             comparisons, plain_language=self.cfg.analysis_protocol == STATE_ACTION_PROTOCOL,
             historical_skill_a=historical_skill_a, historical_skill_b=historical_skill_b,
@@ -146,7 +177,13 @@ class MetaStage(Phase1):
             refs,
         )
         return [
-            {"proposal_id": name, "analysis_kind": "meta", "case_ids": ids, **proposal}
+            {
+                "proposal_id": name,
+                "analysis_kind": "meta",
+                "group": pair_group(comparisons[0]) if comparisons else UNSCORED,
+                "case_ids": ids,
+                **proposal,
+            }
         ]
 
     def comparisons(self, number, questions, receipt, directory):
@@ -178,17 +215,38 @@ class MetaStage(Phase1):
         if a == b:
             if pairs or replay["status"] != "no_changed_candidate":
                 raise ValueError("no-change candidate has unexpected replay branches")
+            markers = [
+                compact_pair_record({
+                    "question_id": str(q["id"]),
+                    "question": q.get("question"),
+                    "eligible_for_reflection": False,
+                    "skip_reason": "no_changed_candidate",
+                    "transition_group": UNSCORED,
+                    "outcomes": {"A": None, "B": None},
+                })
+                for q in questions
+            ] if self.meta_cfg.hro_v1 else []
             save_checkpoint(
                 directory / "comparison_pairs.json",
                 {
                     "schema_version": HRO_VERSION,
                     "batch": number,
-                    "pairs": [],
+                    "pairs": markers,
                     "informative_pair_count": 0,
-                    "excluded_pair_count": 0,
+                    "excluded_pair_count": len(markers),
+                    "group_counts": {group: 0 for group in GROUPS},
+                    "unscored_count": len(markers),
                 },
             )
-            return [], {"reason": "no_changed_candidate", "outcomes": {}, "skipped": {}}
+            return [], {
+                "reason": "no_changed_candidate",
+                "outcomes": {},
+                "skipped": {"no_changed_candidate": len(markers)} if markers else {},
+                "paired_count": len(markers),
+                "informative_pair_count": 0,
+                "group_summaries": {group: group_summary(markers, group) for group in GROUPS},
+                "unscored_count": len(markers),
+            }
         if replay["status"] != "completed" or len(pairs) != len(questions):
             raise ValueError("Meta requires every same-batch train branch receipt")
         by_id = {p["question_id"]: p for p in pairs}
@@ -200,17 +258,44 @@ class MetaStage(Phase1):
             qid = str(question["id"])
             pair = by_id[qid]
             # Archive hash/path/ID errors stop rather than silently skipping corrupt data.
-            branch_a = load_branch(self.phase1, pair["parent"], a, qid, question)
-            branch_b = load_branch(self.phase1, pair["candidate"], b, qid, question)
+            try:
+                branch_a = load_branch(self.phase1, pair["parent"], a, qid, question)
+                branch_b = load_branch(self.phase1, pair["candidate"], b, qid, question)
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                if not self.meta_cfg.hro_v1:
+                    raise
+                # HRO keeps a visible row for every TRAIN question while
+                # excluding corrupt artifacts from Stage A.  The marker is
+                # explicit and never treated as an answer-level failure.
+                marker = {
+                    "question_id": qid,
+                    "question": question.get("question"),
+                    "eligible_for_reflection": False,
+                    "skip_reason": "missing_or_corrupt_branch",
+                    "error": str(exc),
+                    "transition_group": UNSCORED,
+                    "outcomes": {"A": None, "B": None},
+                }
+                save_checkpoint(
+                    directory / "comparisons" / (digest(qid)[:20] + ".json"), marker
+                )
+                pair_records.append(compact_pair_record(marker))
+                skipped["missing_or_corrupt_branch"] += 1
+                continue
             check = getattr(self.phase1, "historical_context_exclusion", None)
             issue = check(number, qid) if check else None
             if issue:
                 # Keep both immutable branches. Do not describe client-side
                 # history as model-visible when the server is known to have
                 # discarded it; exclude the whole pair, not just the bad side.
-                save_checkpoint(directory / "comparisons" / (digest(qid)[:20] + ".json"), {
+                marker = {
                     "question_id": qid, "eligible_for_reflection": False,
-                    "skip_reason": "historical_context_integrity", "evidence": issue})
+                    "skip_reason": "historical_context_integrity", "evidence": issue,
+                    "transition_group": UNSCORED,
+                    "outcomes": {"A": None, "B": None},
+                }
+                save_checkpoint(directory / "comparisons" / (digest(qid)[:20] + ".json"), marker)
+                pair_records.append(compact_pair_record(marker))
                 skipped["historical_context_integrity"] += 1
                 continue
             try:
@@ -219,12 +304,14 @@ class MetaStage(Phase1):
                 )
                 entry = self.support_map["questions"].get(qid)
                 comparison["views"] = comparison_views(branch_a, branch_b, entry)
+                comparison["transition_group"] = pair_group(comparison)
             except (ValueError, KeyError, TypeError) as exc:
                 comparison = {
                     "question_id": qid,
                     "eligible_for_reflection": False,
                     "skip_reason": "malformed_trajectory",
                     "error": str(exc),
+                    "transition_group": UNSCORED,
                 }
             save_checkpoint(
                 directory / "comparisons" / (digest(qid)[:20] + ".json"), comparison
@@ -244,7 +331,7 @@ class MetaStage(Phase1):
                 )
                 outcomes[category] += 1
             pair_records.append(compact_pair_record(comparison))
-            if comparison.get("eligible_for_reflection") and (
+            if comparison.get("eligible_for_reflection") and comparison.get("transition_group") != UNSCORED and (
                 self.meta_cfg.informative_pairs_only
                 or comparison.get("informative")
             ):
@@ -262,6 +349,13 @@ class MetaStage(Phase1):
                 "pairs": pair_records,
                 "informative_pair_count": len(comparisons),
                 "excluded_pair_count": len(pair_records) - len(comparisons),
+                "group_counts": {
+                    group: sum(1 for p in pair_records if p.get("transition_group") == group)
+                    for group in GROUPS
+                },
+                "unscored_count": sum(
+                    1 for p in pair_records if p.get("transition_group") == UNSCORED
+                ),
             },
         )
         return comparisons, {
@@ -270,6 +364,12 @@ class MetaStage(Phase1):
             "skipped": dict(skipped),
             "paired_count": len(pair_records),
             "informative_pair_count": len(comparisons),
+            "group_summaries": {
+                group: group_summary(pair_records, group) for group in GROUPS
+            },
+            "unscored_count": sum(
+                1 for p in pair_records if p.get("transition_group") == UNSCORED
+            ),
         }
 
     def run(self, train, validation, phase1_receipts):
@@ -380,10 +480,22 @@ class MetaStage(Phase1):
             historical_skill_b = load_checkpoint(
                 self.phase1.root / "batches" / f"{number:03d}" / "candidate_skill.json"
             )
-            jobs = [
-                (comparisons[i : i + size], f"meta-{i:03d}")
-                for i in range(0, len(comparisons), size)
-            ]
+            if self.meta_cfg.hro_v1:
+                # Stage A is grouped by deterministic answer transition.  A
+                # group can be split into multiple <=5-case calls, but a call
+                # never mixes G00/G01/G10/G11.
+                jobs = []
+                for group in GROUPS:
+                    members = [c for c in comparisons if pair_group(c) == group]
+                    jobs.extend(
+                        (members[i : i + size], f"{group.lower()}-{i:03d}")
+                        for i in range(0, len(members), size)
+                    )
+            else:
+                jobs = [
+                    (comparisons[i : i + size], f"meta-{i:03d}")
+                    for i in range(0, len(comparisons), size)
+                ]
             nested = self.map_ordered(
                 lambda job, parent=parent, directory=directory: (
                     self.reflect_comparisons(
@@ -395,12 +507,26 @@ class MetaStage(Phase1):
                 self.cfg.reflection_workers,
             )
             proposals = [p for group in nested for p in group]
+            if self.meta_cfg.hro_v1:
+                stage_b = build_stage_b_context(
+                    parent,
+                    historical_skill_b,
+                    [d["rule_id"] for d in rule_differences(historical_skill_a, historical_skill_b)],
+                    stats.get("group_summaries") or {
+                        group: group_summary(comparisons, group) for group in GROUPS
+                    },
+                    proposals,
+                    [c for group in GROUPS for c in comparisons if pair_group(c) == group][:20],
+                    stats,
+                    action_space=self.action_space,
+                )
+                save_checkpoint(directory / "stage_b_context.json", stage_b)
             merged = self.merge(
                 parent,
                 proposals,
                 directory,
                 stage="meta_merge",
-                edit_limit=self.meta_cfg.max_edits_per_update,
+                edit_limit=1 if self.meta_cfg.hro_v1 else self.meta_cfg.max_edits_per_update,
             )
             candidate, change = self.store(
                 parent, self.meta_cfg.max_edits_per_update

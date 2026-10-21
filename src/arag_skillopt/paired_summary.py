@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 
 from .observations import result_units
 from .trajectory import decisions_from_raw
+from .action_space import action_usage, normalize_action_name
 
 HRO_VERSION = "hro-paired-trajectory-v1"
 
@@ -90,7 +91,10 @@ def _stable_action(call, step=None):
     )
     if tool is None:
         tool = call.get("name") or step.get("name") or "UNKNOWN"
-    tool = str(tool).upper()
+    tool_text = str(tool).strip()
+    if normalize_action_name(tool_text) == "stop_and_answer":
+        return "stop_and_answer"
+    tool = tool_text.upper()
     target = _stable_target(call, step)
     return f"{tool}:{target}" if target is not None else tool
 
@@ -140,6 +144,28 @@ def action_sequence(raw):
         ):
             actions.append("FINISH")
     return actions
+
+
+def action_bundles(raw):
+    """Return one stable action bundle per policy turn.
+
+    HRO compares the behavior selected by a policy call, rather than local
+    E/S/C labels or result text.  Multiple tools selected in one decision stay
+    together so ``first_divergence`` remains aligned with policy turns.
+    """
+    bundles = []
+    for decision in _fallback_decisions(raw):
+        calls = decision.get("calls") or []
+        bundle = []
+        results = decision.get("results") or []
+        for index, call in enumerate(calls):
+            step = results[index].get("step", {}) if index < len(results) else {}
+            bundle.append(_stable_action(call, step))
+        if bundle:
+            bundles.append(bundle)
+        elif decision.get("response") is not None or decision.get("force_answer_instruction"):
+            bundles.append(["stop_and_answer"])
+    return bundles
 
 
 def _novel_ids_from_step(step):
@@ -265,6 +291,12 @@ def summarize_pair(
         "first_divergence": first,
         "parent_actions": parent_actions,
         "candidate_actions": candidate_actions,
+        "parent_action_bundles": action_bundles(parent_episode),
+        "candidate_action_bundles": action_bundles(candidate_episode),
+        "parent_action_usage": action_usage(parent_episode),
+        "candidate_action_usage": action_usage(candidate_episode),
+        "parent_new_evidence_ids": sorted(parent_ids),
+        "candidate_new_evidence_ids": sorted(candidate_ids),
         "parent_new_evidence_count": len(parent_ids),
         "candidate_new_evidence_count": len(candidate_ids),
         "new_evidence_delta": len(candidate_ids) - len(parent_ids),
@@ -302,9 +334,14 @@ def compact_pair_record(comparison):
         key: comparison.get(key)
         for key in (
             "question_id",
+            "question",
+            "parent_predicted_answer",
+            "candidate_predicted_answer",
             "train_batch",
             "parent_skill_hash",
             "candidate_skill_hash",
+            "transition_group",
+            "group",
             "paired_summary",
             "eligible_for_reflection",
             "skip_reason",

@@ -13,6 +13,7 @@ from .meta_stage import MetaConfig, MetaStage
 from .phase1 import Phase1, Phase1Config
 from .skill_rules import compile_initial_skill, skill_sha256
 from .support import digest
+from .action_space import DEFAULT_ACTION_SPACE, action_space_contract
 
 
 class WorkflowTrainer:
@@ -29,10 +30,12 @@ class WorkflowTrainer:
         support_map=None,
         contract=None,
         meta_config=None,
+        action_space=None,
     ):
         self.root = Path(output)
         self.cfg = config or Phase1Config()
         self.meta_cfg = meta_config or MetaConfig()
+        self.action_space = tuple(action_space or DEFAULT_ACTION_SPACE)
         self.contract = {
             "workflow": "arag-phase1-meta-diagnosis-merge-v3",
             "analysis_protocol": self.cfg.analysis_protocol,
@@ -44,6 +47,7 @@ class WorkflowTrainer:
             "prompts_hash": digest(prompts),
             "tool_guidance_hash": digest(tool_guidance),
             "support_map_hash": digest(support_map or {"questions": {}}),
+            "action_space": action_space_contract(self.action_space),
             "runtime": copy.deepcopy(contract or {}),
         }
         self.phase1 = Phase1(
@@ -58,6 +62,7 @@ class WorkflowTrainer:
             support_map,
             {"workflow_contract_hash": digest(self.contract)},
             replay_for_meta=self.meta_cfg.enabled,
+            action_space=self.action_space,
         )
 
     def run(self, train, validation):

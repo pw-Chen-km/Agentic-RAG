@@ -32,6 +32,7 @@ from .skill_rules import RuleStore, compile_initial_skill, skill_sha256
 from .support import digest
 from .tokens import count
 from .trajectory import build_view, render_view, render_view_with_audit
+from .action_space import DEFAULT_ACTION_SPACE, action_space_contract, action_usage
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class Phase1:
         support_map=None,
         contract=None,
         replay_for_meta=False,
+        action_space=None,
     ):
         self.root = Path(output)
         self.initial = copy.deepcopy(skill)
@@ -114,6 +116,8 @@ class Phase1:
         self.cfg = config or Phase1Config()
         self.replay_for_meta = replay_for_meta
         self.support_map = support_map or {"questions": {}}
+        self.action_space = tuple(action_space or DEFAULT_ACTION_SPACE)
+        self.action_objective = action_space_contract(self.action_space)
         self.contract = {
             "phase": "phase1-diagnosis-merge-v3",
             "analysis_protocol": self.cfg.analysis_protocol,
@@ -127,6 +131,7 @@ class Phase1:
             "support_map_hash": digest(self.support_map),
             "candidate_train_replay": replay_for_meta,
             **(contract or {}),
+            "action_space": self.action_objective,
         }
 
     def store(self, skill, limit):
@@ -218,7 +223,15 @@ class Phase1:
         )
         save_checkpoint(directory / "optimizer_render_lineage.json", render_audit)
         (directory / "optimizer_view.txt").write_text(rendered, encoding="utf-8")
-        return {"question_id": qid, "raw": raw, "evaluation": evaluation, "view": view}
+        usage = action_usage(raw)
+        save_checkpoint(directory / "action_usage.json", usage)
+        return {
+            "question_id": qid,
+            "raw": raw,
+            "evaluation": evaluation,
+            "view": view,
+            "action_usage": usage,
+        }
 
     def messages(self, stage, skill, payload, decision_refs=None):
         # Hashes/provenance fields deliberately excluded; runtime text shown once.
@@ -233,6 +246,8 @@ class Phase1:
                 + json.dumps(public_skill(skill), ensure_ascii=False)
                 + "\nFixed tool guidance:\n"
                 + self.tool_guidance
+                + "\n\nAction-space and Phase 1 optimization objective:\n"
+                + json.dumps(self.action_objective, ensure_ascii=False, sort_keys=True)
                 + "\n\n"
                 + payload,
             },

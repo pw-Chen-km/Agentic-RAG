@@ -254,6 +254,8 @@ def make_comparison(question, parent, candidate, branch_a, branch_b, batch):
         "hro_version": HRO_VERSION,
         "question_id": qid,
         "question": question["question"],
+        "parent_predicted_answer": raws[0].get("answer"),
+        "candidate_predicted_answer": raws[1].get("answer"),
         "train_batch": batch,
         "match_level": "same_question",
         "causal_claim": False,

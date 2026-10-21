@@ -26,6 +26,7 @@ from arag_skillopt.phase1_runtime import (
 from arag_skillopt.skill_rules import load_rules
 from arag_skillopt.support import digest
 from arag_skillopt.workflow_training import WorkflowTrainer
+from arag_skillopt.action_space import configured_actions
 from arag_skillopt.training_profile import (
     PROFILES, agent_prompt, prompt_bundle, validate_profile,
     validate_runtime_guidance, validate_split_sources,
@@ -238,6 +239,7 @@ def main(workflow=False):
         mapping,
         contract,
         **extras,
+        action_space=configured_actions(cfg),
     )
     print(json.dumps(engine.run(train, val), indent=2))
 

@@ -53,6 +53,9 @@ meta:
   max_edits_per_update: 1
   min_informative_pairs: 3
   accuracy_floor: 0.0
+  # Enable HRO v1 grouped Stage A / single-proposer Stage B in a new run.
+  # Kept opt-in here so archived v6r3 outputs remain immutable.
+  hro_v1: false
 llm:
   transport: ollama_exact
   context_length: 65536
@@ -113,10 +116,11 @@ entity_hop:
   top_k: 5
   max_top_k: 20
   entity_source: question_or_visible_evidence
-# Optional LinearRAG-style graph action.  Keep disabled for the fixed Direct-
-# BM25 baseline; enable it in a separate arm after building graph_index_file.
+# LinearRAG-style graph action in the current HRO action menu.  Build the
+# corpus graph first; use a separate output directory for the Direct-BM25-only
+# historical arm so its contract is never silently reinterpreted.
 linear_hop:
-  enabled: false
+  enabled: true
   graph_index_file: data/novel/linear_trigraph.json
   sentence_index_file: data/novel/index/sentence_index.pkl
   top_entities: 3
