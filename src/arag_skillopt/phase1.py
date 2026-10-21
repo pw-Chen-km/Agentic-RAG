@@ -520,9 +520,10 @@ class Phase1:
             {"proposal_id": name, "analysis_kind": kind, "case_ids": ids, **proposal}
         ]
 
-    def merge(self, skill, proposals, directory, stage="merge"):
+    def merge(self, skill, proposals, directory, stage="merge", edit_limit=None):
         # All diagnoses, including neutral/counterexamples, stay available to merge.
         # Do not silently select an early proposal if the combined input is too long.
+        edit_limit = self.cfg.max_batch_edits if edit_limit is None else edit_limit
         if self.cfg.analysis_protocol == STATE_ACTION_PROTOCOL:
             for report in proposals:
                 if report["status"] == "ok":
@@ -576,7 +577,7 @@ class Phase1:
             + json.dumps(compact, ensure_ascii=False),
             train_ids,
             directory / "merge.json",
-            self.cfg.max_batch_edits,
+            edit_limit,
             documented_support_ids=ids,
             classification_advisories=advisories,
         )

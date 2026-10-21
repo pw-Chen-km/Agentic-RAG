@@ -49,6 +49,10 @@ meta:
   enabled: true
   comparison_batch_size: 40
   reflection_minibatch_size: 5
+  informative_pairs_only: true
+  max_edits_per_update: 1
+  min_informative_pairs: 3
+  accuracy_floor: 0.0
 llm:
   transport: ollama_exact
   context_length: 65536

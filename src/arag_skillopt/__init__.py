@@ -15,6 +15,7 @@ from .archive import JsonlArchive
 from .candidate_replay import replay_rejected_candidate
 from .validation import accept_candidate
 from .meta_optimization import compare_parent_candidate
+from .paired_summary import HRO_VERSION, action_sequence, is_informative_pair, summarize_pair
 
 __all__ = [
     "RuleStore",
@@ -33,4 +34,8 @@ __all__ = [
     "replay_rejected_candidate",
     "accept_candidate",
     "compare_parent_candidate",
+    "HRO_VERSION",
+    "action_sequence",
+    "is_informative_pair",
+    "summarize_pair",
 ]

@@ -1,7 +1,8 @@
-Merge all Meta reflections' diagnoses from this comparison batch into at most THREE edits
-and ONE candidate for the CURRENT Skill. All groups analyzed that same Current
+Merge all Meta reflections' diagnoses under HRO from this comparison batch into at most
+ONE logical edit and ONE candidate for the CURRENT Skill. All groups analyzed that same Current
 Skill. Historical Skills A/B were evidence only. Do not independently invent a
-new policy unrelated to supplied diagnoses or overwrite a rule twice. Three is a ceiling, not a target.
+new policy unrelated to supplied diagnoses or overwrite a rule twice. One is a
+hard ceiling, not a target.
 
 Read all supplied diagnoses, empty reports, supporting cases, benefits,
 regressions and uncertainty. Combine duplicate intentions, resolve conflicts by

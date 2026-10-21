@@ -17,8 +17,9 @@ from .compact_rendering import (
 from .skill_rules import skill_sha256, validate_rule
 from .support import digest
 from .trajectory import TextHistory, build_view, decisions_from_raw
+from .paired_summary import HRO_VERSION, summarize_pair
 
-COMPARISON_VERSION = "arag-same-question-decisions-v2-compact"
+COMPARISON_VERSION = HRO_VERSION
 PLAIN_COMPARISON_VERSION = "arag-same-question-context-v6"
 
 PLAIN_DISPLAY_GUIDANCE = (
@@ -209,6 +210,13 @@ def make_comparison(question, parent, candidate, branch_a, branch_b, batch):
     raws = [b["raw"] for b in (branch_a, branch_b)]
     decisions = [decisions_from_raw(r) for r in raws]
     behavior = [[_behavior(d) for d in ds] for ds in decisions]
+    paired_summary = summarize_pair(
+        qid,
+        raws[0],
+        raws[1],
+        branch_a["evaluation"],
+        branch_b["evaluation"],
+    )
     first = next(
         (
             i
@@ -230,7 +238,9 @@ def make_comparison(question, parent, candidate, branch_a, branch_b, batch):
     ]
     eligible = all(
         b["evaluation"].get("status") == "ok"
-        and type(b["evaluation"].get("correct")) is bool
+        and type(
+            b["evaluation"].get("hard", b["evaluation"].get("correct"))
+        ) is bool
         and not r.get("execution_errors")
         and not r.get("error")
         and r.get("decision_audit")
@@ -238,14 +248,10 @@ def make_comparison(question, parent, candidate, branch_a, branch_b, batch):
         and isinstance(u.get("total_tokens"), (int, float))
         for b, r, u in zip((branch_a, branch_b), raws, usage)
     )
-    identical = (
-        behavior[0] == behavior[1]
-        and costs[0] == costs[1]
-        and branch_a["evaluation"].get("correct")
-        == branch_b["evaluation"].get("correct")
-    )
+    identical = not paired_summary["informative"]
     return {
         "comparison_version": COMPARISON_VERSION,
+        "hro_version": HRO_VERSION,
         "question_id": qid,
         "question": question["question"],
         "train_batch": batch,
@@ -264,16 +270,20 @@ def make_comparison(question, parent, candidate, branch_a, branch_b, batch):
             and _visible(raws[0], first) == _visible(raws[1], first),
             "exact_state_match": False,
         },
-        "eligible_for_reflection": bool(eligible and not identical),
+        "paired_summary": paired_summary,
+        "informative": paired_summary["informative"],
+        "eligible_for_reflection": bool(eligible and paired_summary["informative"]),
         "skip_reason": "incomplete_runtime_or_evaluation"
         if not eligible
         else "identical_behavior_and_cost"
         if identical
+        else "not_informative_pair"
+        if not paired_summary["informative"]
         else None,
         "costs": {"A": costs[0], "B": costs[1]},
         "outcomes": {
-            "A": branch_a["evaluation"].get("correct"),
-            "B": branch_b["evaluation"].get("correct"),
+            "A": paired_summary["parent_answer_correct"],
+            "B": paired_summary["candidate_answer_correct"],
         },
     }
 
@@ -339,6 +349,14 @@ def render_comparisons_with_audit(
         "A and B are historical evidence. The Current Skill above is the editable Skill.",
         "A/B may share displayed text, never visibility or recall state. Common recorded actions/results are not identical hidden states or causal proof.",
         ]
+    lines += [
+        "HRO paired trajectory summaries (deterministic evidence; unknown/null is not false):",
+        json.dumps(
+            [c.get("paired_summary", {}) for c in comparisons],
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+    ]
     audits = []
     for comparison in comparisons:
         display = CompactDisplay()

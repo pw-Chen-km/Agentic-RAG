@@ -13,6 +13,7 @@ from .meta_comparison import (
     make_comparison,
     render_comparisons_with_audit,
 )
+from .paired_summary import HRO_VERSION, compact_pair_record
 from .phase1 import Phase1
 from .skill_rules import compile_initial_skill, skill_sha256
 from .support import digest
@@ -24,6 +25,10 @@ class MetaConfig:
     enabled: bool = True
     comparison_batch_size: int = 40
     reflection_minibatch_size: int = 5
+    informative_pairs_only: bool = True
+    max_edits_per_update: int = 1
+    min_informative_pairs: int = 3
+    accuracy_floor: float | None = None
 
     def __post_init__(self):
         if (
@@ -31,6 +36,18 @@ class MetaConfig:
             or not 1 <= self.reflection_minibatch_size <= 5
         ):
             raise ValueError("Meta requires comparison batch 40 and reflection <=5")
+        if type(self.informative_pairs_only) is not bool:
+            raise ValueError("informative_pairs_only must be boolean")
+        if type(self.max_edits_per_update) is not int or not 1 <= self.max_edits_per_update <= 3:
+            raise ValueError("max_edits_per_update must be between 1 and 3")
+        if type(self.min_informative_pairs) is not int or self.min_informative_pairs < 0:
+            raise ValueError("min_informative_pairs must be nonnegative")
+        if self.accuracy_floor is not None and (
+            isinstance(self.accuracy_floor, bool)
+            or not isinstance(self.accuracy_floor, (int, float))
+            or not 0 <= self.accuracy_floor <= 1
+        ):
+            raise ValueError("accuracy_floor must be a fraction in [0,1]")
 
 
 class MetaStage(Phase1):
@@ -51,7 +68,8 @@ class MetaStage(Phase1):
         self.phase1 = phase1
         self.meta_cfg = config
         self.contract.update(
-            phase="arag-meta-diagnosis-merge-v3",
+            phase="hro-meta-paired-trajectory-v1",
+            hro_version=HRO_VERSION,
             meta_config=asdict(config),
             phase1_contract_hash=digest(phase1.contract),
         )
@@ -59,6 +77,26 @@ class MetaStage(Phase1):
     def episode(self, question, skill, split, version):
         # Reuse Phase 1's fixed evaluator/runtime cache. Only gate calls request validation.
         return self.phase1.episode(question, skill, split, version)
+
+    def validation_gate(self, parent, candidate):
+        result = super().validation_gate(parent, candidate)
+        floor = self.meta_cfg.accuracy_floor
+        if floor is None or not result.get("accepted"):
+            return result
+        parent_accuracy = result.get("parent", {}).get("accuracy")
+        candidate_accuracy = result.get("candidate", {}).get("accuracy")
+        if (
+            isinstance(parent_accuracy, (int, float))
+            and isinstance(candidate_accuracy, (int, float))
+            and candidate_accuracy < parent_accuracy + floor
+        ):
+            return {
+                **result,
+                "accepted": False,
+                "reason": "accuracy_floor",
+                "accuracy_floor": floor,
+            }
+        return result
 
     def reflect_comparisons(self, skill, comparisons, directory, name,
                             historical_skill_a=None, historical_skill_b=None):
@@ -140,6 +178,16 @@ class MetaStage(Phase1):
         if a == b:
             if pairs or replay["status"] != "no_changed_candidate":
                 raise ValueError("no-change candidate has unexpected replay branches")
+            save_checkpoint(
+                directory / "comparison_pairs.json",
+                {
+                    "schema_version": HRO_VERSION,
+                    "batch": number,
+                    "pairs": [],
+                    "informative_pair_count": 0,
+                    "excluded_pair_count": 0,
+                },
+            )
             return [], {"reason": "no_changed_candidate", "outcomes": {}, "skipped": {}}
         if replay["status"] != "completed" or len(pairs) != len(questions):
             raise ValueError("Meta requires every same-batch train branch receipt")
@@ -147,6 +195,7 @@ class MetaStage(Phase1):
         if len(by_id) != len(pairs) or set(by_id) != set(expected_ids):
             raise ValueError("Meta replay IDs are duplicated, missing, or unrelated")
         comparisons, skipped, outcomes = [], Counter(), Counter()
+        pair_records = []
         for question in questions:
             qid = str(question["id"])
             pair = by_id[qid]
@@ -194,14 +243,33 @@ class MetaStage(Phase1):
                     else "both_wrong"
                 )
                 outcomes[category] += 1
-            if comparison["eligible_for_reflection"]:
+            pair_records.append(compact_pair_record(comparison))
+            if comparison.get("eligible_for_reflection") and (
+                self.meta_cfg.informative_pairs_only
+                or comparison.get("informative")
+            ):
                 comparisons.append(comparison)
             else:
-                skipped[comparison["skip_reason"]] += 1
+                reason = comparison.get("skip_reason") or "not_informative_pair"
+                if comparison.get("eligible_for_reflection") and self.meta_cfg.informative_pairs_only:
+                    reason = "not_informative_pair"
+                skipped[reason] += 1
+        save_checkpoint(
+            directory / "comparison_pairs.json",
+            {
+                "schema_version": HRO_VERSION,
+                "batch": number,
+                "pairs": pair_records,
+                "informative_pair_count": len(comparisons),
+                "excluded_pair_count": len(pair_records) - len(comparisons),
+            },
+        )
         return comparisons, {
             "reason": "collected",
             "outcomes": dict(outcomes),
             "skipped": dict(skipped),
+            "paired_count": len(pair_records),
+            "informative_pair_count": len(comparisons),
         }
 
     def run(self, train, validation, phase1_receipts):
@@ -263,6 +331,48 @@ class MetaStage(Phase1):
                 continue
             parent = copy.deepcopy(active)
             save_checkpoint(directory / "parent_skill.json", parent)
+            if len(comparisons) < self.meta_cfg.min_informative_pairs:
+                _, change = self.store(
+                    parent, self.meta_cfg.max_edits_per_update
+                ).apply_with_receipt([])
+                gate = {
+                    "accepted": False,
+                    "reason": "skip_meta_update",
+                    "skip_reason": "insufficient_informative_pairs",
+                    "informative_pair_count": len(comparisons),
+                    "required_informative_pair_count": self.meta_cfg.min_informative_pairs,
+                }
+                receipt = {
+                    **change,
+                    "source_stage": "meta",
+                    "batch": number,
+                    "evidence_parent_skill_hash": historical["parent_skill_hash"],
+                    "evidence_candidate_skill_hash": historical["candidate_skill_hash"],
+                    "current_active_skill_hash": skill_sha256(parent),
+                    "proposal_parent_skill_hash": skill_sha256(parent),
+                    "train_ids": [q["id"] for q in questions],
+                    "comparison_count": len(comparisons),
+                    "comparison_statistics": stats,
+                    "reflection_count": 0,
+                    "gate": gate,
+                    "active_skill": parent,
+                    "active_skill_hash": skill_sha256(parent),
+                }
+                save_checkpoint(
+                    directory / "completed.json",
+                    {"input_hash": digest(inputs), "value": receipt},
+                )
+                save_checkpoint(
+                    self.root / "checkpoint.json",
+                    {
+                        "stage": "meta",
+                        "completed_batch": number,
+                        "active_skill_hash": skill_sha256(parent),
+                    },
+                )
+                receipts.append(receipt)
+                active = parent
+                continue
             size = self.meta_cfg.reflection_minibatch_size
             historical_skill_a = load_checkpoint(
                 self.phase1.root / "batches" / f"{number:03d}" / "parent_skill.json"
@@ -285,9 +395,15 @@ class MetaStage(Phase1):
                 self.cfg.reflection_workers,
             )
             proposals = [p for group in nested for p in group]
-            merged = self.merge(parent, proposals, directory, stage="meta_merge")
+            merged = self.merge(
+                parent,
+                proposals,
+                directory,
+                stage="meta_merge",
+                edit_limit=self.meta_cfg.max_edits_per_update,
+            )
             candidate, change = self.store(
-                parent, self.cfg.max_batch_edits
+                parent, self.meta_cfg.max_edits_per_update
             ).apply_with_receipt(merged["edits"])
             save_checkpoint(directory / "candidate_skill.json", candidate)
             if skill_sha256(parent) == skill_sha256(candidate):
