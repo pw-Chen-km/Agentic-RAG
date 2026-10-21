@@ -28,6 +28,7 @@ def normalize_trajectory(raw: Mapping[str, Any], *, question_id: str | None = No
     normalized_actions = []
     read_ids: list[str] = []
     entity_hop_calls: list[dict[str, Any]] = []
+    linear_hop_calls: list[dict[str, Any]] = []
     for index, action in enumerate(actions, start=1):
         if not isinstance(action, Mapping):
             normalized_actions.append({"step": index, "raw": action})
@@ -41,10 +42,11 @@ def normalize_trajectory(raw: Mapping[str, Any], *, question_id: str | None = No
                 read_ids.extend(str(chunk_id) for chunk_id in chunk_ids)
             elif args.get("chunk_id") is not None:
                 read_ids.append(str(args["chunk_id"]))
-        if name == "entity_hop":
+        if name in {"entity_hop", "linear_hop"}:
             record = {
                 "entity": args.get("entity") if isinstance(args, Mapping) else None,
                 "top_k": args.get("top_k") if isinstance(args, Mapping) else None,
+                "max_hops": args.get("max_hops") if isinstance(args, Mapping) else None,
             }
             if isinstance(action.get("log"), Mapping):
                 for key in (
@@ -53,6 +55,10 @@ def normalize_trajectory(raw: Mapping[str, Any], *, question_id: str | None = No
                     "chunks_found",
                     "retrieved_tokens",
                     "status",
+                    "max_hops",
+                    "chunk_ids",
+                    "sentence_ids",
+                    "activated_entities",
                 ):
                     if key in action["log"]:
                         record[key] = action["log"][key]
@@ -63,12 +69,19 @@ def normalize_trajectory(raw: Mapping[str, Any], *, question_id: str | None = No
                 "chunks_found",
                 "retrieved_tokens",
                 "status",
+                "max_hops",
+                "chunk_ids",
+                "sentence_ids",
+                "activated_entities",
             ):
                 if key in action:
                     record[key] = action[key]
-            entity_hop_calls.append(record)
+            if name == "linear_hop":
+                linear_hop_calls.append(record)
+            else:
+                entity_hop_calls.append(record)
         normalized = {"step": index, "tool": name, "arguments": args, "result": result}
-        if name == "entity_hop" and isinstance(action, Mapping):
+        if name in {"entity_hop", "linear_hop"} and isinstance(action, Mapping):
             for key in (
                 "hop_backend",
                 "entity_candidates_internal",
@@ -77,6 +90,8 @@ def normalize_trajectory(raw: Mapping[str, Any], *, question_id: str | None = No
                 "retrieved_tokens",
                 "status",
                 "chunk_ids",
+                "sentence_ids",
+                "activated_entities",
             ):
                 if key in action:
                     normalized[key] = action[key]
@@ -95,6 +110,8 @@ def normalize_trajectory(raw: Mapping[str, Any], *, question_id: str | None = No
         "read_chunk_ids": list(dict.fromkeys(read_ids)),
         "entity_hop_calls": entity_hop_calls,
         "entity_hop_count": len(entity_hop_calls),
+        "linear_hop_calls": linear_hop_calls,
+        "linear_hop_count": len(linear_hop_calls),
         "final_answer": answer,
         "loop_count": _first(raw, "loop_count", "loops", "num_loops", default=len(normalized_actions)),
         "policy_calls": _first(raw, "policy_calls", "llm_calls", "calls", default=None),

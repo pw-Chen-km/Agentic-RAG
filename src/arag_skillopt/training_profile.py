@@ -60,9 +60,10 @@ def prompt_bundle(root, cfg, workflow=False):
     if workflow:
         names.update(meta="meta", meta_merge="meta_merge")
     if cfg.get("entity_hop", {}).get("enabled"):
+        prefix = "linearhop_" if cfg.get("linear_hop", {}).get("enabled") else "entityhop_"
         for k in ("success", "failure", "merge", "meta", "meta_merge"):
             if k in names:
-                names[k] = "entityhop_" + k
+                names[k] = prefix + k
     return {k: (Path(root) / "prompts" / (name + ".md")).read_text()
             for k, name in names.items()}
 
@@ -101,7 +102,10 @@ def validate_runtime_guidance(cfg, schemas, original, skill):
     if cfg.get("optimizer_prompt_version", "legacy") not in PROFILES:
         return
     tools = {s["function"]["name"]: s["function"] for s in schemas}
-    if set(tools) != EXPECTED_TOOLS:
+    expected_tools = set(EXPECTED_TOOLS)
+    if cfg.get("linear_hop", {}).get("enabled"):
+        expected_tools.add("linear_hop")
+    if set(tools) != expected_tools:
         raise ValueError("runtime tool list differs from the training profile")
     prompt = render_formatted_prompt(original, skill)
     if "keyword_search" in prompt + json.dumps(schemas):
@@ -109,9 +113,18 @@ def validate_runtime_guidance(cfg, schemas, original, skill):
     description = tools["entity_hop"]["description"]
     if "no prior search or read is required" not in description:
         raise ValueError("entity_hop schema still requires previous evidence")
+    if cfg.get("linear_hop", {}).get("enabled"):
+        linear_description = tools["linear_hop"]["description"]
+        if "read_chunk" not in linear_description or "original question" not in linear_description:
+            raise ValueError("linear_hop schema does not guarantee snippet-first retrieval")
     if "in the question or visible evidence" not in prompt:
         raise ValueError("Agent prompt does not allow question entities")
     reference = cfg.get("experiment", {}).get("ablation_reference")
+    # The LinearHop action is a new tool-menu arm.  It can reuse the same
+    # corpus/source checks, but it must not be compared against the old
+    # three-tool ablation contract.
+    if cfg.get("linear_hop", {}).get("enabled"):
+        reference = None
     if reference:
         directory = Path(reference)
         contract = json.loads((directory / "contract.json").read_text())

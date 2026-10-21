@@ -17,8 +17,9 @@ from typing import Any, Mapping, Sequence
 from .observations import result_units
 
 
-METRICS_VERSION = "entityhop-metrics-v1"
-RETRIEVAL_TOOLS = frozenset({"keyword_search", "semantic_search", "entity_hop"})
+METRICS_VERSION = "entityhop-metrics-v2"
+RETRIEVAL_TOOLS = frozenset({"keyword_search", "semantic_search", "entity_hop", "linear_hop"})
+HOP_TOOLS = frozenset({"entity_hop", "linear_hop"})
 
 
 def _number(value: Any) -> int | float | None:
@@ -120,7 +121,7 @@ def episode_metrics(raw: Mapping[str, Any], evaluation: Mapping[str, Any] | None
         parsed[index] = result_units(_tool(action), _result(action))
         if parsed[index][1] == "unparsed" and _tool(action) in RETRIEVAL_TOOLS | {"read_chunk"}:
             text = _result(action)
-            if not text.startswith(("Error", "No entity-linked chunks")):
+            if not text.startswith(("Error", "No entity-linked chunks", "No graph entities", "No graph sentences")):
                 unknown_formats.append(index + 1)
 
     seen: set[str] = set()
@@ -155,14 +156,14 @@ def episode_metrics(raw: Mapping[str, Any], evaluation: Mapping[str, Any] | None
                 key = normalized_call_key(tool, _arguments(action))
                 if key in call_keys:
                     repeated += 1
-                    if tool == "entity_hop":
+                    if tool in HOP_TOOLS:
                         repeated_hops += 1
                     else:
                         repeated_searches += 1
                 call_keys.add(key)
             if meta.get("error") or _result(action).startswith("Error"):
                 tool_errors.append({"call": index + 1, "decision": decision, "tool": tool, "error": meta.get("error", _result(action))})
-            if tool == "entity_hop":
+            if tool in HOP_TOOLS:
                 status = meta.get("status")
                 if status is None:
                     if ids:
@@ -178,6 +179,7 @@ def episode_metrics(raw: Mapping[str, Any], evaluation: Mapping[str, Any] | None
                     "chunk_ids": sorted(ids),
                     "new_chunk_ids": sorted(ids - seen),
                     "hop_backend": meta.get("hop_backend"),
+                    "hop_tool": tool,
                 })
         new_ids = returned_ids - seen
         decision_rows.append({
@@ -201,7 +203,12 @@ def episode_metrics(raw: Mapping[str, Any], evaluation: Mapping[str, Any] | None
         hop["read_after_hop"] = bool(credited)
         hop["read_after_hop_chunk_ids"] = sorted(credited)
     hop_count = len(hop_rows)
+    direct_hop_count = sum(row["hop_tool"] == "entity_hop" for row in hop_rows)
+    linear_hop_count = sum(row["hop_tool"] == "linear_hop" for row in hop_rows)
+    direct_ok_hops = sum(row["hop_tool"] == "entity_hop" and row["status"] == "ok" and bool(row["chunk_ids"]) for row in hop_rows)
+    direct_no_matches = sum(row["hop_tool"] == "entity_hop" and row["status"] == "no_entity_match" for row in hop_rows)
     ok_hops = sum(row["status"] == "ok" and bool(row["chunk_ids"]) for row in hop_rows)
+    linear_ok_hops = sum(row["hop_tool"] == "linear_hop" and row["status"] == "ok" and bool(row["chunk_ids"]) for row in hop_rows)
     no_matches = sum(row["status"] == "no_entity_match" for row in hop_rows)
     hops_with_chunks = sum(bool(row["chunk_ids"]) for row in hop_rows)
     later_read_hops = sum(row["read_after_hop"] for row in hop_rows)
@@ -234,11 +241,16 @@ def episode_metrics(raw: Mapping[str, Any], evaluation: Mapping[str, Any] | None
         "unique_full_chunks_read": len(full_reads),
         "unique_chunks_seen": len(seen),
         "new_chunk_count": len(seen),
-        "entity_hop_calls": hop_count,
-        "hop_successes": ok_hops,
-        "hop_success_rate": ok_hops / hop_count if hop_count else None,
-        "no_entity_match_count": no_matches,
-        "no_entity_match_ratio": no_matches / hop_count if hop_count else None,
+        "entity_hop_calls": direct_hop_count,
+        "all_hop_calls": hop_count,
+        "direct_entity_hop_calls": direct_hop_count,
+        "linear_hop_calls": linear_hop_count,
+        "hop_successes": direct_ok_hops,
+        "all_hop_successes": ok_hops,
+        "linear_hop_successes": linear_ok_hops,
+        "hop_success_rate": direct_ok_hops / direct_hop_count if direct_hop_count else None,
+        "no_entity_match_count": direct_no_matches,
+        "no_entity_match_ratio": direct_no_matches / direct_hop_count if direct_hop_count else None,
         "hop_read_after_count": later_read_hops,
         "hop_read_after_ratio": later_read_hops / hops_with_chunks if hops_with_chunks else None,
         "hop_read_after_denominator": hops_with_chunks,
@@ -264,7 +276,7 @@ def episode_metrics(raw: Mapping[str, Any], evaluation: Mapping[str, Any] | None
 
 NUMERIC_METRICS = (
     "model_calls", "tool_calls", "read_calls", "unique_full_chunks_read", "unique_chunks_seen",
-    "entity_hop_calls", "hop_successes", "no_entity_match_count", "hop_read_after_count",
+    "entity_hop_calls", "all_hop_calls", "direct_entity_hop_calls", "linear_hop_calls", "hop_successes", "all_hop_successes", "linear_hop_successes", "no_entity_match_count", "hop_read_after_count",
     "hop_new_chunk_count", "repeated_search_or_hop_calls", "repeated_search_calls", "repeated_hop_calls",
     "retrieved_tokens", "input_tokens", "output_tokens", "total_tokens", "latency_seconds",
     "service_error_count", "tool_error_count",
@@ -298,6 +310,7 @@ def aggregate_metrics(episodes: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         d = sum(row.get(denominator, 0) for row in metrics)
         return n / d if d else None
     result["hop_success_rate"] = ratio("hop_successes", "entity_hop_calls")
+    result["linear_hop_success_rate"] = ratio("linear_hop_successes", "linear_hop_calls")
     result["no_entity_match_ratio"] = ratio("no_entity_match_count", "entity_hop_calls")
     result["hop_read_after_ratio"] = ratio("hop_read_after_count", "hop_read_after_denominator")
     return result

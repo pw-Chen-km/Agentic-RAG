@@ -49,6 +49,8 @@ def training_data_path(cfg, key):
     elif key in {"entity_hop_index_file", "entity_hop_entity_index_file"}:
         hop_key = key.removeprefix("entity_hop_")
         path = cfg.get("entity_hop", {}).get(hop_key)
+    elif key == "linear_hop_graph_index_file":
+        path = cfg.get("linear_hop", {}).get("graph_index_file")
     else:
         raise ValueError("unknown training data hash key: " + key)
     if not path:

@@ -113,6 +113,17 @@ entity_hop:
   top_k: 5
   max_top_k: 20
   entity_source: question_or_visible_evidence
+# Optional LinearRAG-style graph action.  Keep disabled for the fixed Direct-
+# BM25 baseline; enable it in a separate arm after building graph_index_file.
+linear_hop:
+  enabled: false
+  graph_index_file: data/novel/linear_trigraph.json
+  sentence_index_file: data/novel/index/sentence_index.pkl
+  top_entities: 3
+  max_hops: 2
+  top_k: 5
+  max_top_k: 10
+  entity_source: question_or_visible_evidence
 data:
   source_questions: data/novel/source_questions.json
   train: data/novel/train.jsonl

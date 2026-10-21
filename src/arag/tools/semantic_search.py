@@ -70,12 +70,33 @@ class SemanticSearchTool(BaseTool):
         self.embeddings = index_data['embeddings']
         self.sentence_to_chunk = index_data['sentence_to_chunk']
         self.chunks = index_data['chunks']
+        self._sentence_positions = {str(index): index for index in range(len(self.sentences))}
         if index_data.get('model_name') != self.model_name:
             raise ValueError("Embedding index was built with a different model")
         if self.embeddings.shape[1] != self.embedding_model.get_sentence_embedding_dimension():
             raise ValueError("Embedding dimension does not match index")
         if index_data.get('query_prompt_name') != self.query_prompt_name:
             raise ValueError("Query prompt must match the recorded embedding index contract")
+
+    def rank_sentence_ids(self, query: str, sentence_ids):
+        """Return question-to-sentence similarities for graph traversal.
+
+        LinearHop reuses this already loaded semantic index, so enabling the
+        graph action does not create a second embedding model or download a
+        new model.  The returned mapping is intentionally limited to the
+        requested sentence IDs.
+        """
+        ids = [str(value) for value in sentence_ids]
+        with self._embedding_lock:
+            options = {'normalize_embeddings': True}
+            if self.query_prompt_name:
+                options['prompt_name'] = self.query_prompt_name
+            query_embedding = self.embedding_model.encode([query], **options)[0]
+        return {
+            sentence_id: float(np.dot(self.embeddings[self._sentence_positions[sentence_id]], query_embedding))
+            for sentence_id in ids
+            if sentence_id in self._sentence_positions
+        }
     
     def get_schema(self) -> Dict[str, Any]:
         return {

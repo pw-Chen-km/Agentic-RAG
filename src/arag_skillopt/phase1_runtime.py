@@ -68,7 +68,7 @@ class _NoKeywordRegistry(ToolRegistry):
 
     def get_all_schemas(self):
         schemas = copy.deepcopy(super().get_all_schemas())
-        search_names = [name for name in ("semantic_search", "entity_hop") if self.get(name)]
+        search_names = [name for name in ("semantic_search", "entity_hop", "linear_hop") if self.get(name)]
         for schema in schemas:
             function = schema["function"]
             description = function.get("description", "")
@@ -94,15 +94,14 @@ def make_tools(config):
     if keyword_enabled:
         registry.register(KeywordSearchTool(config["data"]["chunks_file"]))
     registry.register(ReadChunkTool(config["data"]["chunks_file"]))
-    registry.register(
-        SemanticSearchTool(
+    semantic_tool = SemanticSearchTool(
             chunks_file=config["data"]["chunks_file"],
             index_dir=config["data"]["index_dir"],
             model_name=config["embedding"]["model"],
             device=config["embedding"]["device"],
             query_prompt_name=config["embedding"].get("query_prompt_name"),
         )
-    )
+    registry.register(semantic_tool)
     entity_cfg = config.get("entity_hop", {}) or {}
     if entity_cfg.get("enabled", False):
         from arag.tools.entity_hop import EntityHopTool
@@ -117,6 +116,28 @@ def make_tools(config):
                 default_top_k=entity_cfg.get("top_k", 5),
                 max_top_k=entity_cfg.get("max_top_k", 20),
                 entity_source=entity_cfg.get("entity_source", "visible_evidence"),
+            )
+        )
+    linear_cfg = config.get("linear_hop", {}) or {}
+    if linear_cfg.get("enabled", False):
+        from arag.tools.linear_hop import LinearHopTool
+
+        graph_file = linear_cfg.get("graph_index_file")
+        if not graph_file:
+            raise ValueError("linear_hop requires graph_index_file")
+        registry.register(
+            LinearHopTool(
+                graph_index_file=graph_file,
+                sentence_index_file=linear_cfg.get("sentence_index_file") or str(
+                    Path(config["data"]["index_dir"]) / "sentence_index.pkl"
+                ),
+                sentence_ranker=getattr(semantic_tool, "rank_sentence_ids", None),
+                top_entities=linear_cfg.get("top_entities", 3),
+                default_top_k=linear_cfg.get("top_k", 5),
+                max_top_k=linear_cfg.get("max_top_k", 20),
+                default_max_hops=linear_cfg.get("max_hops", 2),
+                max_hops=linear_cfg.get("max_hops", 2),
+                entity_source=linear_cfg.get("entity_source", "question_or_visible_evidence"),
             )
         )
     # Missing semantic index is an error, never silently a two-tool experiment.

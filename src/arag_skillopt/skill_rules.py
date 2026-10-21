@@ -200,7 +200,11 @@ class RuleStore:
 def compile_initial_skill(payload: Mapping[str, Any]) -> str:
     """Render rules as a readable Markdown Strategy replacement."""
 
-    entityhop_variant = any("entity_hop" in str(rule["action_sequence"]) for rule in payload["retrieval_policy"])
+    entityhop_variant = any(
+        action in str(rule["action_sequence"])
+        for rule in payload["retrieval_policy"]
+        for action in ("entity_hop", "linear_hop")
+    )
     lines = [
         "## Strategy (formatted A-RAG skill)",
         ("These rules extend A-RAG's strategy with evidence-conditioned entity hopping." if entityhop_variant

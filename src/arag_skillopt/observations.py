@@ -8,14 +8,19 @@ import re
 
 
 def result_units(tool, text):
-    if tool in {"keyword_search", "semantic_search", "entity_hop"}:
+    if tool in {"keyword_search", "semantic_search", "entity_hop", "linear_hop"}:
         pattern = (
             r"(?m)^Chunk ID: ([^,\n]+), Matched keywords in chunk: "
             if tool == "keyword_search"
             else (
                 r"(?m)^Chunk ID: ([^\n]+?) \(Similarity: [^\n]+\)\nMatched: "
                 if tool == "semantic_search"
-                else r"(?m)^Chunk ID: ([^,\n]+), Matched entity in chunk: "
+                else (
+                    r"(?m)^Chunk ID: ([^\n]+?) \(LinearHop score: [^\n]+\)\n"
+                    r"(?:Bridge: [^\n]+\n)?Matched: "
+                    if tool == "linear_hop"
+                    else r"(?m)^Chunk ID: ([^,\n]+), Matched entity in chunk: "
+                )
             )
         )
         matches = list(re.finditer(pattern, text))

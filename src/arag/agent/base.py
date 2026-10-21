@@ -78,7 +78,7 @@ class BaseAgent:
                     "context_failure": exc.details}
 
     def _run(self, query: str) -> Dict[str, Any]:
-        context = AgentContext()
+        context = AgentContext(query=query)
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": query},

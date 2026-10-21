@@ -15,7 +15,11 @@ class RetrievalLog:
 class AgentContext:
     """Context manager for agent execution state."""
     
-    def __init__(self):
+    def __init__(self, query: str | None = None):
+        # The original question is runtime state, not a tool argument.  Query
+        # conditioned graph tools can use it for ranking while the policy only
+        # selects an entity to expand.
+        self.query: str | None = query
         # Token statistics
         self.total_retrieved_tokens: int = 0
         self.retrieval_logs: List[RetrievalLog] = []

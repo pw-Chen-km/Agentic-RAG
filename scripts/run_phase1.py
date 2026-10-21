@@ -117,6 +117,11 @@ def main(workflow=False):
     for key in ("index_file", "entity_index_file"):
         if cfg.get("entity_hop", {}).get(key):
             data_hashes["entity_hop_" + key] = file_hash(cfg["entity_hop"][key])
+    if cfg.get("linear_hop", {}).get("enabled"):
+        graph_file = cfg["linear_hop"].get("graph_index_file")
+        if not graph_file:
+            raise ValueError("linear_hop requires graph_index_file")
+        data_hashes["linear_hop_graph_index_file"] = file_hash(graph_file)
     if cfg.get("experiment", {}).get("reviewed_test_manifest"):
         data_hashes["reviewed_test_manifest"] = file_hash(cfg["experiment"]["reviewed_test_manifest"])
     source_hashes = {

@@ -91,6 +91,28 @@ class SemanticProcessTool(BaseTool):
                     if attempt == 2: raise RuntimeError('semantic worker failed twice; no result fabricated') from exc
                     self._start()
 
+    def rank_sentence_ids(self, query, sentence_ids):
+        """Ask the isolated semantic worker for selected sentence scores."""
+        ids = [str(value) for value in sentence_ids]
+        with self.lock:
+            for attempt in (1, 2):
+                try:
+                    self.process.stdin.write(json.dumps({
+                        'op': 'rank_sentence_ids', 'query': query, 'sentence_ids': ids,
+                    }) + '\n')
+                    self.process.stdin.flush()
+                    result = self._receive()
+                    return {str(key): float(value) for key, value in result['scores'].items()}
+                except (ChildProcessError, BrokenPipeError, TimeoutError) as exc:
+                    event = {'event': 'semantic_worker_failure', 'operation': 'rank_sentence_ids',
+                             'attempt': attempt, 'error': str(exc), 'time': time.time()}
+                    self.failures.append(event)
+                    print(json.dumps(event), file=sys.stderr, flush=True)
+                    self.close()
+                    if attempt == 2:
+                        raise RuntimeError('semantic worker failed twice; no result fabricated') from exc
+                    self._start()
+
 
 def worker(spec):
     # Native torch/numpy/tokenizer imports and state stay outside the coordinator.
@@ -101,8 +123,12 @@ def worker(spec):
     for line in sys.stdin:
         try:
             query = json.loads(line)
-            text, metadata = tool.execute(AgentContext(), **query)
-            print(json.dumps({'text': text, 'metadata': metadata}), flush=True)
+            if query.get('op') == 'rank_sentence_ids':
+                scores = tool.rank_sentence_ids(query['query'], query.get('sentence_ids', []))
+                print(json.dumps({'scores': scores}), flush=True)
+            else:
+                text, metadata = tool.execute(AgentContext(), **query)
+                print(json.dumps({'text': text, 'metadata': metadata}), flush=True)
         except Exception as exc:
             print(json.dumps({'error': f'{type(exc).__name__}: {exc}'}), flush=True)
 

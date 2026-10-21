@@ -27,6 +27,9 @@ package inventory is in the private backup; `pyproject.toml` is not a lockfile.
 ## Contents and entry points
 
 - `src/arag`: Agent, tools, exact Ollama context/output guards.
+- `src/arag/tools/linear_hop.py` and `scripts/build_linear_graph.py`: optional
+  LinearRAG-style sentence/entity graph hopping; it reuses the existing
+  sentence index and returns snippets before `read_chunk`.
 - `src/arag_skillopt`: Phase1, Meta, gates, sealed test and cache lineage checks.
 - `prompts/`, `skills/`: runtime/Optimizer prompts and initial/final retrieval rules.
 - `configs/novel_reflection48k.example.yaml`: derived portable config; only paths
