@@ -50,6 +50,14 @@ def runner_url(endpoint, proc_root=Path("/proc"), model_path=None):
     if parsed.hostname not in {"127.0.0.1", "localhost"}:
         raise ValueError("exact GGUF tokenization requires co-located Ollama")
     found = []
+    # Some deployments run the Ollama daemon under a dedicated service
+    # account.  A caller running as an ordinary user can then inspect the
+    # runner command line and model path but cannot read the daemon parent's
+    # /proc/<pid>/environ.  Keep the normal listener-ownership check whenever
+    # it is readable; otherwise retain a narrowly bounded fallback that still
+    # requires exactly one runner for the exact GGUF path reported by
+    # /api/show.  Multiple runners remain a hard failure.
+    permission_fallback = []
     for proc in proc_root.iterdir():
         if not proc.name.isdecimal():
             continue
@@ -64,7 +72,13 @@ def runner_url(endpoint, proc_root=Path("/proc"), model_path=None):
             status = (proc / "status").read_text()
             ppid = next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:"))
             parent = proc_root / ppid
-            env = dict(e.split(b"=", 1) for e in (parent / "environ").read_bytes().split(b"\x00") if b"=" in e)
+            try:
+                env = dict(e.split(b"=", 1) for e in (parent / "environ").read_bytes().split(b"\x00") if b"=" in e)
+            except PermissionError:
+                if model_path is not None:
+                    port = int(args[args.index("--port") + 1])
+                    permission_fallback.append((port, int(proc.name)))
+                continue
             host = env.get(b"OLLAMA_HOST", b"").decode()
             host = urlparse(host if "://" in host else "http://" + host)
             if host.port != parsed.port or host.hostname not in {"localhost", "127.0.0.1"}:
@@ -73,9 +87,13 @@ def runner_url(endpoint, proc_root=Path("/proc"), model_path=None):
             found.append((port, int(proc.name)))
         except (OSError, ValueError, StopIteration, UnicodeError):
             continue
-    if len(found) != 1:
-        raise RuntimeError(f"expected one exact tokenizer runner for {endpoint}, found {found}")
-    return f"http://127.0.0.1:{found[0][0]}", found[0][1]
+    if len(found) == 1 and not permission_fallback:
+        return f"http://127.0.0.1:{found[0][0]}", found[0][1]
+    if not found and len(permission_fallback) == 1:
+        return f"http://127.0.0.1:{permission_fallback[0][0]}", permission_fallback[0][1]
+    raise RuntimeError(
+        f"expected one exact tokenizer runner for {endpoint}, found {found or permission_fallback}"
+    )
 
 
 def native_messages(messages):
@@ -294,4 +312,5 @@ class GuardedOllamaClient(LLMClient):
                 if response is not None:
                     response.close()
         raise AssertionError("bounded attempts exhausted without a result")
+
 
