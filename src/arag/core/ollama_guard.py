@@ -313,4 +313,3 @@ class GuardedOllamaClient(LLMClient):
                     response.close()
         raise AssertionError("bounded attempts exhausted without a result")
 
-

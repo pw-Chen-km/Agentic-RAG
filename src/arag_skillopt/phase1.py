@@ -15,7 +15,12 @@ from pathlib import Path
 
 from .candidate_replay import collect_train_branches
 from .checkpoint import load_checkpoint, save_checkpoint
-from .compact_rendering import DISPLAY_GUIDANCE, DISPLAY_VERSION, PLAIN_DISPLAY_GUIDANCE, PLAIN_DISPLAY_VERSION
+from .compact_rendering import DISPLAY_VERSION, PLAIN_DISPLAY_VERSION
+from .context_rendering import (
+    CONTEXT_RENDERER_VERSION,
+    render_phase1_merge_context,
+    render_phase1_reflection_context,
+)
 from .diagnostics import (
     FORMAT_REPAIR_VERSION,
     STATE_ACTION_PROTOCOL,
@@ -33,6 +38,7 @@ from .support import digest
 from .tokens import count
 from .trajectory import build_view, render_view, render_view_with_audit
 from .action_space import DEFAULT_ACTION_SPACE, action_space_contract, action_usage
+from .retrieval_diagnostics import build_retrieval_diagnostics
 
 
 @dataclass(frozen=True)
@@ -123,6 +129,7 @@ class Phase1:
             "analysis_protocol": self.cfg.analysis_protocol,
             "gate_version": GATE_VERSION,
             "optimizer_renderer_version": (PLAIN_DISPLAY_VERSION if self.cfg.analysis_protocol == STATE_ACTION_PROTOCOL else DISPLAY_VERSION),
+            "optimizer_context_renderer_version": CONTEXT_RENDERER_VERSION,
             "diagnostic_schema_hash": digest(diagnostic_tools(self.cfg.analysis_protocol)),
             "initial_hash": skill_sha256(skill),
             "config": asdict(self.cfg),
@@ -190,6 +197,14 @@ class Phase1:
             directory / "raw.json",
             runtime_question,
             lambda: self.rollout(copy.deepcopy(runtime_question), copy.deepcopy(skill)),
+        )
+        retrieval_diagnostics = build_retrieval_diagnostics(raw)
+        save_checkpoint(
+            directory / "retrieval_diagnostics.json",
+            {
+                "input_hash": digest({"raw": digest(raw)}),
+                "value": retrieval_diagnostics,
+            },
         )
         if raw.get("question_id") != qid or raw.get("question") != question["question"]:
             raise ValueError("runtime returned a different question")
@@ -493,10 +508,12 @@ class Phase1:
 
     def reflect_group(self, kind, skill, episodes, directory, name):
         plain = self.cfg.analysis_protocol == STATE_ACTION_PROTOCOL
-        payload = (
-            (PLAIN_DISPLAY_GUIDANCE if plain else DISPLAY_GUIDANCE)
-            + "\n\n"
-            + "\n\n".join(render_view(e["view"], guidance=False, plain_language=plain) for e in episodes)
+        payload = render_phase1_reflection_context(
+            skill,
+            episodes,
+            kind,
+            action_space=self.action_space,
+            plain_language=plain,
         )
         ids = [e["question_id"] for e in episodes]
         path = directory / (name + ".json")
@@ -535,7 +552,16 @@ class Phase1:
             {"proposal_id": name, "analysis_kind": kind, "case_ids": ids, **proposal}
         ]
 
-    def merge(self, skill, proposals, directory, stage="merge", edit_limit=None):
+    def merge(
+        self,
+        skill,
+        proposals,
+        directory,
+        stage="merge",
+        edit_limit=None,
+        *,
+        context_payload=None,
+    ):
         # All diagnoses, including neutral/counterexamples, stay available to merge.
         # Do not silently select an early proposal if the combined input is too long.
         edit_limit = self.cfg.max_batch_edits if edit_limit is None else edit_limit
@@ -582,14 +608,23 @@ class Phase1:
                     "citation_advisories": advisories,
                 },
             )
+        # HRO supplies a deterministic Stage B projection here.  The
+        # canonical JSON remains in its checkpoint; only the compact labelled
+        # rendering is sent to the model.  Ordinary Phase 1 and non-HRO Meta
+        # merges use the same sectioned renderer instead of hand-built JSON.
+        payload = context_payload
+        if payload is None:
+            payload = render_phase1_merge_context(
+                skill,
+                compact,
+                sorted(ids),
+                action_space=self.action_space,
+                state_action=self.cfg.analysis_protocol == STATE_ACTION_PROTOCOL,
+            )
         return self.propose(
             stage,
             skill,
-            ("Question IDs with observations supporting the reported findings (not proof that a proposed change works):\n"
-             if self.cfg.analysis_protocol == STATE_ACTION_PROTOCOL else
-             "Eligible supporting_case_ids (documented SUPPORT; classifications are advisory):\n") + json.dumps(sorted(ids))
-            + "\n\nBatch diagnoses (all groups):\n"
-            + json.dumps(compact, ensure_ascii=False),
+            payload,
             train_ids,
             directory / "merge.json",
             edit_limit,

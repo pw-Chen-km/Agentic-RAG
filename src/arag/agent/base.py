@@ -6,6 +6,10 @@ from typing import Any, Dict, List, Optional
 import tiktoken
 
 from arag.core.context import AgentContext
+from arag.agent.context_renderer import (
+    RUNTIME_CONTEXT_RENDERER_VERSION,
+    RuntimeContextRenderer,
+)
 from arag.core.llm import LLMClient
 from arag.core.ollama_guard import OllamaRequestError
 from arag.tools.registry import ToolRegistry
@@ -22,6 +26,9 @@ class BaseAgent:
         max_loops: int = 10,
         max_token_budget: int = 128000,
         verbose: bool = False,
+        context_card_chars: int = 8000,
+        context_recent_turns: int = 1,
+        context_max_evidence_cards: int = 32,
     ):
         self.llm = llm_client
         self.tools = tools
@@ -30,6 +37,11 @@ class BaseAgent:
         self.max_token_budget = max_token_budget
         self.verbose = verbose
         self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
+        self.context_renderer = RuntimeContextRenderer(
+            card_chars=context_card_chars,
+            recent_turns=context_recent_turns,
+            max_evidence_cards=context_max_evidence_cards,
+        )
     
     def _calculate_message_tokens(self, messages: List[Dict[str, Any]], tools=None) -> int:
         if getattr(self.llm, "enforces_context_window", False):
@@ -72,18 +84,18 @@ class BaseAgent:
     def run(self, query: str) -> Dict[str, Any]:
         self._partial = {"trajectory": [], "total_cost": 0.0, "loops": 0}
         try:
-            return self._run(query)
+            result = self._run(query)
+            result["agent_context_renderer_version"] = RUNTIME_CONTEXT_RENDERER_VERSION
+            return result
         except OllamaRequestError as exc:
             return {**self._partial, "answer": "", "error": str(exc),
-                    "context_failure": exc.details}
+                    "context_failure": exc.details,
+                    "agent_context_renderer_version": RUNTIME_CONTEXT_RENDERER_VERSION}
 
     def _run(self, query: str) -> Dict[str, Any]:
         context = AgentContext(query=query)
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": query},
-        ]
-        
+        messages = self.context_renderer.render(self.system_prompt, query, context)
+        continuation = []
         trajectory = []
         total_cost = 0.0
         loop_count = 0
@@ -99,6 +111,13 @@ class BaseAgent:
             
             self._partial = {"trajectory": trajectory, "total_cost": total_cost,
                              "loops": loop_count, **context.get_summary()}
+            messages = self.context_renderer.render(
+                self.system_prompt,
+                query,
+                context,
+                continuation,
+                recent_loop=loop_count - 1 if continuation else None,
+            )
             current_tokens = self._calculate_message_tokens(messages, tool_schemas)
             if current_tokens > self.max_token_budget:
                 if self.verbose:
@@ -131,8 +150,6 @@ class BaseAgent:
             
             total_cost += response["cost"]
             message = response["message"]
-            messages.append(message)
-            
             if self.verbose and message.get("content"):
                 print(f"Assistant: {message['content'][:200]}...")
             
@@ -148,7 +165,10 @@ class BaseAgent:
                     **context.get_summary()
                 }
             
-            # Execute tool calls
+            # Execute tool calls.  The current assistant/tool pair is kept for
+            # the next request; older pairs are represented by compact state.
+            tool_messages = []
+            tool_logs = []
             for tc in tool_calls:
                 func_name = tc["function"]["name"]
                 try:
@@ -173,11 +193,13 @@ class BaseAgent:
                         print(f"  Tokens: {tool_log['retrieved_tokens']}")
                     print()
                 
-                messages.append({
+                tool_message = {
                     "role": "tool",
                     "tool_call_id": tc["id"],
                     "content": tool_result,
-                })
+                }
+                tool_messages.append(tool_message)
+                tool_logs.append(tool_log)
                 
                 # Record trajectory (same format as original A-RAG)
                 traj_entry = {
@@ -188,11 +210,20 @@ class BaseAgent:
                     **tool_log  # includes retrieved_tokens, chunks_found, etc.
                 }
                 trajectory.append(traj_entry)
+            context.record_turn(loop_count, message, tool_messages, tool_logs)
+            continuation = [message, *tool_messages]
         
         # Max loops reached - force final answer
         if self.verbose:
             print(f"Max loops reached ({self.max_loops}), forcing answer...")
         
+        messages = self.context_renderer.render(
+            self.system_prompt,
+            query,
+            context,
+            continuation,
+            recent_loop=loop_count if continuation else None,
+        )
         self._partial = {"trajectory": trajectory, "total_cost": total_cost,
                          "loops": loop_count, **context.get_summary()}
         final_answer, total_cost = self._force_final_answer(

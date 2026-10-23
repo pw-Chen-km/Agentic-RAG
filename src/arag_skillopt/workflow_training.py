@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .compact_rendering import DISPLAY_VERSION
+from .context_rendering import CONTEXT_RENDERER_VERSION
 from .diagnostics import VERSION
 from .meta_comparison import COMPARISON_VERSION
 from .meta_stage import MetaConfig, MetaStage
@@ -40,6 +41,7 @@ class WorkflowTrainer:
             "workflow": "arag-phase1-meta-diagnosis-merge-v3",
             "analysis_protocol": self.cfg.analysis_protocol,
             "optimizer_renderer_version": DISPLAY_VERSION,
+            "optimizer_context_renderer_version": CONTEXT_RENDERER_VERSION,
             "meta_comparison_version": COMPARISON_VERSION,
             "initial_skill_hash": skill_sha256(skill),
             "phase1_config": asdict(self.cfg),

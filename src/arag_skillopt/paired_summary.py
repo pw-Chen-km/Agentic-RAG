@@ -15,7 +15,7 @@ from .observations import result_units
 from .trajectory import decisions_from_raw
 from .action_space import action_usage, normalize_action_name
 
-HRO_VERSION = "hro-paired-trajectory-v1"
+HRO_VERSION = "hro-paired-trajectory-v2"
 
 
 def _as_mapping(value):
@@ -186,33 +186,58 @@ def _novel_ids_from_step(step):
     return ids
 
 
-def novel_evidence_ids(raw):
-    """Collect unique newly visible evidence IDs from recorded decisions."""
-    found = set()
+def evidence_inventory(raw):
+    """Separate snippet visibility from full reads in one episode.
+
+    Search/hop results expose snippets; ``read_chunk`` exposes full passage
+    text.  Both can mention the same chunk ID, so a single union of IDs cannot
+    measure whether the agent actually used a retrieved result.
+    """
+    snippet_ids = set()
+    full_read_ids = set()
     for decision in _fallback_decisions(raw):
         for result in decision.get("results") or []:
             step = _as_mapping(result.get("step"))
-            found.update(_novel_ids_from_step(step))
-            # Older artifacts do not expose novel_node_ids.  result_units()
-            # gives the same conservative unique substrate count without
-            # retaining evidence text in the summary.
-            if not _novel_ids_from_step(step):
-                try:
-                    units, _ = result_units(
-                        step.get("tool_name") or step.get("tool"),
-                        step.get("tool_result") or step.get("result"),
-                    )
-                    for unit in units:
-                        unit_id = (
-                            unit.get("chunk_id")
-                            or unit.get("node_id")
-                            or unit.get("id")
-                        )
-                        if unit_id is not None:
-                            found.add(str(unit_id))
-                except (AttributeError, KeyError, TypeError, ValueError):
-                    continue
-    return found
+            tool = str(step.get("tool_name") or step.get("tool") or "")
+            fallback_ids = _novel_ids_from_step(step)
+            try:
+                units, _ = result_units(
+                    tool,
+                    step.get("tool_result") or step.get("result") or "",
+                )
+            except (AttributeError, KeyError, TypeError, ValueError):
+                units = []
+            parsed_ids = {
+                str(unit.get("chunk_id") or unit.get("node_id") or unit.get("id"))
+                for unit in units
+                if unit.get("available") and unit.get("kind") in {"snippet", "full"}
+                and (unit.get("chunk_id") or unit.get("node_id") or unit.get("id")) is not None
+            }
+            ids = parsed_ids or fallback_ids
+            if tool == "read_chunk":
+                # A legacy artifact may only preserve novel_node_ids.  Since
+                # this call is read_chunk, those IDs are still full-read IDs.
+                full_units = {
+                    str(unit.get("chunk_id") or unit.get("node_id") or unit.get("id"))
+                    for unit in units
+                    if unit.get("available") and unit.get("kind") == "full"
+                    and (unit.get("chunk_id") or unit.get("node_id") or unit.get("id")) is not None
+                }
+                full_read_ids.update(full_units or fallback_ids)
+            else:
+                snippet_ids.update(ids)
+    visible_ids = snippet_ids | full_read_ids
+    return {
+        "visible_ids": visible_ids,
+        "snippet_ids": snippet_ids,
+        "full_read_ids": full_read_ids,
+        "snippet_to_full_ids": snippet_ids & full_read_ids,
+    }
+
+
+def novel_evidence_ids(raw):
+    """Compatibility helper returning visible IDs, not full-read semantics."""
+    return evidence_inventory(raw)["visible_ids"]
 
 
 def _correct(evaluation):
@@ -225,6 +250,13 @@ def _correct(evaluation):
 
 
 def _usage(raw):
+    """Return policy calls, model tokens, tool calls, and retrieved tokens.
+
+    The first two values describe LLM cost.  Retrieval cost is kept separate:
+    a larger model prompt is not the same thing as returning more evidence.
+    Missing values stay ``None`` so an incomplete episode is never silently
+    treated as zero cost.
+    """
     usage = _as_mapping(raw.get("usage"))
     calls = raw.get("policy_calls")
     if not isinstance(calls, (int, float)):
@@ -234,17 +266,48 @@ def _usage(raw):
     tokens = usage.get("total_tokens")
     if not isinstance(tokens, (int, float)):
         tokens = raw.get("total_tokens")
-    return calls, tokens
+    tool_calls = raw.get("tool_calls")
+    if not isinstance(tool_calls, (int, float)):
+        trajectory = raw.get("trajectory")
+        tool_calls = len(trajectory) if isinstance(trajectory, list) else None
+    retrieved_tokens = raw.get("total_retrieved_tokens")
+    if not isinstance(retrieved_tokens, (int, float)):
+        trajectory = raw.get("trajectory")
+        values = []
+        if isinstance(trajectory, list):
+            for step in trajectory:
+                if not isinstance(step, Mapping):
+                    continue
+                value = step.get("retrieved_tokens")
+                if not isinstance(value, (int, float)):
+                    value = _as_mapping(step.get("log")).get("retrieved_tokens")
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    values.append(value)
+        retrieved_tokens = sum(values) if values else None
+    return calls, tokens, tool_calls, retrieved_tokens
 
 
-def _first_divergence(parent_actions, candidate_actions):
-    limit = max(len(parent_actions), len(candidate_actions))
+def _bundle_key(bundle):
+    """Canonicalize one policy-turn bundle for order-insensitive comparison.
+
+    Calls selected in one policy decision are executed after the decision is
+    emitted, so their list order is not a policy difference.  Keep duplicate
+    calls (multiset semantics) while ignoring only their presentation order.
+    """
+    if isinstance(bundle, (list, tuple)):
+        return tuple(sorted(str(action) for action in bundle))
+    return (str(bundle),)
+
+
+def _first_divergence(parent_bundles, candidate_bundles):
+    """Return the first *policy turn* whose action bundle differs."""
+    limit = max(len(parent_bundles), len(candidate_bundles))
     for index in range(limit):
-        parent_action = parent_actions[index] if index < len(parent_actions) else None
+        parent_action = parent_bundles[index] if index < len(parent_bundles) else None
         candidate_action = (
-            candidate_actions[index] if index < len(candidate_actions) else None
+            candidate_bundles[index] if index < len(candidate_bundles) else None
         )
-        if parent_action != candidate_action:
+        if _bundle_key(parent_action) != _bundle_key(candidate_action):
             return {
                 "step": index + 1,
                 "parent_action": parent_action,
@@ -255,12 +318,17 @@ def _first_divergence(parent_actions, candidate_actions):
 
 def is_informative_pair(summary):
     """Whether a pair contains an observable action/outcome/cost difference."""
+    def nonzero(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0
+
     return bool(
         summary.get("first_divergence") is not None
         or summary.get("parent_answer_correct")
         != summary.get("candidate_answer_correct")
-        or summary.get("token_delta", 0) != 0
-        or summary.get("policy_call_delta", 0) != 0
+        or nonzero(summary.get("token_delta"))
+        or nonzero(summary.get("policy_call_delta"))
+        or nonzero(summary.get("tool_call_delta"))
+        or nonzero(summary.get("retrieved_token_delta"))
     )
 
 
@@ -276,36 +344,77 @@ def summarize_pair(
     candidate_episode = _as_mapping(candidate_episode)
     parent_actions = action_sequence(parent_episode)
     candidate_actions = action_sequence(candidate_episode)
-    parent_ids = novel_evidence_ids(parent_episode)
-    candidate_ids = novel_evidence_ids(candidate_episode)
-    parent_calls, parent_tokens = _usage(parent_episode)
-    candidate_calls, candidate_tokens = _usage(candidate_episode)
+    parent_bundles = action_bundles(parent_episode)
+    candidate_bundles = action_bundles(candidate_episode)
+    parent_evidence = evidence_inventory(parent_episode)
+    candidate_evidence = evidence_inventory(candidate_episode)
+    parent_ids = parent_evidence["visible_ids"]
+    candidate_ids = candidate_evidence["visible_ids"]
+    parent_calls, parent_tokens, parent_tool_calls, parent_retrieved_tokens = _usage(parent_episode)
+    candidate_calls, candidate_tokens, candidate_tool_calls, candidate_retrieved_tokens = _usage(candidate_episode)
     parent_correct = _correct(parent_evaluation)
     candidate_correct = _correct(candidate_evaluation)
-    first = _first_divergence(parent_actions, candidate_actions)
+    first = _first_divergence(parent_bundles, candidate_bundles)
     summary = {
         "schema_version": HRO_VERSION,
         "question_id": str(question_id),
         "parent_answer_correct": parent_correct,
         "candidate_answer_correct": candidate_correct,
         "first_divergence": first,
+        "action_changed": first is not None,
         "parent_actions": parent_actions,
         "candidate_actions": candidate_actions,
-        "parent_action_bundles": action_bundles(parent_episode),
-        "candidate_action_bundles": action_bundles(candidate_episode),
+        "parent_action_bundles": parent_bundles,
+        "candidate_action_bundles": candidate_bundles,
         "parent_action_usage": action_usage(parent_episode),
         "candidate_action_usage": action_usage(candidate_episode),
         "parent_new_evidence_ids": sorted(parent_ids),
         "candidate_new_evidence_ids": sorted(candidate_ids),
+        # ``*_new_evidence_ids`` are retained as compatibility aliases for
+        # the old visible-ID meaning.  The explicit fields below prevent
+        # snippet visibility from being mistaken for a full read.
+        "parent_visible_evidence_ids": sorted(parent_ids),
+        "candidate_visible_evidence_ids": sorted(candidate_ids),
+        "parent_snippet_ids": sorted(parent_evidence["snippet_ids"]),
+        "candidate_snippet_ids": sorted(candidate_evidence["snippet_ids"]),
+        "parent_full_read_ids": sorted(parent_evidence["full_read_ids"]),
+        "candidate_full_read_ids": sorted(candidate_evidence["full_read_ids"]),
+        "parent_snippet_to_full_ids": sorted(parent_evidence["snippet_to_full_ids"]),
+        "candidate_snippet_to_full_ids": sorted(candidate_evidence["snippet_to_full_ids"]),
         "parent_new_evidence_count": len(parent_ids),
         "candidate_new_evidence_count": len(candidate_ids),
         "new_evidence_delta": len(candidate_ids) - len(parent_ids),
+        "new_visible_evidence_delta": len(candidate_ids) - len(parent_ids),
+        "full_read_delta": (
+            len(candidate_evidence["full_read_ids"])
+            - len(parent_evidence["full_read_ids"])
+        ),
+        "snippet_to_full_delta": (
+            len(candidate_evidence["snippet_to_full_ids"])
+            - len(parent_evidence["snippet_to_full_ids"])
+        ),
         "parent_policy_calls": parent_calls,
         "candidate_policy_calls": candidate_calls,
         "policy_call_delta": (
             candidate_calls - parent_calls
             if isinstance(parent_calls, (int, float))
             and isinstance(candidate_calls, (int, float))
+            else None
+        ),
+        "parent_tool_calls": parent_tool_calls,
+        "candidate_tool_calls": candidate_tool_calls,
+        "tool_call_delta": (
+            candidate_tool_calls - parent_tool_calls
+            if isinstance(parent_tool_calls, (int, float))
+            and isinstance(candidate_tool_calls, (int, float))
+            else None
+        ),
+        "parent_retrieved_tokens": parent_retrieved_tokens,
+        "candidate_retrieved_tokens": candidate_retrieved_tokens,
+        "retrieved_token_delta": (
+            candidate_retrieved_tokens - parent_retrieved_tokens
+            if isinstance(parent_retrieved_tokens, (int, float))
+            and isinstance(candidate_retrieved_tokens, (int, float))
             else None
         ),
         "parent_total_tokens": parent_tokens,
@@ -317,6 +426,7 @@ def summarize_pair(
             else None
         ),
     }
+    summary["model_token_delta"] = summary["token_delta"]
     summary["informative"] = is_informative_pair(summary)
     summary["status"] = (
         "unknown"

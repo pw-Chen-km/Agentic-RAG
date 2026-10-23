@@ -16,6 +16,7 @@ from arag.tools.registry import ToolRegistry
 
 from .endpoint_pool import EndpointPool, PooledClient
 from .runtime_audit import AuditClient, attach_audit
+from .retrieval_diagnostics import build_retrieval_diagnostics
 from .skill_rules import render_formatted_prompt
 
 JUDGE_PROMPT = """Evaluate whether the candidate answer correctly answers the question
@@ -168,6 +169,10 @@ class ARAGRollout:
         except Exception as exc:  # noqa: BLE001 -- isolate episode failure; preserve its error and raw requests
             result = {"answer": "", "trajectory": [], "error": str(exc)}
         result = attach_audit(result, audited)
+        # Keep hop status/bridge/adoption diagnostics in the raw episode
+        # artifact.  They are offline metadata and are never sent back to the
+        # inference agent or injected into HRO Stage A.
+        result["retrieval_diagnostics"] = build_retrieval_diagnostics(result)
         result.update(
             question_id=question["id"],
             question=question["question"],

@@ -15,7 +15,7 @@ from .action_space import DEFAULT_ACTION_SPACE, action_space_contract
 from .paired_summary import HRO_VERSION
 
 
-HRO_V1_VERSION = "hro-group-reflection-v1"
+HRO_V1_VERSION = "hro-group-reflection-v2"
 UNSCORED = "UNSCORED"
 GROUPS = ("G00", "G01", "G10", "G11")
 STAGE_A_FIELDS = (
@@ -80,11 +80,23 @@ def group_summary(pairs: Sequence[Mapping], group: str) -> dict:
         "mean_new_evidence_delta": _number(
             [s.get("new_evidence_delta") for s in summaries]
         ),
+        "mean_full_read_delta": _number(
+            [s.get("full_read_delta") for s in summaries]
+        ),
+        "mean_snippet_to_full_delta": _number(
+            [s.get("snippet_to_full_delta") for s in summaries]
+        ),
         "mean_policy_call_delta": _number(
             [s.get("policy_call_delta") for s in summaries]
         ),
+        "mean_tool_call_delta": _number(
+            [s.get("tool_call_delta") for s in summaries]
+        ),
         "mean_retrieved_token_delta": _number(
-            [s.get("token_delta") for s in summaries]
+            [s.get("retrieved_token_delta") for s in summaries]
+        ),
+        "mean_model_token_delta": _number(
+            [s.get("model_token_delta", s.get("token_delta")) for s in summaries]
         ),
         "informative_count": sum(bool(s.get("informative")) for s in summaries),
     }
@@ -108,6 +120,12 @@ def _case(pair):
         raise ValueError("UNSCORED pairs are never sent to Stage A")
     parent_ids = set(summary.get("parent_new_evidence_ids") or [])
     candidate_ids = set(summary.get("candidate_new_evidence_ids") or [])
+    parent_snippet_ids = set(summary.get("parent_snippet_ids") or [])
+    candidate_snippet_ids = set(summary.get("candidate_snippet_ids") or [])
+    parent_full_read_ids = set(summary.get("parent_full_read_ids") or [])
+    candidate_full_read_ids = set(summary.get("candidate_full_read_ids") or [])
+    parent_promotions = set(summary.get("parent_snippet_to_full_ids") or [])
+    candidate_promotions = set(summary.get("candidate_snippet_to_full_ids") or [])
     return {
         "question_id": str(pair.get("question_id", summary.get("question_id"))),
         "question": pair.get("question"),
@@ -130,14 +148,23 @@ def _case(pair):
         ),
         "evidence_diff": {
             "status": "available" if parent_ids or candidate_ids else "unavailable",
-            "added_ids": sorted(candidate_ids - parent_ids),
-            "removed_ids": sorted(parent_ids - candidate_ids),
-            "new_evidence_count": summary.get("new_evidence_delta"),
+            "added_visible_ids": sorted(candidate_ids - parent_ids),
+            "removed_visible_ids": sorted(parent_ids - candidate_ids),
+            "visible_id_delta": summary.get("new_visible_evidence_delta", summary.get("new_evidence_delta")),
+            "parent_snippet_ids": sorted(parent_snippet_ids),
+            "candidate_snippet_ids": sorted(candidate_snippet_ids),
+            "parent_full_read_ids": sorted(parent_full_read_ids),
+            "candidate_full_read_ids": sorted(candidate_full_read_ids),
+            "parent_snippet_to_full_ids": sorted(parent_promotions),
+            "candidate_snippet_to_full_ids": sorted(candidate_promotions),
+            "full_read_delta": summary.get("full_read_delta"),
+            "snippet_to_full_delta": summary.get("snippet_to_full_delta"),
         },
         "cost_diff": {
             "policy_call_delta": summary.get("policy_call_delta"),
-            "tool_call_delta": pair.get("tool_call_delta"),
-            "retrieved_token_delta": summary.get("token_delta"),
+            "tool_call_delta": summary.get("tool_call_delta"),
+            "retrieved_token_delta": summary.get("retrieved_token_delta"),
+            "model_token_delta": summary.get("model_token_delta", summary.get("token_delta")),
         },
     }
 
@@ -161,8 +188,18 @@ def build_stage_a_context(
     if any(pair_group(pair) != group for pair in pairs):
         raise ValueError("Stage A cases must belong to exactly one G group")
     cases = [_case(pair) for pair in pairs]
-    rules_a = [_clean_rule(r) for r in parent_rules]
-    rules_b = [_clean_rule(r) for r in candidate_rules]
+    changed = {str(x) for x in changed_rule_ids}
+    # Stage A only needs the rules that the historical Phase 1 proposal
+    # actually changed.  Keeping the full Skill in the checkpoint is still
+    # possible elsewhere; this model-facing envelope stays bounded.
+    rules_a = [
+        _clean_rule(r) for r in parent_rules
+        if not changed or str(r.get("rule_id")) in changed
+    ]
+    rules_b = [
+        _clean_rule(r) for r in candidate_rules
+        if not changed or str(r.get("rule_id")) in changed
+    ]
     return {
         "schema_version": HRO_V1_VERSION,
         "meta_task": {
@@ -232,11 +269,18 @@ def build_stage_b_context(
         raise ValueError("Stage B group summaries contain an unknown group")
     if len(representative_pairs) > 20:
         raise ValueError("Stage B representative pairs exceed the four-group budget")
+    candidate_policy = list((candidate_skill or {}).get("retrieval_policy") or [])
+    changed = {str(x) for x in changed_rule_ids}
+    candidate_view = dict(candidate_skill)
+    candidate_view["retrieval_policy"] = [
+        rule for rule in candidate_policy
+        if not changed or str(rule.get("rule_id")) in changed
+    ]
     return {
         "schema_version": HRO_V1_VERSION,
         "meta_task": {"stage": "skill_proposer", "output": "KEEP_REVISE_REJECT"},
         "parent_skill": parent_skill,
-        "candidate_skill": candidate_skill,
+        "candidate_skill": candidate_view,
         "changed_rule_ids": [str(x) for x in changed_rule_ids],
         "group_summaries": {k: group_summaries[k] for k in GROUPS if k in group_summaries},
         "group_reflections": list(reflections),

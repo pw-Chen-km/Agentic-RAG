@@ -10,6 +10,8 @@ from .phase1_gate import metrics
 from .skill_rules import skill_sha256
 from .support import digest
 from .trajectory import build_view
+from .retrieval_diagnostics import build_retrieval_diagnostics
+from .paired_summary import summarize_pair
 
 
 class FinalTestRunner:
@@ -43,6 +45,13 @@ class FinalTestRunner:
             folder / "raw.json",
             runtime_question,
             lambda: self.rollout(copy.deepcopy(runtime_question), copy.deepcopy(skill)),
+        )
+        save_checkpoint(
+            folder / "retrieval_diagnostics.json",
+            {
+                "input_hash": digest({"raw": digest(raw)}),
+                "value": build_retrieval_diagnostics(raw),
+            },
         )
         if raw.get("question_id") != qid or raw.get("question") != question["question"]:
             raise ValueError("test runtime question mismatch")
@@ -140,6 +149,7 @@ class FinalTestRunner:
                     )
                 },
             )
+            question_text = {str(q["id"]): q["question"] for q in questions}
             for a, b in zip(arms["initial"], arms["optimized"]):
                 x, y = a["evaluation"]["correct"], b["evaluation"]["correct"]
                 category = (
@@ -154,12 +164,23 @@ class FinalTestRunner:
                     else "both_wrong"
                 )
                 counts[category] += 1
+                paired_summary = summarize_pair(
+                    a["question_id"],
+                    a["raw"],
+                    b["raw"],
+                    a["evaluation"],
+                    b["evaluation"],
+                )
                 paired.append(
                     {
                         "question_id": a["question_id"],
+                        "question": question_text[a["question_id"]],
+                        "initial_predicted_answer": a["raw"].get("answer"),
+                        "optimized_predicted_answer": b["raw"].get("answer"),
                         "initial_correct": x,
                         "optimized_correct": y,
                         "category": category,
+                        "paired_summary": paired_summary,
                     }
                 )
             save_checkpoint(self.root / "paired.json", {"rows": paired})

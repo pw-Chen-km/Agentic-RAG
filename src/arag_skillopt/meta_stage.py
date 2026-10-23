@@ -6,6 +6,11 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 
 from .checkpoint import load_checkpoint, save_checkpoint
+from .context_rendering import (
+    CONTEXT_RENDERER_VERSION,
+    render_stage_a_context,
+    render_stage_b_context,
+)
 from .diagnostics import STATE_ACTION_PROTOCOL, diagnostic_tools
 from .meta_comparison import (
     comparison_views,
@@ -132,10 +137,22 @@ class MetaStage(Phase1):
             save_checkpoint(
                 directory / "stage_a_context" / (name + ".json"), context
             )
-        payload, render_audit = render_comparisons_with_audit(
+        comparison_payload, comparison_audit = render_comparisons_with_audit(
             comparisons, plain_language=self.cfg.analysis_protocol == STATE_ACTION_PROTOCOL,
             historical_skill_a=historical_skill_a, historical_skill_b=historical_skill_b,
         )
+        # HRO has a bounded deterministic context contract.  The detailed
+        # comparison rendering remains an audit artifact, while the model sees
+        # the explicit Stage A sections (group meaning, rule delta, metrics,
+        # and paired cases) instead of having to reconstruct them itself.
+        payload = comparison_payload
+        render_audit = comparison_audit
+        if self.meta_cfg.hro_v1:
+            payload = render_stage_a_context(context)
+            render_audit = {
+                "comparison": comparison_audit,
+                "context_renderer_version": CONTEXT_RENDERER_VERSION,
+            }
         save_checkpoint(
             directory / "render_audit" / (name + ".json"),
             {"rendered_text_hash": digest(payload), **render_audit},
@@ -521,12 +538,24 @@ class MetaStage(Phase1):
                     action_space=self.action_space,
                 )
                 save_checkpoint(directory / "stage_b_context.json", stage_b)
+                stage_b_payload = render_stage_b_context(stage_b)
+                save_checkpoint(
+                    directory / "stage_b_render_audit.json",
+                    {
+                        "renderer_version": CONTEXT_RENDERER_VERSION,
+                        "rendered_text_hash": digest(stage_b_payload),
+                        "canonical_fields": sorted(stage_b),
+                    },
+                )
+            else:
+                stage_b_payload = None
             merged = self.merge(
                 parent,
                 proposals,
                 directory,
                 stage="meta_merge",
                 edit_limit=1 if self.meta_cfg.hro_v1 else self.meta_cfg.max_edits_per_update,
+                context_payload=stage_b_payload,
             )
             candidate, change = self.store(
                 parent, self.meta_cfg.max_edits_per_update

@@ -45,6 +45,9 @@ def test_test_only_two_arms_resume_and_contract(tmp_path):
     assert len(calls) == 4 and result["paired"]["both_correct"] == 2
     assert result["initial"]["accuracy"] == result["optimized"]["accuracy"] == 1
     assert result["accuracy_delta"] == 0 and not result["test_feedback_to_optimizer"]
+    paired = load_checkpoint(tmp_path / "paired.json")["rows"]
+    assert paired[0]["paired_summary"]["action_changed"] is False
+    assert paired[0]["question"] == "Where?"
     assert not (tmp_path / "batches").exists()
     engine.run(questions(), initial, final, {"train1"}, {"val1"})
     assert len(calls) == 4
