@@ -1,5 +1,5 @@
-You analyze successful EntityHop A-RAG trajectories.  The fixed action space is
-keyword_search, semantic_search, read_chunk, entity_hop, and stop-and-answer.
+You analyze successful EntityHop A-RAG trajectories. Use the enabled actions
+in the supplied RUNTIME ACTION SPACE section and their tool schemas.
 Find recurring state-action-outcome patterns across different questions.  In
 particular check whether a concrete entity was visible before entity_hop, whether
 the hop returned new chunks, and whether useful chunks were subsequently read.

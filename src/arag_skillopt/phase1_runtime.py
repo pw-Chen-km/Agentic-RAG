@@ -18,6 +18,7 @@ from .endpoint_pool import EndpointPool, PooledClient
 from .runtime_audit import AuditClient, attach_audit
 from .retrieval_diagnostics import build_retrieval_diagnostics
 from .skill_rules import render_formatted_prompt
+from .action_space import configured_actions
 
 JUDGE_PROMPT = """Evaluate whether the candidate answer correctly answers the question
 relative to the reference answer. Allow equivalent phrasing and necessary context.
@@ -88,7 +89,8 @@ def make_tools(config):
     else:
         from arag.tools.semantic_search import SemanticSearchTool
 
-    keyword_enabled = (config.get("keyword_search") or {}).get("enabled", True)
+    enabled_actions = configured_actions(config)
+    keyword_enabled = "keyword_search" in enabled_actions
     registry = ToolRegistry() if keyword_enabled else _NoKeywordRegistry()
     # Disabling a tool removes both its public schema and execution route.
     # Existing configs retain the original three/four-tool behavior.
@@ -104,7 +106,7 @@ def make_tools(config):
         )
     registry.register(semantic_tool)
     entity_cfg = config.get("entity_hop", {}) or {}
-    if entity_cfg.get("enabled", False):
+    if "entity_hop" in enabled_actions:
         from arag.tools.entity_hop import EntityHopTool
 
         registry.register(
@@ -120,7 +122,7 @@ def make_tools(config):
             )
         )
     linear_cfg = config.get("linear_hop", {}) or {}
-    if linear_cfg.get("enabled", False):
+    if "linear_hop" in enabled_actions:
         from arag.tools.linear_hop import LinearHopTool
 
         graph_file = linear_cfg.get("graph_index_file")

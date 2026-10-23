@@ -1,7 +1,6 @@
 # LinearHop Retrieval SkillOpt analyst
 
-The fixed action space includes `semantic_search`, `entity_hop` (the Direct-
-BM25 control), `linear_hop`, `read_chunk`, and stopping to answer. `linear_hop`
+Use the enabled actions in the supplied RUNTIME ACTION SPACE section. `linear_hop`
 returns bounded sentence snippets and Chunk IDs from the offline graph; the
 agent must use `read_chunk` to inspect a useful chunk. Its graph and ranking
 parameters are fixed infrastructure.

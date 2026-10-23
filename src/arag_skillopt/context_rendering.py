@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 
-from .action_space import action_space_contract
+from .action_space import ACTION_DESCRIPTIONS, action_space_contract
 from .compact_rendering import (
     DISPLAY_GUIDANCE,
     PLAIN_DISPLAY_GUIDANCE,
@@ -24,7 +24,7 @@ from .trajectory import render_view
 # remain unchanged and continue to carry the full replay/audit provenance.
 # Every active optimizer path (HRO and Phase 1) identifies its model input with
 # this same version.
-CONTEXT_RENDERER_VERSION = "arag-optimizer-context-unified-v4"
+CONTEXT_RENDERER_VERSION = "arag-optimizer-context-unified-v5-runtime-menu"
 
 
 _GROUP_MEANINGS = {
@@ -74,14 +74,7 @@ def _action_lines(contract: Mapping | None):
         actions = list(contract or ())
         terminal = "stop_and_answer"
     lines = []
-    descriptions = {
-        "keyword_search": "lexical search over the corpus",
-        "semantic_search": "semantic search over the corpus",
-        "entity_hop": "follow an entity-linked retrieval edge",
-        "linear_hop": "follow a LinearRAG-style graph edge and return snippets",
-        "read_chunk": "read selected chunks in full",
-        "stop_and_answer": "stop retrieval and answer from observed evidence",
-    }
+    descriptions = ACTION_DESCRIPTIONS
     for action in actions:
         lines.append(f"- {action}: {descriptions.get(action, 'configured action')}")
     if terminal not in actions:

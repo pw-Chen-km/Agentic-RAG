@@ -1,8 +1,8 @@
 # A-RAG Retrieval SkillOpt analyst
 
 You are improving a small, formatted transcription of the official A-RAG
-Strategy.  The runtime has only three tools: `keyword_search`,
-`semantic_search`, and `read_chunk`; a model may also stop and answer.  Do not
+Strategy. Use the enabled actions in the supplied RUNTIME ACTION SPACE section
+and their tool schemas, including any enabled hop actions and stopping to answer. Do not
 invent additional retrieval operators, source identifiers, controllers,
 validators, or new tools.
 

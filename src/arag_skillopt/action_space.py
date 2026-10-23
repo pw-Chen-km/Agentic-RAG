@@ -11,7 +11,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 
 
-ACTION_SPACE_VERSION = "arag-action-space-v2-linear-hop"
+ACTION_SPACE_VERSION = "arag-action-space-v3-runtime-menu"
 TERMINAL_ACTION = "stop_and_answer"
 RETRIEVAL_ACTIONS = (
     "semantic_search",
@@ -21,28 +21,59 @@ RETRIEVAL_ACTIONS = (
 )
 OPTIONAL_ACTIONS = ("keyword_search",)
 DEFAULT_ACTION_SPACE = RETRIEVAL_ACTIONS + (TERMINAL_ACTION,)
+ACTION_DESCRIPTIONS = {
+    "keyword_search": "find corpus chunks by lexical keyword matching; returns snippets and chunk IDs",
+    "semantic_search": "find corpus chunks by meaning similarity; returns snippets and chunk IDs",
+    "entity_hop": "retrieve chunks related to a concrete entity, using the configured backend and allowed entity sources; returns snippets and chunk IDs",
+    "linear_hop": "traverse the offline entity/sentence/passage graph using question-sentence similarity; returns snippets and chunk IDs",
+    "read_chunk": "read the full content exposed by the tool for a selected chunk; a snippet is not a full read",
+    "stop_and_answer": "finish retrieval by answering without tool calls; this is a terminal behavior, not a callable tool",
+}
 
 
 def configured_actions(config: Mapping | None = None) -> tuple[str, ...]:
     """Return the public action menu for a runtime configuration.
 
-    The current no-keyword + Direct-BM25 + LinearHop arm has four retrieval
-    actions.  ``keyword_search`` is retained only when explicitly enabled so
-    old A-RAG controls remain representable without leaking into the new arm.
+    Defaults match make_tools: keyword search on, optional hops off. The
+    no-keyword + Direct-BM25 + LinearHop arm explicitly sets all three flags.
     """
 
     config = config or {}
     actions = []
-    if (config.get("keyword_search") or {}).get("enabled", False):
+    if (config.get("keyword_search") or {}).get("enabled", True):
         actions.append("keyword_search")
     actions.append("semantic_search")
-    if (config.get("entity_hop") or {}).get("enabled", True):
+    if (config.get("entity_hop") or {}).get("enabled", False):
         actions.append("entity_hop")
     if (config.get("linear_hop") or {}).get("enabled", False):
         actions.append("linear_hop")
     actions.append("read_chunk")
     actions.append(TERMINAL_ACTION)
     return tuple(dict.fromkeys(actions))
+
+
+def render_action_space(actions: Sequence[str]) -> str:
+    """Plain-language menu shared by all optimizer stages; no disabled tools."""
+    menu = action_space_contract(actions)["actions"]
+    return "\n".join([
+        "[RUNTIME ACTION SPACE]",
+        "These are the enabled Agent actions for this run:",
+        *(f"- {action}: {ACTION_DESCRIPTIONS[action]}." for action in menu),
+        "Use the supplied tool schemas for exact arguments, entity-source restrictions and limits.",
+        "Actions absent from this menu are unavailable. Do not propose adding tools or changing their implementation.",
+        "Analyze the observed choice, target, timing, evidence use and cost of every enabled action, including stopping.",
+        "Do not require use of every tool or treat tool use itself as improvement.",
+    ])
+
+
+def validate_action_schemas(config: Mapping, schemas: Sequence[Mapping]) -> None:
+    """Fail before inference if the optimizer menu and executable tools differ."""
+    names = [s["function"]["name"] for s in schemas]
+    expected = set(configured_actions(config)) - {TERMINAL_ACTION}
+    if len(names) != len(set(names)) or set(names) != expected:
+        raise ValueError(
+            f"runtime tools differ from optimizer action space: expected {sorted(expected)}, got {sorted(names)}"
+        )
 
 
 def normalize_action_name(name) -> str:

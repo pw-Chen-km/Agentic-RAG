@@ -8,6 +8,7 @@ from pathlib import Path
 from .skill_rules import render_formatted_prompt, skill_sha256
 from .support import digest
 from .diagnostics import STATE_ACTION_PROTOCOL, FORMAT_REPAIR_VERSION
+from .action_space import configured_actions, render_action_space, validate_action_schemas
 
 PROFILE = "diagnosis_skill_v4"
 PROTOCOL = "diagnosis-to-edits-v4-single-case"
@@ -41,7 +42,13 @@ def validate_ablation_runtime(cfg, contract):
 
 
 def prompt_bundle(root, cfg, workflow=False):
-    """Return a self-contained common/stage bundle; keep legacy selection intact."""
+    """Bind every stage to the same menu derived from the runtime configuration."""
+    result = _prompt_texts(root, cfg, workflow)
+    result["common"] = render_action_space(configured_actions(cfg)) + "\n\n" + result["common"]
+    return result
+
+
+def _prompt_texts(root, cfg, workflow=False):
     profile = cfg.get("optimizer_prompt_version", "legacy")
     if profile in PROFILES:
         folder = Path(root) / "prompts" / profile
@@ -59,7 +66,7 @@ def prompt_bundle(root, cfg, workflow=False):
     names = {k: f"phase1_{k}" for k in ("common", "success", "failure", "merge")}
     if workflow:
         names.update(meta="meta", meta_merge="meta_merge")
-    if cfg.get("entity_hop", {}).get("enabled"):
+    if cfg.get("entity_hop", {}).get("enabled") or cfg.get("linear_hop", {}).get("enabled"):
         prefix = "linearhop_" if cfg.get("linear_hop", {}).get("enabled") else "entityhop_"
         for k in ("success", "failure", "merge", "meta", "meta_merge"):
             if k in names:
@@ -99,6 +106,7 @@ def validate_profile(cfg, phase_cfg):
 
 
 def validate_runtime_guidance(cfg, schemas, original, skill):
+    validate_action_schemas(cfg, schemas)
     if cfg.get("optimizer_prompt_version", "legacy") not in PROFILES:
         return
     tools = {s["function"]["name"]: s["function"] for s in schemas}

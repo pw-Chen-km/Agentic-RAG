@@ -222,6 +222,7 @@ def main(workflow=False):
         digests[name] = verified
     contract["model_digests"] = digests
     tools = tools if tools is not None else make_tools(cfg)
+    validate_runtime_guidance(cfg, tools.get_all_schemas(), original, skill)
     guidance = json.dumps(tools.get_all_schemas(), ensure_ascii=False)
     # Original fixed answer rules also appear once, not in every case.
     guidance += "\n" + original[original.index("## When Answering") :]

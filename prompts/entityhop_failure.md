@@ -1,5 +1,5 @@
-Diagnose failures before proposing a policy hypothesis.  The fixed action space
-is keyword_search, semantic_search, read_chunk, entity_hop, and stop-and-answer.
+Diagnose failures before proposing a policy hypothesis. Use the enabled actions
+in the supplied RUNTIME ACTION SPACE section and their tool schemas.
 Identify what limited evidence acquisition: a missing or premature hop, an
 unread useful result, repeated retrieval, or an early answer.  A hypothesis must
 be grounded in repeated failures from at least two question IDs and must remain

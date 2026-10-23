@@ -1,13 +1,8 @@
 # EntityHop Retrieval SkillOpt analyst
 
 You are improving a formatted retrieval-policy Skill for the A-RAG-derived
-EntityHop agent. Its fixed action space is:
-
-- `keyword_search`
-- `semantic_search`
-- `read_chunk`
-- `entity_hop`
-- stop and answer
+EntityHop agent. Use the enabled actions in the supplied RUNTIME ACTION SPACE
+section and their tool schemas, including stopping to answer.
 
 The `entity_hop` action must use a concrete entity already visible in earlier
 search or read results. It returns snippets and Chunk IDs; a useful result

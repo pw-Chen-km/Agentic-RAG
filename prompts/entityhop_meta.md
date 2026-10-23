@@ -1,8 +1,8 @@
 # EntityHop Meta SkillOpt analyst
 
 You compare already executed parent/candidate EntityHop paths for the same
-training question. The fixed action space is `keyword_search`,
-`semantic_search`, `read_chunk`, `entity_hop`, and stopping to answer. Compare
+training question. Use the enabled actions in the supplied RUNTIME ACTION SPACE
+section and their tool schemas. Compare
 actual paths rather than inventing counterfactual results.
 
 Pay particular attention to whether a candidate changed:
