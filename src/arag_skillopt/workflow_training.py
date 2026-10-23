@@ -95,7 +95,27 @@ class WorkflowTrainer:
             if not saved and any(
                 p.name != ".workflow.lock" for p in self.root.iterdir()
             ):
-                raise ValueError("nonempty workflow output without contract")
+                # A fresh run may intentionally inherit only the deterministic
+                # Phase 1 episode cache from an interrupted/previous run.  The
+                # cache is immutable input for replay; every other artifact
+                # must still be rejected so a stale workflow cannot be resumed
+                # under a different contract.
+                allowed = True
+                for entry in self.root.iterdir():
+                    if entry.name in {".workflow.lock"}:
+                        continue
+                    if entry.name != "phase1" or not entry.is_dir():
+                        allowed = False
+                        break
+                    children = list(entry.iterdir())
+                    if any(
+                        child.name != "episodes" or not child.is_dir()
+                        for child in children
+                    ):
+                        allowed = False
+                        break
+                if not allowed:
+                    raise ValueError("nonempty workflow output without contract")
             save_checkpoint(self.root / "contract.json", self.contract)
             save_checkpoint(
                 self.root / "checkpoint.json", {"stage": "interleaved", "status": "running"}
