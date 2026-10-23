@@ -28,7 +28,7 @@ def replay_rejected_candidate(
 
 
 def collect_train_branches(
-    engine, directory, batch, questions, parent, candidate, gate
+    engine, directory, batch, questions, parent, candidate, gate=None
 ):
     """Durable train-only replay using Phase1's per-Skill/per-question cache.
 
@@ -84,7 +84,8 @@ def collect_train_branches(
             **inputs,
             "status": "completed",
             "purpose": "meta_analysis_only",
-            "candidate_gate_accepted": gate["accepted"],
+            "candidate_gate_accepted": gate["accepted"] if gate is not None else None,
+            "validation_status": "completed" if gate is not None else "not_run_yet",
             "pairs": pairs,
         }
 

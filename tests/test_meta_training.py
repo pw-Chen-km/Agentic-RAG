@@ -174,7 +174,7 @@ def test_full40_pairs_frozen_meta_then_merge_gate_latest_skill_resume(tmp_path):
     events = []
     trainer = engine(tmp_path, events)
     summary = trainer.run(questions("t", 80), questions("v", 4))
-    assert summary["phase1"]["accepted_updates"] == 0
+    assert summary["phase1"]["accepted_updates"] == 1
     assert summary["meta"]["comparison_count"] == 80
     assert summary["meta"]["accepted_updates"] == 1
     assert summary["meta"]["reflection_count"] == 16
@@ -183,8 +183,8 @@ def test_full40_pairs_frozen_meta_then_merge_gate_latest_skill_resume(tmp_path):
     prior_train = [
         e for e in events[:first_meta] if e[0] == "rollout" and e[1].startswith("t")
     ]
-    assert len(prior_train) == 160  # 80 parent + 80 actual candidate replays
-    assert len([e for e in events[:first_meta] if e[0] == "phase1_merge"]) == 2
+    assert len(prior_train) == 80  # first batch: 40 parent + 40 candidate replays
+    assert len([e for e in events[:first_meta] if e[0] == "phase1_merge"]) == 1
     meta = [e for e in events if e[0] == "meta_reflect"]
     assert all(len(e[1]) == 5 for e in meta)
     assert len({e[2] for e in meta[:8]}) == 1
@@ -196,13 +196,13 @@ def test_full40_pairs_frozen_meta_then_merge_gate_latest_skill_resume(tmp_path):
         for i in (1, 2)
     ]
     assert batches[0]["gate"]["accepted"] and not batches[1]["gate"]["accepted"]
-    assert batches[1]["proposal_parent_skill_hash"] == batches[0]["active_skill_hash"]
+    assert batches[1]["proposal_parent_skill_hash"] != batches[0]["active_skill_hash"]
     assert (
         batches[1]["evidence_parent_skill_hash"]
         != batches[1]["proposal_parent_skill_hash"]
     )
-    for r in bank(trainer, 2):
-        assert not r["gate"]["accepted"] and len(r["meta_replay"]["pairs"]) == 40
+    for index, r in enumerate(bank(trainer, 2), 1):
+        assert r["gate"]["accepted"] is (index == 1) and len(r["meta_replay"]["pairs"]) == 40
         assert r["meta_replay"]["purpose"] == "meta_analysis_only"
         assert all(
             p["candidate"]["split"] == p["parent"]["split"] == "train"
@@ -404,7 +404,8 @@ def test_accepted_candidate_also_has_train_branches_and_latest_skill_for_meta(tm
     receipt = bank(trainer)[0]
     assert summary["phase1"]["accepted_updates"] == 1
     assert receipt["gate"]["accepted"] and len(receipt["meta_replay"]["pairs"]) == 4
-    assert receipt["meta_replay"]["candidate_gate_accepted"]
+    assert receipt["meta_replay"]["candidate_gate_accepted"] is None
+    assert receipt["meta_replay"]["validation_status"] == "not_run_yet"
     meta_receipt = load_checkpoint(tmp_path / "meta/batches/001/completed.json")[
         "value"
     ]

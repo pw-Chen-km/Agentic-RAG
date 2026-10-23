@@ -59,9 +59,9 @@ branch is not evidence of savings, and a wording-only change is not a new path.
 If judgment labels conflict with the recorded answers, mark evaluation uncertainty
 instead of teaching a retrieval rule from the questionable label.
 The merger alone proposes edits (300 tokens/rule; mutable Skill 1500 tokens).
-The HRO merger is configured to emit at most ONE logical Skill edit for this
+The HRO merger is configured to emit at most THREE logical Skill edits for this
 batch. A logical edit may be add, replace, or delete, but never a bundle of
-independent edits. If the paired evidence does not support one edit, emit
+independent edits. If the paired evidence does not support an edit, emit
 no_change.
 All diagnoses/reasons stay in audit, not the runtime Skill.
 No update occurs until all reflections are merged and the candidate is validated.

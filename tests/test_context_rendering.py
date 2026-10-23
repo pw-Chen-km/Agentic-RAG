@@ -72,7 +72,7 @@ def test_stage_b_renderer_keeps_one_edit_contract_readable():
     text = render_stage_b_context(context)
     assert "[GROUP FINDINGS]" in text
     assert "G01 (parent incorrect -> candidate correct)" in text
-    assert "At most one logical edit" in text
+    assert "At most 3 logical edits" in text
     assert "q1" in text
 
 

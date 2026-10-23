@@ -78,7 +78,7 @@ def test_stage_a_rejects_skill_edit_and_cross_group_cases():
         raise AssertionError("Stage A must not emit a Skill edit")
 
 
-def test_stage_b_allows_one_logical_edit_only():
+def test_stage_b_allows_up_to_three_logical_edits():
     context = build_stage_b_context(
         {"retrieval_policy": []},
         {"retrieval_policy": []},
@@ -88,7 +88,7 @@ def test_stage_b_allows_one_logical_edit_only():
         [],
         {"count": 0},
     )
-    assert context["constraints"]["one_logical_edit_max"] is True
+    assert context["constraints"]["max_logical_edits"] == 3
     assert validate_stage_b_output({"decision": "KEEP", "reason": "insufficient evidence"})["decision"] == "KEEP"
     try:
         validate_stage_b_output({"decision": "REVISE", "reason": "change", "edit": {"operation": "replace", "rule_id": "R1", "rule": {}}})

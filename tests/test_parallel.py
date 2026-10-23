@@ -54,7 +54,7 @@ def test_parallel_workflow_preserves_batch_boundary_and_resume(tmp_path):
     summary = trainer.run(questions("t", 40), questions("v", 4))
     assert summary["meta"]["comparison_count"] == 40
     assert summary["meta"]["accepted_updates"] == 1
-    assert summary["phase1"]["accepted_updates"] == 0
+    assert summary["phase1"]["accepted_updates"] == 1
     before = copy.deepcopy(trainer.phase1.client.requests)
     assert trainer.run(questions("t", 40), questions("v", 4)) == summary
     assert trainer.phase1.client.requests == before

@@ -34,7 +34,7 @@ statistics. It is diagnosis-only; no Skill edit or gate decision is allowed.
 
 All group summaries and Stage A reflections are saved in
 `stage_b_context.json` and passed to one bounded merge/proposer call. HRO v1
-requires at most one logical edit per Meta update. Validation is the only gate
+allows at most three logical edits per Meta update. Validation is the only gate
 input; validation/test trajectories never enter the proposer context.
 
 The example YAML keeps `hro_v1: false` so archived v6r3 runs cannot be

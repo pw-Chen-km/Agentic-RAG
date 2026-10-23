@@ -11,6 +11,7 @@ from .context_rendering import CONTEXT_RENDERER_VERSION
 from .diagnostics import VERSION
 from .meta_comparison import COMPARISON_VERSION
 from .meta_stage import MetaConfig, MetaStage
+from .candidate_replay import collect_train_branches
 from .phase1 import Phase1, Phase1Config
 from .skill_rules import compile_initial_skill, skill_sha256
 from .support import digest
@@ -97,31 +98,157 @@ class WorkflowTrainer:
                 raise ValueError("nonempty workflow output without contract")
             save_checkpoint(self.root / "contract.json", self.contract)
             save_checkpoint(
-                self.root / "checkpoint.json", {"stage": "phase1", "status": "running"}
+                self.root / "checkpoint.json", {"stage": "interleaved", "status": "running"}
             )
-            phase1_summary = self.phase1.run(train, validation)
-            active = load_checkpoint(self.phase1.root / "final_skill.json")
-            meta_summary = None
-            if self.meta_cfg.enabled:
-                bank = [
-                    load_checkpoint(
-                        self.phase1.root / "batches" / f"{i:03d}" / "completed.json"
-                    )["value"]
-                    for i in range(1, phase1_summary["completed_batches"] + 1)
-                ]
-                self.meta = MetaStage(
-                    self.phase1, self.root / "meta", active, self.meta_cfg
+            active = copy.deepcopy(self.phase1.initial)
+            phase_receipts, meta_receipts = [], []
+            self.meta = MetaStage(
+                self.phase1, self.root / "meta", active, self.meta_cfg
+            ) if self.meta_cfg.enabled else None
+            if self.meta is not None:
+                self.meta.root.mkdir(parents=True, exist_ok=True)
+                save_checkpoint(self.meta.root / "contract.json", self.meta.contract)
+            for offset in range(0, len(train), self.cfg.rollout_batch_size):
+                number = offset // self.cfg.rollout_batch_size + 1
+                questions = train[offset : offset + self.cfg.rollout_batch_size]
+                directory = self.phase1.root / "batches" / f"{number:03d}"
+                directory.mkdir(parents=True, exist_ok=True)
+                done = load_checkpoint(directory / "completed.json")
+                if done:
+                    active = done["value"]["active_skill"]
+                    phase_receipts.append(done["value"])
+                    meta_value = done["value"].get("meta_receipt")
+                    if meta_value is not None:
+                        meta_receipts.append(meta_value)
+                    continue
+                parent = copy.deepcopy(active)
+                save_checkpoint(directory / "parent_skill.json", parent)
+                candidate, change, reflection_count, optimizer_status = self.phase1.prepare_candidate(
+                    number, questions, parent, directory
                 )
+                save_checkpoint(directory / "candidate_skill.json", candidate)
+                parent_hash, candidate_hash = skill_sha256(parent), skill_sha256(candidate)
+                meta_receipt = None
+                refined = candidate
+                replay = None
+                if self.meta is not None:
+                    replay = collect_train_branches(
+                        self.phase1, directory, number, questions, parent, candidate, None
+                    )
+                if self.meta is not None and parent_hash != candidate_hash:
+                    phase_input = {
+                        "batch": number,
+                        "train_ids": [str(q["id"]) for q in questions],
+                        "parent_skill_hash": parent_hash,
+                        "candidate_skill_hash": candidate_hash,
+                        "meta_replay": replay,
+                    }
+                    refined, meta_receipt = self.meta.prepare_batch(
+                        number, questions, phase_input, candidate
+                    )
+                elif self.meta is not None:
+                    meta_receipt = {
+                        "batch": number,
+                        "source_stage": "meta",
+                        "comparison_count": 0,
+                        "reflection_count": 0,
+                        "optimizer_status": "phase1_no_change",
+                        "validation_status": "not_run_no_phase1_change",
+                        "active_skill_hash": candidate_hash,
+                    }
+                final_hash = skill_sha256(refined)
+                if final_hash == parent_hash:
+                    gate = {"accepted": False, "reason": "no_change"}
+                else:
+                    parent_val = self.phase1.episodes(
+                        validation, parent, "validation", f"batch {number} parent validation"
+                    )
+                    final_val = self.phase1.episodes(
+                        validation, refined, "validation", f"batch {number} final candidate validation"
+                    )
+                    gate = self.phase1.cached(
+                        directory / "validation.json",
+                        {"parent": parent_hash, "candidate": final_hash},
+                        lambda a=parent_val, b=final_val: self.phase1.validation_gate(a, b),
+                    )
+                if gate["accepted"]:
+                    active = refined
+                if meta_receipt is not None:
+                    meta_receipt["gate"] = gate
+                    meta_receipt["validation_status"] = (
+                        "completed" if final_hash != parent_hash else "not_run_no_change"
+                    )
+                    meta_receipt["active_skill"] = active
+                    meta_receipt["active_skill_hash"] = skill_sha256(active)
+                    meta_receipts.append(meta_receipt)
+                    meta_directory = self.meta.root / "batches" / f"{number:03d}"
+                    save_checkpoint(
+                        meta_directory / "completed.json",
+                        {
+                            "input_hash": digest({"parent": parent_hash, "questions": digest(questions)}),
+                            "value": meta_receipt,
+                        },
+                    )
+                    save_checkpoint(
+                        self.meta.root / "checkpoint.json",
+                        {
+                            "stage": "meta",
+                            "completed_batch": number,
+                            "active_skill_hash": skill_sha256(active),
+                        },
+                    )
+                receipt = {
+                    **change,
+                    "batch": number,
+                    "train_ids": [q["id"] for q in questions],
+                    "reflection_count": reflection_count,
+                    "optimizer_status": optimizer_status,
+                    "phase1_candidate_skill_hash": candidate_hash,
+                    "meta_receipt": meta_receipt,
+                    "gate": gate,
+                    "active_skill": active,
+                    "active_skill_hash": skill_sha256(active),
+                    "meta_replay": (
+                        replay
+                        if (directory / "train_branches.json").exists() else None
+                    ),
+                }
+                save_checkpoint(directory / "completed.json", {"input_hash": digest({"parent": parent_hash, "questions": digest(questions)}), "value": receipt})
                 save_checkpoint(
-                    self.root / "checkpoint.json",
-                    {
-                        "stage": "meta",
-                        "status": "running",
-                        "active_skill_hash": skill_sha256(active),
-                    },
+                    self.phase1.root / "checkpoint.json",
+                    {"completed_batch": number, "active_skill_hash": skill_sha256(active)},
                 )
-                meta_summary = self.meta.run(train, validation, bank)
-                active = load_checkpoint(self.meta.root / "final_skill.json")
+                phase_receipts.append(receipt)
+            phase1_summary = {
+                "phase": "phase1_interleaved",
+                "completed_batches": len(phase_receipts),
+                "accepted_updates": sum(bool(r["gate"].get("accepted")) for r in phase_receipts),
+                "train_count": len(train),
+                "validation_count": len(validation),
+                "test_executed": False,
+                "meta_executed": False,
+                "final_skill_hash": skill_sha256(active),
+            }
+            save_checkpoint(self.phase1.root / "final_skill.json", active)
+            (self.phase1.root / "final_skill.md").write_text(compile_initial_skill(active), encoding="utf-8")
+            save_checkpoint(self.phase1.root / "summary.json", phase1_summary)
+            meta_summary = None
+            if self.meta is not None:
+                meta_summary = {
+                    "status": "complete",
+                    "phase": "meta_interleaved",
+                    "completed_batches": len(meta_receipts),
+                    "accepted_updates": sum(
+                        bool(r.get("gate", {}).get("accepted")) for r in meta_receipts
+                    ),
+                    "comparison_count": sum(r.get("comparison_count", 0) for r in meta_receipts),
+                    "reflection_count": sum(r.get("reflection_count", 0) for r in meta_receipts),
+                    "test_executed": False,
+                    "final_skill_hash": skill_sha256(active),
+                }
+                save_checkpoint(self.meta.root / "final_skill.json", active)
+                (self.meta.root / "final_skill.md").write_text(compile_initial_skill(active), encoding="utf-8")
+                save_checkpoint(self.meta.root / "summary.json", meta_summary)
             summary = {
                 "status": "complete",
                 "phase1": phase1_summary,

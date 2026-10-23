@@ -517,7 +517,7 @@ def test_v6_complete_workflow_replays_candidate_train_then_uses_actual_pairs_for
     assert len([event for event in events if event[0] == "rollout" and event[1].startswith("t")]) == 8
     # The accepted Phase 1 rule is the editable Meta input and survives the
     # independent Meta change; historical A was the original two-rule Skill.
-    assert meta_receipt["proposal_parent_skill_hash"] == phase_receipt["active_skill_hash"]
+    assert meta_receipt["proposal_parent_skill_hash"] == phase_receipt["phase1_candidate_skill_hash"]
     final = load_checkpoint(tmp_path / "final_skill.json")
     assert final["retrieval_policy"][-1] == phase_receipt["active_skill"]["retrieval_policy"][-1]
     assert final["retrieval_policy"][1]["title"] == "Use observed progress to choose the next action"

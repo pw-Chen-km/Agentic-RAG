@@ -24,7 +24,7 @@ from .trajectory import render_view
 # remain unchanged and continue to carry the full replay/audit provenance.
 # Every active optimizer path (HRO and Phase 1) identifies its model input with
 # this same version.
-CONTEXT_RENDERER_VERSION = "arag-optimizer-context-unified-v3"
+CONTEXT_RENDERER_VERSION = "arag-optimizer-context-unified-v4"
 
 
 _GROUP_MEANINGS = {
@@ -486,11 +486,12 @@ def render_stage_a_context(context: Mapping):
 
 def render_stage_b_context(context: Mapping):
     """Render the single HRO Stage B proposer input."""
+    max_edits = (context.get("constraints") or {}).get("max_logical_edits", 3)
     lines = [
         f"[HRO CONTEXT / {CONTEXT_RENDERER_VERSION}]",
         "[TASK]",
         "This is HRO Stage B Skill proposal. Decide KEEP, REVISE, or REJECT for the current Skill.",
-        "At most one logical edit is allowed. Use validation only for the gate; never use validation/test trajectories as evidence.",
+        f"At most {max_edits} logical edits are allowed. Use validation only for the gate; never use validation/test trajectories as evidence.",
         "[CURRENT SKILL]",
         *_rule_lines((context.get("parent_skill") or {}).get("retrieval_policy")),
         "[HISTORICAL CANDIDATE CHANGES]",
@@ -529,7 +530,7 @@ def render_stage_b_context(context: Mapping):
     ))
     lines += [
         "[OUTPUT]",
-        "Return a decision, a reason grounded in the supplied observations, supporting case IDs, and at most one logical edit.",
+        f"Return a decision, a reason grounded in the supplied observations, supporting case IDs, and at most {max_edits} logical edits. Each edit needs its own evidence; three is a ceiling, not a target.",
     ]
     return "\n".join(lines).strip() + "\n"
 

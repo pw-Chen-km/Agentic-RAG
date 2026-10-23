@@ -145,9 +145,9 @@ def test_meta_also_treats_interface_diagnosis_as_advisory_and_keeps_gate(tmp_pat
 
     trainer.phase1.client = InterfaceDiagnoses()
     summary = trainer.run(questions("t", 40), questions("v", 4))
-    assert summary["phase1"]["accepted_updates"] == 0
+    assert summary["phase1"]["accepted_updates"] == 1
     assert summary["meta"]["comparison_count"] == 40
     assert summary["meta"]["accepted_updates"] == 1
     merged = json.loads((tmp_path / "meta/batches/001/merge.json").read_text())["value"]
     assert merged["status"] == "ok" and merged["citation_advisories"]
-    assert (tmp_path / "meta/batches/001/validation.json").exists()
+    assert (tmp_path / "phase1/batches/001/validation.json").exists()

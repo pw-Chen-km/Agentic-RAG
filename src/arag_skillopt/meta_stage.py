@@ -40,7 +40,7 @@ class MetaConfig:
     comparison_batch_size: int = 40
     reflection_minibatch_size: int = 5
     informative_pairs_only: bool = True
-    max_edits_per_update: int = 1
+    max_edits_per_update: int = 3
     min_informative_pairs: int = 3
     accuracy_floor: float | None = None
     hro_v1: bool = False
@@ -65,8 +65,6 @@ class MetaConfig:
             raise ValueError("accuracy_floor must be a fraction in [0,1]")
         if type(self.hro_v1) is not bool:
             raise ValueError("hro_v1 must be boolean")
-        if self.hro_v1 and self.max_edits_per_update != 1:
-            raise ValueError("HRO v1 permits at most one logical edit per Meta update")
 
 
 class MetaStage(Phase1):
@@ -389,6 +387,113 @@ class MetaStage(Phase1):
             ),
         }
 
+    def _propose_from_comparisons(self, number, parent, directory, comparisons, stats):
+        """Produce one Meta candidate without validation or active-Skill adoption."""
+        size = self.meta_cfg.reflection_minibatch_size
+        historical_skill_a = load_checkpoint(
+            self.phase1.root / "batches" / f"{number:03d}" / "parent_skill.json"
+        )
+        historical_skill_b = load_checkpoint(
+            self.phase1.root / "batches" / f"{number:03d}" / "candidate_skill.json"
+        )
+        if self.meta_cfg.hro_v1:
+            # Stage A is grouped by deterministic answer transition.  A
+            # group can be split into multiple <=5-case calls, but a call
+            # never mixes G00/G01/G10/G11.
+            jobs = []
+            for group in GROUPS:
+                members = [c for c in comparisons if pair_group(c) == group]
+                jobs.extend(
+                    (members[i : i + size], f"{group.lower()}-{i:03d}")
+                    for i in range(0, len(members), size)
+                )
+        else:
+            jobs = [
+                (comparisons[i : i + size], f"meta-{i:03d}")
+                for i in range(0, len(comparisons), size)
+            ]
+        nested = self.map_ordered(
+            lambda job, parent=parent, directory=directory: (
+                self.reflect_comparisons(
+                    parent, job[0], directory / "reflections", job[1],
+                    historical_skill_a, historical_skill_b,
+                )
+            ),
+            jobs,
+            self.cfg.reflection_workers,
+        )
+        proposals = [p for group in nested for p in group]
+        if self.meta_cfg.hro_v1:
+            stage_b = build_stage_b_context(
+                parent,
+                historical_skill_b,
+                [d["rule_id"] for d in rule_differences(historical_skill_a, historical_skill_b)],
+                stats.get("group_summaries") or {
+                    group: group_summary(comparisons, group) for group in GROUPS
+                },
+                proposals,
+                [c for group in GROUPS for c in comparisons if pair_group(c) == group][:20],
+                stats,
+                action_space=self.action_space,
+                max_edits=self.meta_cfg.max_edits_per_update,
+            )
+            save_checkpoint(directory / "stage_b_context.json", stage_b)
+            stage_b_payload = render_stage_b_context(stage_b)
+            save_checkpoint(
+                directory / "stage_b_render_audit.json",
+                {
+                    "renderer_version": CONTEXT_RENDERER_VERSION,
+                    "rendered_text_hash": digest(stage_b_payload),
+                    "canonical_fields": sorted(stage_b),
+                },
+            )
+        else:
+            stage_b_payload = None
+        merged = self.merge(
+            parent,
+            proposals,
+            directory,
+            stage="meta_merge",
+            edit_limit=self.meta_cfg.max_edits_per_update,
+            context_payload=stage_b_payload,
+        )
+        candidate, change = self.store(
+            parent, self.meta_cfg.max_edits_per_update
+        ).apply_with_receipt(merged["edits"])
+        save_checkpoint(directory / "candidate_skill.json", candidate)
+        return candidate, change, len(proposals), merged["status"]
+
+    def prepare_batch(self, number, questions, receipt, candidate):
+        """Refine this batch's Phase 1 candidate before its first validation."""
+        directory = self.root / "batches" / f"{number:03d}"
+        directory.mkdir(parents=True, exist_ok=True)
+        if skill_sha256(candidate) != receipt["candidate_skill_hash"]:
+            raise ValueError("Meta input must be this batch's Phase 1 candidate")
+        comparisons, stats = self.comparisons(number, questions, receipt, directory)
+        save_checkpoint(directory / "parent_skill.json", candidate)
+        if len(comparisons) < self.meta_cfg.min_informative_pairs:
+            refined, change = self.store(candidate, self.meta_cfg.max_edits_per_update).apply_with_receipt([])
+            reflection_count, status = 0, "insufficient_informative_pairs"
+            save_checkpoint(directory / "candidate_skill.json", refined)
+        else:
+            refined, change, reflection_count, status = self._propose_from_comparisons(
+                number, candidate, directory, comparisons, stats
+            )
+        return refined, {
+            **change,
+            "batch": number,
+            "source_stage": "meta",
+            "train_ids": [str(q["id"]) for q in questions],
+            "evidence_parent_skill_hash": receipt["parent_skill_hash"],
+            "evidence_candidate_skill_hash": receipt["candidate_skill_hash"],
+            "proposal_parent_skill_hash": skill_sha256(candidate),
+            "comparison_count": len(comparisons),
+            "comparison_statistics": stats,
+            "reflection_count": reflection_count,
+            "optimizer_status": status,
+            "validation_status": "pending_workflow_gate",
+        }
+
     def run(self, train, validation, phase1_receipts):
         self.root.mkdir(parents=True, exist_ok=True)
         with (self.root / ".meta.lock").open("a+") as lock:
@@ -490,82 +595,14 @@ class MetaStage(Phase1):
                 receipts.append(receipt)
                 active = parent
                 continue
-            size = self.meta_cfg.reflection_minibatch_size
-            historical_skill_a = load_checkpoint(
-                self.phase1.root / "batches" / f"{number:03d}" / "parent_skill.json"
+            candidate, change, reflection_count, optimizer_status = self._propose_from_comparisons(
+                number, parent, directory, comparisons, stats
             )
-            historical_skill_b = load_checkpoint(
-                self.phase1.root / "batches" / f"{number:03d}" / "candidate_skill.json"
-            )
-            if self.meta_cfg.hro_v1:
-                # Stage A is grouped by deterministic answer transition.  A
-                # group can be split into multiple <=5-case calls, but a call
-                # never mixes G00/G01/G10/G11.
-                jobs = []
-                for group in GROUPS:
-                    members = [c for c in comparisons if pair_group(c) == group]
-                    jobs.extend(
-                        (members[i : i + size], f"{group.lower()}-{i:03d}")
-                        for i in range(0, len(members), size)
-                    )
-            else:
-                jobs = [
-                    (comparisons[i : i + size], f"meta-{i:03d}")
-                    for i in range(0, len(comparisons), size)
-                ]
-            nested = self.map_ordered(
-                lambda job, parent=parent, directory=directory: (
-                    self.reflect_comparisons(
-                        parent, job[0], directory / "reflections", job[1],
-                        historical_skill_a, historical_skill_b,
-                    )
-                ),
-                jobs,
-                self.cfg.reflection_workers,
-            )
-            proposals = [p for group in nested for p in group]
-            if self.meta_cfg.hro_v1:
-                stage_b = build_stage_b_context(
-                    parent,
-                    historical_skill_b,
-                    [d["rule_id"] for d in rule_differences(historical_skill_a, historical_skill_b)],
-                    stats.get("group_summaries") or {
-                        group: group_summary(comparisons, group) for group in GROUPS
-                    },
-                    proposals,
-                    [c for group in GROUPS for c in comparisons if pair_group(c) == group][:20],
-                    stats,
-                    action_space=self.action_space,
-                )
-                save_checkpoint(directory / "stage_b_context.json", stage_b)
-                stage_b_payload = render_stage_b_context(stage_b)
-                save_checkpoint(
-                    directory / "stage_b_render_audit.json",
-                    {
-                        "renderer_version": CONTEXT_RENDERER_VERSION,
-                        "rendered_text_hash": digest(stage_b_payload),
-                        "canonical_fields": sorted(stage_b),
-                    },
-                )
-            else:
-                stage_b_payload = None
-            merged = self.merge(
-                parent,
-                proposals,
-                directory,
-                stage="meta_merge",
-                edit_limit=1 if self.meta_cfg.hro_v1 else self.meta_cfg.max_edits_per_update,
-                context_payload=stage_b_payload,
-            )
-            candidate, change = self.store(
-                parent, self.meta_cfg.max_edits_per_update
-            ).apply_with_receipt(merged["edits"])
-            save_checkpoint(directory / "candidate_skill.json", candidate)
             if skill_sha256(parent) == skill_sha256(candidate):
                 gate = {
                     "accepted": False,
                     "reason": "no_change",
-                    "optimizer_status": merged["status"],
+                    "optimizer_status": optimizer_status,
                 }
             else:
                 parent_val = self.episodes(
@@ -598,7 +635,7 @@ class MetaStage(Phase1):
                 "train_ids": [q["id"] for q in questions],
                 "comparison_count": len(comparisons),
                 "comparison_statistics": stats,
-                "reflection_count": len(proposals),
+                "reflection_count": reflection_count,
                 "gate": gate,
                 "active_skill": active,
                 "active_skill_hash": skill_sha256(active),

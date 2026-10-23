@@ -1,7 +1,7 @@
 Merge all Meta reflections' diagnoses under HRO from this comparison batch into at most
-ONE logical edit and ONE candidate for the CURRENT Skill. All groups analyzed that same Current
+THREE logical edits at most and ONE candidate for the CURRENT Skill. All groups analyzed that same Current
 Skill. Historical Skills A/B were evidence only. Do not independently invent a
-new policy unrelated to supplied diagnoses or overwrite a rule twice. One is a
+new policy unrelated to supplied diagnoses or overwrite a rule twice. Three is a
 hard ceiling, not a target.
 
 Read all supplied diagnoses, empty reports, supporting cases, benefits,

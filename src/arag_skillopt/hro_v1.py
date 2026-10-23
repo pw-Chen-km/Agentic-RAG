@@ -15,7 +15,7 @@ from .action_space import DEFAULT_ACTION_SPACE, action_space_contract
 from .paired_summary import HRO_VERSION
 
 
-HRO_V1_VERSION = "hro-group-reflection-v2"
+HRO_V1_VERSION = "hro-group-reflection-v3"
 UNSCORED = "UNSCORED"
 GROUPS = ("G00", "G01", "G10", "G11")
 STAGE_A_FIELDS = (
@@ -263,12 +263,15 @@ def build_stage_b_context(
     train_statistics: Mapping,
     *,
     action_space: Sequence[str] | None = None,
+    max_edits: int = 3,
 ) -> dict:
     """Build the single Skill Proposer input after all Stage A groups."""
     if any(group not in GROUPS for group in group_summaries):
         raise ValueError("Stage B group summaries contain an unknown group")
     if len(representative_pairs) > 20:
         raise ValueError("Stage B representative pairs exceed the four-group budget")
+    if type(max_edits) is not int or not 1 <= max_edits <= 3:
+        raise ValueError("Stage B permits between one and three logical edits")
     candidate_policy = list((candidate_skill or {}).get("retrieval_policy") or [])
     changed = {str(x) for x in changed_rule_ids}
     candidate_view = dict(candidate_skill)
@@ -288,18 +291,18 @@ def build_stage_b_context(
         "train_statistics": dict(train_statistics),
         "action_space": action_space_contract(action_space or DEFAULT_ACTION_SPACE),
         "constraints": {
-            "one_logical_edit_max": True,
+            "max_logical_edits": max_edits,
             "validation_only_for_gate": True,
             "do_not_use_validation_or_test_trajectories": True,
         },
     }
 
 
-def validate_stage_b_output(value: Mapping, *, case_ids: Sequence[str] = ()) -> dict:
-    """Validate the one-proposer decision and its optional single edit."""
+def validate_stage_b_output(value: Mapping, *, case_ids: Sequence[str] = (), max_edits: int = 3) -> dict:
+    """Validate the single proposer with at most three independently cited edits."""
     if not isinstance(value, Mapping):
         raise ValueError("Stage B output must be an object")
-    allowed = {"decision", "reason", "supporting_case_ids", "edit"}
+    allowed = {"decision", "reason", "supporting_case_ids", "edit", "edits"}
     if set(value) - allowed or {"decision", "reason"} - set(value):
         raise ValueError("Stage B output has unexpected or missing fields")
     decision = value["decision"]
@@ -313,15 +316,22 @@ def validate_stage_b_output(value: Mapping, *, case_ids: Sequence[str] = ()) -> 
     unknown = set(ids) - set(case_ids)
     if unknown:
         raise ValueError(f"Stage B cites unavailable cases: {sorted(unknown)}")
-    edit = value.get("edit")
+    if type(max_edits) is not int or not 1 <= max_edits <= 3:
+        raise ValueError("max_edits must be between one and three")
+    if "edit" in value and "edits" in value:
+        raise ValueError("specify edit or edits, never both")
+    edits = value.get("edits", [value["edit"]] if value.get("edit") is not None else [])
+    if not isinstance(edits, list):
+        raise ValueError("Stage B edits must be a list")
     if decision == "REVISE":
-        if not isinstance(edit, Mapping):
-            raise ValueError("REVISE requires exactly one logical edit")
-        if set(edit) - {"operation", "rule_id", "rule", "reason"}:
-            raise ValueError("Stage B edit has unexpected fields")
-        if edit.get("operation") not in {"add", "replace", "delete"}:
-            raise ValueError("Stage B edit operation is invalid")
-    elif edit is not None:
+        if not 1 <= len(edits) <= max_edits:
+            raise ValueError(f"REVISE requires one to {max_edits} logical edits")
+        for edit in edits:
+            if not isinstance(edit, Mapping) or set(edit) - {"operation", "rule_id", "rule", "reason"}:
+                raise ValueError("Stage B edit has unexpected fields")
+            if edit.get("operation") not in {"add", "replace", "delete"}:
+                raise ValueError("Stage B edit operation is invalid")
+    elif edits:
         raise ValueError("KEEP/REJECT must not contain a Skill edit")
     return dict(value)
 
