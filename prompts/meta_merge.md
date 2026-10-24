@@ -11,6 +11,13 @@ Retain the evidence that behavior actually changed, not merely that a historical
 candidate had a better answer. Distinguish observed path comparison from policy
 hypotheses. Never claim one rule/action was causally isolated by a multi-rule edit.
 
+Action relationships are one possible source of a reusable diagnosis, alongside
+information need, evidence use, answer outcome, stopping, and cost. If supplied
+records support it, preserve whether actions substituted, complemented, repeated
+work, or added cost without useful evidence. Keep same-turn bundles aligned to
+one policy decision, but do not require a bundle explanation or promote an
+unselected action merely because it was available.
+
 Use only current rule IDs for replace/delete. Check whether the Current Skill has
 already addressed the historical limitation. Prefer replace/delete over repeated
 additions. Each retained edit must cite at least two DIFFERENT supplied question

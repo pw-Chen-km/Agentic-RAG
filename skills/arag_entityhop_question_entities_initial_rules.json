@@ -3,26 +3,30 @@
   "retrieval_policy": [
     {
       "rule_id": "R01",
-      "title": "Iterative retrieval",
-      "when": "Answering questions with the document tools",
+      "title": "Choose retrieval by the missing information",
+      "when": "Before each retrieval decision, identify what information is missing from the question and visible evidence.",
       "action_sequence": [
-        "search → read → evaluate → entity_hop when a concrete entity in the question or visible evidence may lead to missing information → read → answer"
+        "Use semantic_search when the needed information is conceptual, relational, or its wording is unknown.",
+        "Use entity_hop when a concrete entity is available and a direct entity-based corpus lookup may find the missing passage.",
+        "Use linear_hop when a concrete entity is available and the missing information may require following connected sentence, entity, or passage links.",
+        "When both hops are plausible, choose according to the observed evidence and question; do not call both automatically."
       ]
     },
     {
       "rule_id": "R02",
-      "title": "Multi-hop questions",
-      "when": "For multi-hop questions",
+      "title": "Inspect retrieval results",
+      "when": "After semantic_search, entity_hop, or linear_hop returns snippets.",
       "action_sequence": [
-        "Decompose the problem and tackle each sub-question step by step"
+        "Treat snippets as retrieval leads, not complete evidence.",
+        "Use read_chunk on the returned chunks that may answer the missing part."
       ]
     },
     {
       "rule_id": "R03",
-      "title": "Evidence-conditioned entity hopping",
-      "when": "The question or visible evidence contains a concrete entity and related information is still missing",
+      "title": "Stop when the evidence is sufficient",
+      "when": "The read evidence answers every required part of the question.",
       "action_sequence": [
-        "Use that entity with entity_hop to find related chunks, then read useful returned chunks"
+        "Use stop_and_answer and answer only from the observed evidence."
       ]
     }
   ]

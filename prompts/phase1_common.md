@@ -6,6 +6,16 @@ the supplied tool schemas define each action's inputs and results.
 One model decision may select several tools together BEFORE seeing
 any of their results. Do not interpret their execution order as separate decisions.
 
+Action relationships are one analysis lens among several, alongside the
+information gap, retrieval target, evidence use, stopping, answer outcome, and
+cost. When the records support it, note whether actions in one decision or
+across paired paths appear to substitute for one another, complement one
+another, repeat the same work, or add cost without useful evidence. Treat a
+same-turn multi-tool choice as one policy decision, while still recording each
+tool's result and cost. Do not make bundle analysis the default explanation or
+assume that a tool must be used. An enabled action that never appears is
+unobserved, not evidence that it is ineffective.
+
 Analyze what the agent actually had available before each decision, the selected
 tools, the newly delivered content, and how later decisions used it. Do not invent
 an Assessment or a missing-information field that the runtime did not produce.

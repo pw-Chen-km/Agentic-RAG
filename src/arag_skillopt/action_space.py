@@ -22,12 +22,32 @@ RETRIEVAL_ACTIONS = (
 OPTIONAL_ACTIONS = ("keyword_search",)
 DEFAULT_ACTION_SPACE = RETRIEVAL_ACTIONS + (TERMINAL_ACTION,)
 ACTION_DESCRIPTIONS = {
-    "keyword_search": "find corpus chunks by lexical keyword matching; returns snippets and chunk IDs",
-    "semantic_search": "find corpus chunks by meaning similarity; returns snippets and chunk IDs",
-    "entity_hop": "retrieve chunks related to a concrete entity, using the configured backend and allowed entity sources; returns snippets and chunk IDs",
-    "linear_hop": "traverse the offline entity/sentence/passage graph using question-sentence similarity; returns snippets and chunk IDs",
-    "read_chunk": "read the full content exposed by the tool for a selected chunk; a snippet is not a full read",
-    "stop_and_answer": "finish retrieval by answering without tool calls; this is a terminal behavior, not a callable tool",
+    "keyword_search": (
+        "Use short, exact words or phrases when literal wording is likely to match the answer. "
+        "It returns abbreviated snippets and chunk IDs; use read_chunk to inspect the full text."
+    ),
+    "semantic_search": (
+        "Use a natural-language description when the relevant wording is unknown or the missing fact is "
+        "conceptual or relational. It ranks passages by meaning similarity and returns snippets and chunk IDs."
+    ),
+    "entity_hop": (
+        "Use a concrete person, place, organization, work, or other entity when a direct entity-based "
+        "lookup may find the missing passage. The configured backend ranks related chunks and returns "
+        "snippets and chunk IDs; this action does not by itself provide full text."
+    ),
+    "linear_hop": (
+        "Use a concrete entity when the missing information may require a connection through related "
+        "sentences, entities, or passages. The bounded graph traversal ranks bridge sentences against "
+        "the question and returns snippets and chunk IDs; use read_chunk on useful results."
+    ),
+    "read_chunk": (
+        "Read the full text of selected chunk IDs. Search and hop results are only snippets, so use this "
+        "when a returned passage may contain evidence needed for the answer."
+    ),
+    "stop_and_answer": (
+        "Finish retrieval and answer from the evidence currently available. This is the terminal behavior, "
+        "not a callable tool."
+    ),
 }
 
 
@@ -61,6 +81,7 @@ def render_action_space(actions: Sequence[str]) -> str:
         *(f"- {action}: {ACTION_DESCRIPTIONS[action]}." for action in menu),
         "Use the supplied tool schemas for exact arguments, entity-source restrictions and limits.",
         "Actions absent from this menu are unavailable. Do not propose adding tools or changing their implementation.",
+        "These are independent choices, not a required sequence. Choose the action that fits the current information gap; if several are plausible, use the observed question and evidence to decide.",
         "Analyze the observed choice, target, timing, evidence use and cost of every enabled action, including stopping.",
         "Do not require use of every tool or treat tool use itself as improvement.",
     ])
@@ -111,6 +132,8 @@ def action_space_contract(actions: Sequence[str] | None = None) -> dict:
             "maximize": ["answer_accuracy", "useful_new_evidence"],
             "minimize": ["policy_calls", "tool_calls", "retrieved_tokens"],
             "action_usage": "report every enabled action separately; zero is a measured value",
+            "unobserved_action": "an enabled action not selected in a trajectory is unobserved, not evidence that it is ineffective",
+            "action_relationships": "when supported by artifacts, analyze substitution, complementarity, redundancy, and cost without making this more important than evidence, answer, stopping, or overall cost",
             "unknown_policy": "runtime/Judge failure is unknown, never false or zero",
             "selection_scope": "Phase 1 train diagnosis; candidate acceptance uses validation only",
             "test_isolation": "validation/test trajectories never enter optimization or gate decisions",

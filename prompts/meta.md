@@ -29,10 +29,16 @@ imagined counterfactual outcomes. Analyze in this order:
 5. Look across DIFFERENT questions for recurring benefits, regressions, exceptions,
    or conflicting interpretations. Include both-correct, both-wrong, and worsened
    candidates when present. They are valid evidence; do not inspect only improvements.
-6. Read the CURRENT Skill. Historical A/B rules explain the evidence; the Current
+6. When supported by the paired records, analyze action relationships alongside
+   evidence, answer, stopping, and cost: a same-turn bundle or a parent/candidate
+   difference may show substitution, complementarity, repeated work, or cost
+   without useful evidence. Keep bundles aligned to policy turns. This is an
+   optional lens, not a required diagnosis; an unselected enabled action is
+   unobserved, not proven ineffective.
+7. Read the CURRENT Skill. Historical A/B rules explain the evidence; the Current
    Skill is the sole edit target and may already incorporate the lesson. If a rule
    has changed or disappeared, inspect current rules rather than copying a stale ID.
-7. Save at most TWO concise diagnoses using report_diagnoses, NOT Skill edits.
+8. Save at most TWO concise diagnoses using report_diagnoses, NOT Skill edits.
    Record observed decision references (A1/B1 etc.), differences, limiting policy,
    outcomes and exact cost direction. Single-question diagnoses are allowed: the
    batch merger establishes cross-question support. Label unchanged/neutral paths

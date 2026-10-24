@@ -23,6 +23,15 @@ def test_initial_skill_is_a_faithful_small_schema() -> None:
     assert "after_observation" not in rendered
 
 
+def test_question_entities_initial_skill_exposes_all_enabled_retrieval_choices() -> None:
+    payload = load_rules(ROOT / "skills/arag_entityhop_question_entities_initial_rules.json")
+    rendered = compile_initial_skill(payload)
+    assert [rule["rule_id"] for rule in payload["retrieval_policy"]] == ["R01", "R02", "R03"]
+    for action in ("semantic_search", "entity_hop", "linear_hop", "read_chunk", "stop_and_answer"):
+        assert action in rendered
+    assert "do not call both automatically" in rendered
+
+
 def test_rule_store_supports_add_replace_delete() -> None:
     payload = load_rules(ROOT / "skills/arag_initial_rules.json")
     store = RuleStore(payload)

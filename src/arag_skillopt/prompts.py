@@ -17,7 +17,12 @@ Study complete paths, not isolated actions.  For each path ask:
 2. After a candidate chunk appeared, was read_chunk used at the right time?
 3. Did the agent repeat a search without new information, stop too early, or
    spend calls/tokens without improving the evidence?
-4. Did the proposed change help across at least two independent questions?
+4. When several tools were selected in one decision, or when paired paths
+   selected different tools for a similar information gap, did they substitute,
+   complement, repeat, or add cost without useful evidence? Treat this as one
+   useful lens among the questions above, not as a requirement to find a bundle
+   pattern.
+5. Did the proposed change help across at least two independent questions?
 
 Return at most two small edits using the native tools add_rule,
 replace_rule, delete_rule, or no_change. Prefer replacing or deleting an
@@ -42,5 +47,13 @@ two edits with add_rule, replace_rule, delete_rule, or no_change. Rules must be
 general and use only the fields title, when, action_sequence. Never include a
 question, answer, query, chunk identifier, or change to the A-RAG tools.
 When the evidence is weak or mixed, call no_change.
+
+Alongside answer, evidence, stopping, and cost, you may analyze whether a
+same-turn action bundle or a parent/candidate action change shows substitution,
+complementarity, repeated work, or cost without useful evidence. Preserve the
+bundle as one policy decision and use the individual results to support the
+finding. This is an optional analysis lens: an enabled action that was never
+selected is unobserved, not proof that it is ineffective, and a diagnosis does
+not need to contain a bundle pattern.
 """
 

@@ -44,6 +44,13 @@ written guidance might help the agent handle a similar situation?
 4. Did tools chosen together address different needs, repeat the same work,
 or require a result that the agent had not yet seen?
 
+Treat that action-relationship question as one optional lens among the others,
+not as the organizing principle for every diagnosis. When the records support
+it, distinguish substitution, complementarity, repeated work, and cost without
+useful evidence. A same-turn multi-tool choice remains one policy decision,
+and an enabled action that was never selected is unobserved rather than proven
+ineffective.
+
 Do not aim to increase the use of any tool, the number of passages found, or
 the number of rule changes. Use the records to explain the finding. Separate
 what happened from what you think might work. If an alternative was never

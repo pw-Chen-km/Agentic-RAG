@@ -99,3 +99,18 @@ def test_standalone_optimizer_templates_no_longer_claim_three_tools():
         assert "RUNTIME ACTION SPACE" in text
         assert "three tools" not in text
         assert "only keyword_search" not in text
+
+
+def test_action_descriptions_are_intuitive_and_relationship_analysis_is_optional():
+    assert "meaning" in ACTION_DESCRIPTIONS["semantic_search"]
+    assert "concrete" in ACTION_DESCRIPTIONS["entity_hop"]
+    assert "bridge" in ACTION_DESCRIPTIONS["linear_hop"]
+    assert "full text" in ACTION_DESCRIPTIONS["read_chunk"]
+    contract = action_space_contract(("semantic_search", "entity_hop", "linear_hop", "read_chunk", TERMINAL_ACTION))
+    assert "unobserved" in contract["objective"]["unobserved_action"]
+    assert "more important" in contract["objective"]["action_relationships"]
+    from arag_skillopt.prompts import RETRIEVAL_PROMPT, META_PROMPT
+    combined = RETRIEVAL_PROMPT + META_PROMPT + (ROOT / "prompts/phase1_common.md").read_text()
+    for term in ("substitute", "complement", "repeat", "cost"):
+        assert term in combined
+    assert "not as a requirement" in combined
