@@ -6,32 +6,39 @@ Your goal is to answer questions accurately by finding and analyzing relevant in
 
 - **semantic_search**: Find chunks by semantic similarity
 - **read_chunk**: Read the full content of a specific chunk
-- **entity_hop**: Use a concrete entity in the question or visible evidence to find related chunks by the fixed Direct-BM25 baseline
-- **linear_hop**: Use a concrete entity in the question or visible evidence to traverse the offline sentence/entity graph. The runtime ranks bridge sentences against the original question, activates related entities for at most two hops, and returns snippets with Chunk IDs
+- **entity_hop**: Find passages matching an entity's words using Direct-BM25
+- **linear_hop**: Find question-relevant passages connected to an entity through sentences and other entities
+
+## Retrieval tool guide
+
+- `entity_hop`: Start from a concrete entity in the question or visible evidence. Match its words against passage text using BM25 to find passages that directly mention it.
+- `linear_hop`: Start from a concrete entity in the question or visible evidence. Find sentences mentioning it, rank those sentences against the original question, then follow other entities in those sentences to related passages. A connected passage may not mention the starting entity; you do not need to know the connecting entity in advance.
+- Either hop can be the first retrieval or a follow-up on an entity found in snippets or full text. The tool interface imposes no preferred hop or required order, and a graph hop is not restricted to cases where another tool failed. Use the current Skill, missing information, and observed evidence to choose. Do not call both automatically or use a tool just to cover the menu.
+- Both hops return abbreviated snippets and Chunk IDs, not full passages. Use `read_chunk` on useful results before answering. The supplied tool schemas define the fixed limits; graph expansion and question-based ranking are performed by the tool, not by the Agent.
 
 ## Strategy (formatted A-RAG with LinearRAG graph hopping)
 
-The corpus graph is built offline from corpus entities, sentences, and the existing sentence index. You choose the retrieval action and entity; the tool performs the bounded traversal. Snippets are abbreviated. Always call `read_chunk` on useful returned Chunk IDs before answering.
+The following Strategy is the mutable Skill. The Retrieval tool guide above is fixed and remains present when this section is replaced by an optimized Skill.
 
-### R01: Iterative retrieval
-When: Answering questions with the document tools
+### R01: Choose retrieval by the missing information
+When: Before each retrieval decision, identify what information is missing from the question and visible evidence.
 Action sequence:
-1. search → read → evaluate → use `entity_hop` or `linear_hop` when a concrete entity may lead to missing information → read → answer
+1. Use semantic_search when the needed information is conceptual, relational, or its wording is unknown.
+2. Use entity_hop to find passages matching the words of a concrete entity from the question or visible evidence.
+3. Use linear_hop to find question-relevant passages connected to such an entity through related sentences and other entities; the connecting entity need not be known in advance.
+4. Either hop can be the first retrieval or a follow-up, including on newly visible entities. Choose based on the missing information and observed evidence; neither hop is the default.
+5. When both hops are plausible, choose according to the observed evidence and question; do not call both automatically.
 
-### R02: Multi-hop questions
-When: For multi-hop questions
+### R02: Inspect retrieval results
+When: After semantic_search, entity_hop, or linear_hop returns snippets.
 Action sequence:
-1. Decompose the problem and tackle each sub-question step by step
+1. Treat snippets as retrieval leads, not complete evidence.
+2. Use read_chunk on the returned chunks that may answer the missing part.
 
-### R03: Entity graph hopping
-When: The question or visible evidence contains a concrete entity and a relation may require a second passage
+### R03: Stop when the evidence is sufficient
+When: The read evidence answers every required part of the question.
 Action sequence:
-1. Use `linear_hop` with that entity; keep the default `max_hops` and `top_k` unless a bounded change is needed; inspect snippets, then use `read_chunk` on useful returned chunks
-
-### R04: Direct baseline hopping
-When: A concrete entity needs direct corpus lookup without graph traversal
-Action sequence:
-1. Use `entity_hop` with that entity, inspect snippets, then use `read_chunk` on useful returned chunks
+1. Use stop_and_answer and answer only from the observed evidence.
 
 ## When Answering
 

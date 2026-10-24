@@ -233,6 +233,12 @@ def render_formatted_prompt(original_prompt: str, payload: Mapping[str, Any]) ->
     end = original_prompt.find(answer_marker)
     if start < 0 or end < 0 or end <= start:
         raise ValueError("A-RAG prompt must contain Strategy and When Answering headings")
+    fixed_guide = "## Retrieval tool guide"
+    if fixed_guide in original_prompt and (
+        original_prompt.count(fixed_guide) != 1
+        or original_prompt.index(fixed_guide) >= start
+    ):
+        raise ValueError("fixed Retrieval tool guide must appear once before Strategy")
     return original_prompt[:start] + compile_initial_skill(payload) + "\n" + original_prompt[end:]
 
 

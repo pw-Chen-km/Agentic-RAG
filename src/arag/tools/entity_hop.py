@@ -107,18 +107,23 @@ class EntityHopTool(BaseTool):
         # original tool, it does not add a new grounding validator or filter.
         question_allowed = self.entity_source == "question_or_visible_evidence"
         description = (
-            "Find document chunks related to a concrete entity in the question or already visible in retrieved evidence. "
-            "Use this when related information is missing; no prior search or read is required. "
+            "Find passages about a concrete entity from the question or visible evidence. "
+            "This can be the first retrieval or a follow-up on a newly visible entity; no prior search or read is required. "
             if question_allowed else
-            "Find document chunks related to a concrete entity already visible in retrieved evidence. "
-            "Use this only after a search or read has exposed the entity and related information is missing. "
+            "Find passages about a concrete entity from visible evidence. "
+            "Use this only after a search or read has exposed the entity. "
+        )
+        method = (
+            "It matches the entity's words against passage text using BM25, which is useful for finding passages that directly mention the entity. "
+            if self.backend == "direct_bm25" else
+            "It matches the entity name or aliases to the corpus entity index, then searches the passages linked to those matches. "
         )
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": (
-                    description +
+                    description + method +
                     "The result contains abbreviated snippets and Chunk IDs; always use read_chunk on useful results."
                 ),
                 "parameters": {
@@ -134,7 +139,7 @@ class EntityHopTool(BaseTool):
                         },
                         "top_k": {
                             "type": "integer",
-                            "description": "Number of related chunks to return (default 5, maximum 20).",
+                            "description": f"Maximum chunks/snippets to return (default {self.default_top_k}, maximum {self.max_top_k}).",
                             "default": self.default_top_k,
                         },
                     },

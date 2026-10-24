@@ -31,14 +31,17 @@ ACTION_DESCRIPTIONS = {
         "conceptual or relational. It ranks passages by meaning similarity and returns snippets and chunk IDs."
     ),
     "entity_hop": (
-        "Use a concrete person, place, organization, work, or other entity when a direct entity-based "
-        "lookup may find the missing passage. The configured backend ranks related chunks and returns "
-        "snippets and chunk IDs; this action does not by itself provide full text."
+        "Find passages about a concrete entity from the question or visible evidence. The Direct-BM25 "
+        "backend matches its words against passage text; an entity-linked backend instead searches linked "
+        "postings. This can be a first retrieval or a follow-up on a newly visible entity. It returns "
+        "snippets and chunk IDs; use read_chunk for full text."
     ),
     "linear_hop": (
-        "Use a concrete entity when the missing information may require a connection through related "
-        "sentences, entities, or passages. The bounded graph traversal ranks bridge sentences against "
-        "the question and returns snippets and chunk IDs; use read_chunk on useful results."
+        "Find passages connected to a concrete entity from the question or visible evidence. It ranks "
+        "sentences mentioning the entity against the question, then follows other entities in those "
+        "sentences to related passages, including bridge passages without the starting name. This can "
+        "be a first retrieval or a follow-up; the connecting entity need not be known in advance. "
+        "It returns snippets and chunk IDs; use read_chunk for full text."
     ),
     "read_chunk": (
         "Read the full text of selected chunk IDs. Search and hop results are only snippets, so use this "

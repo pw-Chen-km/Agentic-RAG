@@ -7,8 +7,9 @@
       "when": "Before each retrieval decision, identify what information is missing from the question and visible evidence.",
       "action_sequence": [
         "Use semantic_search when the needed information is conceptual, relational, or its wording is unknown.",
-        "Use entity_hop when a concrete entity is available and a direct entity-based corpus lookup may find the missing passage.",
-        "Use linear_hop when a concrete entity is available and the missing information may require following connected sentence, entity, or passage links.",
+        "Use entity_hop to find passages matching the words of a concrete entity from the question or visible evidence.",
+        "Use linear_hop to find question-relevant passages connected to such an entity through related sentences and other entities; the connecting entity need not be known in advance.",
+        "Either hop can be the first retrieval or a follow-up, including on newly visible entities. Choose based on the missing information and observed evidence; neither hop is the default.",
         "When both hops are plausible, choose according to the observed evidence and question; do not call both automatically."
       ]
     },

@@ -89,15 +89,22 @@ class LinearHopTool(BaseTool):
 
     def get_schema(self) -> Dict[str, Any]:
         source = "the question or visible evidence" if self.entity_source == "question_or_visible_evidence" else "visible evidence"
+        timing = (
+            "This can be the first retrieval or a follow-up on a newly visible entity; no prior search or read is required. "
+            if self.entity_source == "question_or_visible_evidence" else
+            "Use this only after a search or read has exposed the entity. "
+        )
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": (
-                    "Traverse the offline LinearRAG-style sentence/entity graph from a concrete entity in "
-                    f"{source}. The runtime ranks bridge sentences against the original question, activates "
-                    "related entities, and returns abbreviated snippets with Chunk IDs. "
-                    "Use read_chunk on useful results; do not treat snippets as full evidence."
+                    f"Find passages connected to a concrete entity from {source}. "
+                    + timing +
+                    "It finds sentences mentioning the entity, ranks them by relevance to the original question, "
+                    "then follows other entities in those sentences to related passages. "
+                    "This may find passages that do not mention the starting entity; you do not need to know the connecting entity in advance. "
+                    "The result contains abbreviated snippets and Chunk IDs; always use read_chunk on useful results."
                 ),
                 "parameters": {
                     "type": "object",
